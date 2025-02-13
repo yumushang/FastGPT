@@ -53,13 +53,6 @@ export const checkTeamDatasetLimit = async (teamId: string) => {
       type: { $ne: DatasetTypeEnum.folder }
     })
   ]);
-
-  if (standardConstants && datasetCount >= standardConstants.maxDatasetAmount) {
-    return Promise.reject(TeamErrEnum.datasetAmountNotEnough);
-  }
-  if (!global.feConfigs.isPlus && datasetCount >= 30) {
-    return Promise.reject(SystemErrEnum.communityVersionNumLimit);
-  }
 };
 export const checkTeamAppLimit = async (teamId: string, amount = 1) => {
   const [{ standardConstants }, appCount] = await Promise.all([
@@ -69,10 +62,6 @@ export const checkTeamAppLimit = async (teamId: string, amount = 1) => {
       type: { $in: [AppTypeEnum.simple, AppTypeEnum.workflow, AppTypeEnum.plugin] }
     })
   ]);
-
-  if (standardConstants && appCount + amount >= standardConstants.maxAppAmount) {
-    return Promise.reject(TeamErrEnum.appAmountNotEnough);
-  }
 };
 
 export const checkTeamReRankPermission = async (teamId: string) => {
