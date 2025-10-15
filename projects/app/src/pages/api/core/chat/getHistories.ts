@@ -9,6 +9,7 @@ import { type PaginationProps, type PaginationResponse } from '@fastgpt/web/comm
 import { type GetHistoriesProps } from '@/global/core/chat/api';
 import { parsePaginationRequest } from '@fastgpt/service/common/api/pagination';
 import { addMonths } from 'date-fns';
+import { addLog } from '@fastgpt/service/common/system/log';
 
 export type getHistoriesQuery = {};
 
@@ -30,7 +31,8 @@ async function handler(
     startCreateTime,
     endCreateTime,
     startUpdateTime,
-    endUpdateTime
+    endUpdateTime,
+    allHistories
   } = req.body;
   const { offset, pageSize } = parsePaginationRequest(req);
 
@@ -55,6 +57,21 @@ async function handler(
         source: ChatSourceEnum.team
       };
     }
+
+    if (allHistories) {
+      //获取当前用户所有历史记录
+      const { tmbId, userId } = await authCert({ req, authToken: true, authApiKey: false });
+      addLog.warn(`allHistories authCert Data`, {
+        tmbId,
+        userId
+      });
+      return {
+        tmbId,
+        userId,
+        ...(source && { source })
+      };
+    }
+
     if (appId) {
       const { tmbId } = await authCert({ req, authToken: true, authApiKey: true });
       return {
@@ -87,6 +104,8 @@ async function handler(
   }
 
   const mergeMatch = { ...match, ...timeMatch };
+
+  addLog.warn('MongoChat 查询条件', mergeMatch);
 
   const [data, total] = await Promise.all([
     await MongoChat.find(mergeMatch, 'chatId title top customTitle appId updateTime')

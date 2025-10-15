@@ -65,6 +65,7 @@ export type GetHistoriesProps = OutLinkChatAuthProps & {
   endCreateTime?: string;
   startUpdateTime?: string;
   endUpdateTime?: string;
+  allHistories?: boolean;
 };
 
 export type UpdateHistoryProps = OutLinkChatAuthProps & {
