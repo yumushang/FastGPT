@@ -96,7 +96,7 @@ export const readS3FileContentByBuffer = async ({
       markdown: string;
       error?: Object | string;
     }>(url, data, {
-      timeout: 600000,
+      timeout: 600000000,
       headers: {
         ...data.getHeaders(),
         Authorization: token ? `Bearer ${token}` : undefined
