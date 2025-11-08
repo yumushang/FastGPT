@@ -67,7 +67,6 @@ async function handler(
       });
       return {
         tmbId,
-        userId,
         ...(source && { source })
       };
     }
