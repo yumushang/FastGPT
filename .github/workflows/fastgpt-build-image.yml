@@ -21,10 +21,6 @@ jobs:
         sub_routes:
           - repo: fastgpt
             base_url: ""
-          - repo: fastgpt-sub-route
-            base_url: "/fastai"
-          - repo: fastgpt-sub-route-gchat
-            base_url: "/gchat"
         archs:
           - arch: amd64
           - arch: arm64
