@@ -73,7 +73,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=${{ matrix.sub_routes.repo }} image
-          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/${{ matrix.sub_routes.repo }},${{ secrets.ALI_IMAGE_NAME }}/${{ matrix.sub_routes.repo }},${{ secrets.DOCKER_IMAGE_NAME }}/${{ matrix.sub_routes.repo }}",push-by-digest=true,push=true
+          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/${{ matrix.sub_routes.repo }},mvn.jschrj.com/fastgpt/${{ matrix.sub_routes.repo }}",push-by-digest=true,push=true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
 
@@ -102,8 +102,6 @@ jobs:
       matrix:
         sub_routes:
           - repo: fastgpt
-          - repo: fastgpt-sub-route
-          - repo: fastgpt-sub-route-gchat
     runs-on: ubuntu-24.04
     steps:
       - name: Login to GitHub Container Registry
