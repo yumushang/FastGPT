@@ -7,7 +7,7 @@ import {
   type createPreviewUrlParams,
   CreateGetPresignedUrlParamsSchema
 } from '../type';
-import { defaultS3Options, getSystemMaxFileSize, Mimes } from '../constants';
+import { defaultS3Options, getSystemMaxFileSize, Mimes, S3Buckets } from '../constants';
 import path from 'node:path';
 import { MongoS3TTL } from '../schema';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
@@ -32,28 +32,6 @@ export class S3BaseBucket {
     options = { ...defaultS3Options, ...options };
     this.options = options;
     this._client = new Client(options as S3OptionsType);
-
-    if (this.options.externalBaseURL) {
-      const externalBaseURL = new URL(this.options.externalBaseURL);
-      const endpoint = externalBaseURL.hostname;
-      const useSSL = externalBaseURL.protocol === 'https:';
-
-      const externalPort = externalBaseURL.port
-        ? parseInt(externalBaseURL.port)
-        : useSSL
-          ? 443
-          : undefined; // https 默认 443，其他情况让 MinIO 客户端使用默认端口
-
-      this._externalClient = new Client({
-        useSSL: useSSL,
-        endPoint: endpoint,
-        port: externalPort,
-        accessKey: options.accessKey,
-        secretKey: options.secretKey,
-        pathStyle: options.pathStyle,
-        transportAgent: options.transportAgent
-      });
-    }
 
     const init = async () => {
       if (!(await this.exist())) {
@@ -223,8 +201,14 @@ export class S3BaseBucket {
         });
       }
 
+      let url = postURL;
+      if (this.options.externalBaseURL && this.name == S3Buckets.public) {
+        const externalBaseURL = new URL(this.options.externalBaseURL);
+        url = this.options.externalBaseURL + `/${S3Buckets.public}`;
+      }
+
       return {
-        url: postURL,
+        url: url,
         fields: formData,
         maxSize: formatMaxFileSize
       };
