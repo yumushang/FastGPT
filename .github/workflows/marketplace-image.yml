@@ -40,12 +40,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to Ali Hub
-        uses: docker/login-action@v3
-        with:
-          registry: registry.cn-hangzhou.aliyuncs.com
-          username: ${{ secrets.ALI_HUB_USERNAME }}
-          password: ${{ secrets.ALI_HUB_PASSWORD }}
+
 
       - name: Build for ${{ matrix.arch }}
         id: build
@@ -57,7 +52,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=fastgpt-marketplace image
-          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/fastgpt-marketplace,${{ secrets.ALI_IMAGE_NAME }}/fastgpt-marketplace",push-by-digest=true,push=true
+          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/fastgpt-marketplace",push-by-digest=true,push=true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
 
@@ -90,12 +85,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to Ali Hub
-        uses: docker/login-action@v3
-        with:
-          registry: registry.cn-hangzhou.aliyuncs.com
-          username: ${{ secrets.ALI_HUB_USERNAME }}
-          password: ${{ secrets.ALI_HUB_PASSWORD }}
 
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -118,7 +107,6 @@ jobs:
       - name: Set image name and tag
         run: |
           echo "Git_Tag=ghcr.io/${{ github.repository_owner }}/fastgpt-marketplace:${{ env.RANDOM_TAG }}" >> $GITHUB_ENV
-          echo "Ali_Tag=${{ secrets.ALI_IMAGE_NAME }}/fastgpt-marketplace:${{ env.RANDOM_TAG }}" >> $GITHUB_ENV
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
@@ -135,13 +123,6 @@ jobs:
           echo "✅ GitHub manifest created"
           sleep 5
 
-          # Create manifest for Ali Cloud
-          echo "Creating manifest for Ali Cloud: ${Ali_Tag}"
-          docker buildx imagetools create -t ${Ali_Tag} \
-            $(printf '${{ secrets.ALI_IMAGE_NAME }}/fastgpt-marketplace@sha256:%s ' *)
-          echo "✅ Ali Cloud manifest created"
-
           echo ""
           echo "✅ All images pushed successfully:"
           echo "  - ${{ env.Git_Tag }}"
-          echo "  - ${{ env.Ali_Tag }}"
