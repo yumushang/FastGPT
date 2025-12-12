@@ -207,6 +207,12 @@ export async function searchDatasetData(
   /* function */
   const countRecallLimit = () => {
     if (searchMode === DatasetSearchModeEnum.embedding) {
+      if (maxTokens >= 1000000) {
+        return {
+          embeddingLimit: Math.ceil(maxTokens / 200),
+          fullTextLimit: 0
+        };
+      }
       return {
         embeddingLimit: 100,
         fullTextLimit: 0
