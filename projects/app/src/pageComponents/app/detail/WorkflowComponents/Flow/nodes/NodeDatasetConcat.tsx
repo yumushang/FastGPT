@@ -69,7 +69,7 @@ const NodeDatasetConcat = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
           <MyNumberInput
             size={'sm'}
             min={100}
-            max={1000000}
+            max={10000000}
             step={100}
             value={item.value}
             name={NodeInputKeyEnum.datasetMaxTokens}

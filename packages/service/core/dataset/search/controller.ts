@@ -53,7 +53,7 @@ export type SearchDatasetDataProps = {
   [NodeInputKeyEnum.datasetSearchRerankModel]?: RerankModelItemType;
   [NodeInputKeyEnum.datasetSearchRerankWeight]?: number;
 
-  /* 
+  /*
     {
       tags: {
         $and: ["str1","str2"],
@@ -199,6 +199,12 @@ export async function searchDatasetData(
   /* function */
   const countRecallLimit = () => {
     if (searchMode === DatasetSearchModeEnum.embedding) {
+      if (maxTokens >= 1000000) {
+        return {
+          embeddingLimit: Math.ceil(maxTokens / 200),
+          fullTextLimit: 0
+        };
+      }
       return {
         embeddingLimit: 100,
         fullTextLimit: 0
@@ -230,7 +236,7 @@ export async function searchDatasetData(
     };
   };
 
-  /* 
+  /*
     Collection metadata filter
     标签过滤：
     1. and 先生效
