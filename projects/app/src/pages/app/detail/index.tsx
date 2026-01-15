@@ -37,6 +37,7 @@ const AppDetail = () => {
   const appDetail = useContextSelector(AppContext, (e) => e.appDetail);
   const route2Tab = useContextSelector(AppContext, (e) => e.route2Tab);
 
+  console.log('appDetail', appDetail);
   useEffect(() => {
     setSource('test');
     if (appDetail._id) {

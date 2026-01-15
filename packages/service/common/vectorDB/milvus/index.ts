@@ -9,7 +9,8 @@ import type {
   DelDatasetVectorCtrlProps,
   EmbeddingRecallCtrlProps,
   EmbeddingRecallResponse,
-  InsertVectorControllerProps
+  InsertVectorControllerProps,
+  UpdateCustomDataProps
 } from '../controller.d';
 import { retryFn } from '@fastgpt/global/common/system/utils';
 import { addLog } from '../../system/log';
@@ -197,6 +198,20 @@ export class MilvusCtrl {
     await client.delete({
       collection_name: DatasetVectorTableName,
       filter: concatWhere
+    });
+  };
+  updateCustomData = async (props: UpdateCustomDataProps): Promise<void> => {
+    const client = await this.getClient();
+    const { idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    await client.upsert({
+      collection_name: DatasetVectorTableName,
+      data: idList.map((id) => ({
+        id: Number(id),
+        customData: JSON.stringify(customData)
+      }))
     });
   };
   embRecall = async (props: EmbeddingRecallCtrlProps): Promise<EmbeddingRecallResponse> => {

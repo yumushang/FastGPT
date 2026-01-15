@@ -163,6 +163,7 @@ export type DatasetDataSchemaType = DatasetDataFieldType & {
   forbid?: boolean;
   fullTextToken: string;
   indexes: DatasetDataIndexItemType[];
+  customData?: any;
   rebuilding?: boolean;
   imageDescMap?: Record<string, string>;
 };
@@ -174,6 +175,7 @@ export type DatasetDataTextSchemaType = {
   collectionId: string;
   dataId: string;
   fullTextToken: string;
+  customData?: any;
 };
 
 export type DatasetTrainingSchemaType = {
@@ -269,6 +271,7 @@ export type DatasetDataItemType = DatasetDataFieldType & {
   chunkIndex: number;
   indexes: DatasetDataIndexItemType[];
   isOwner: boolean;
+  customData?: any;
 };
 
 /* --------------- file ---------------------- */

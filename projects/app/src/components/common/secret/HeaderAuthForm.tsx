@@ -47,7 +47,7 @@ const AuthValueDisplay = ({
           placeholder={'Value'}
           bg={bg}
           h={8}
-          maxLength={200}
+          maxLength={500}
           onFocus={() => onEdit(index)}
           onBlur={() => onEdit(undefined)}
           value={value}

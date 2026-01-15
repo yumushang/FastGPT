@@ -7,7 +7,7 @@ import { filterGPTMessageByMaxContext } from '../llm/utils';
 import json5 from 'json5';
 import { createLLMResponse } from '../llm/request';
 
-/* 
+/*
     query extension - 问题扩展
     可以根据上下文，消除指代性问题以及扩展问题，利于检索。
 */

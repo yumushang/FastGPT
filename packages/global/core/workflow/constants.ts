@@ -183,6 +183,8 @@ export enum NodeInputKeyEnum {
   datasetSearchExtensionModel = 'datasetSearchExtensionModel',
   datasetSearchExtensionBg = 'datasetSearchExtensionBg',
   collectionFilterMatch = 'collectionFilterMatch',
+  customDataFilterMatch = 'customDataFilterMatch',
+
   authTmbId = 'authTmbId',
   datasetDeepSearch = 'datasetDeepSearch',
   datasetDeepSearchModel = 'datasetDeepSearchModel',

@@ -174,55 +174,7 @@ services:
     depends_on:
       fastgpt-minio:
         condition: service_healthy
-  # AI Proxy
-  aiproxy:
-    image: registry.cn-hangzhou.aliyuncs.com/labring/aiproxy:v0.3.2
-    container_name: aiproxy
-    restart: unless-stopped
-    ports:
-      - 3010:3000
-    depends_on:
-      aiproxy_pg:
-        condition: service_healthy
-    networks:
-      - fastgpt
-      - aiproxy
-    environment:
-      # 对应 fastgpt 里的AIPROXY_API_TOKEN
-      - ADMIN_KEY=aiproxy
-      # 错误日志详情保存时间（小时）
-      - LOG_DETAIL_STORAGE_HOURS=1
-      # 数据库连接地址
-      - SQL_DSN=postgres://postgres:aiproxy@aiproxy_pg:5432/aiproxy
-      # 最大重试次数
-      - RETRY_TIMES=3
-      # 不需要计费
-      - BILLING_ENABLED=false
-      # 不需要严格检测模型
-      - DISABLE_MODEL_CONFIG=true
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:3000/api/status']
-      interval: 5s
-      timeout: 5s
-      retries: 10
-  aiproxy_pg:
-    image: registry.cn-hangzhou.aliyuncs.com/fastgpt/pgvector:0.8.0-pg15 # docker hub
-    restart: unless-stopped
-    container_name: aiproxy_pg
-    volumes:
-      - ./aiproxy_pg:/var/lib/postgresql/data
-    networks:
-      - aiproxy
-    environment:
-      TZ: Asia/Shanghai
-      POSTGRES_USER: postgres
-      POSTGRES_DB: aiproxy
-      POSTGRES_PASSWORD: aiproxy
-    healthcheck:
-      test: ['CMD', 'pg_isready', '-U', 'postgres', '-d', 'aiproxy']
-      interval: 5s
-      timeout: 5s
-      retries: 10
+
 networks:
   fastgpt:
   aiproxy:

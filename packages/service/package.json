@@ -56,7 +56,9 @@
     "tunnel": "^0.0.6",
     "turndown": "^7.1.2",
     "winston": "^3.17.0",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "js-md5": "0.7.3",
+    "uuid-js": "0.7.5"
   },
   "devDependencies": {
     "@types/async-retry": "^1.4.9",

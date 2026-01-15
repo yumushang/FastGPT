@@ -35,6 +35,7 @@ import { type UserChatItemValueItemType } from '../../chat/type';
 export type ExternalProviderType = {
   openaiAccount?: OpenaiAccountType;
   externalWorkflowVariables?: Record<string, string>;
+  chHeaders?: Record<string, string>;
 };
 
 /* workflow props */

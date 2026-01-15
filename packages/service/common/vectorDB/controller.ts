@@ -3,7 +3,11 @@ import { PgVectorCtrl } from './pg';
 import { ObVectorCtrl } from './oceanbase';
 import { getVectorsByText } from '../../core/ai/embedding';
 import type { EmbeddingRecallCtrlProps } from './controller.d';
-import { type DelDatasetVectorCtrlProps, type InsertVectorProps } from './controller.d';
+import {
+  type DelDatasetVectorCtrlProps,
+  type InsertVectorProps,
+  type UpdateCustomDataProps
+} from './controller.d';
 import { type EmbeddingModelItemType } from '@fastgpt/global/core/ai/model.d';
 import { MILVUS_ADDRESS, PG_ADDRESS, OCEANBASE_ADDRESS } from './constants';
 import { MilvusCtrl } from './milvus';
@@ -115,4 +119,8 @@ export const deleteDatasetDataVector = async (props: DelDatasetVectorCtrlProps) 
   const result = await retryFn(() => Vector.delete(props));
   teamVectorCache.delete(props.teamId);
   return result;
+};
+
+export const updateDatasetDataCustomData = async (props: UpdateCustomDataProps) => {
+  return retryFn(() => Vector.updateCustomData(props));
 };

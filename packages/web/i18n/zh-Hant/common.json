@@ -634,6 +634,8 @@
   "core.module.http.Url and params have been split": "路徑參數已自動加入 Params 中",
   "core.module.http.curl import": "匯入 cURL",
   "core.module.http.curl import placeholder": "請輸入 cURL 格式內容，將提取第一個介面的請求資訊。",
+  "core.module.http.openapi import": "OpenAPI 匯入",
+  "core.module.http.openapi import placeholder": "請輸入 OpenAPI JSON Schema 內容，將提取第一個介面的請求資訊。",
   "core.module.input.Add Branch": "新增分支",
   "core.module.input.add": "新增條件",
   "core.module.input.description.Background": "您可以新增一些特定內容的介紹，以更好地識別使用者的問題類型。這個內容通常是介紹一個模型不知道的內容。",

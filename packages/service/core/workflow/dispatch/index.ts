@@ -62,6 +62,7 @@ type Props = Omit<ChatDispatchProps, 'workflowDispatchDeep' | 'timezone' | 'exte
   runtimeNodes: RuntimeNodeItemType[];
   runtimeEdges: RuntimeEdgeItemType[];
   defaultSkipNodeQueue?: WorkflowDebugResponse['skipNodeQueue'];
+  chHeaders?: Record<string, string>;
 };
 type NodeResponseType = DispatchNodeResultType<{
   [key: string]: any;
@@ -80,12 +81,13 @@ export async function dispatchWorkFlow({
   usageSource,
   usageId,
   concatUsage,
+  chHeaders,
   ...data
 }: Props & WorkflowUsageProps): Promise<DispatchFlowResponse> {
   const { res, stream, runningUserInfo, runningAppInfo, lastInteractive, histories, query } = data;
 
   await checkTeamAIPoints(runningUserInfo.teamId);
-  const [{ timezone, externalProvider }, newUsageId] = await Promise.all([
+  const [{ timezone, externalProvider: dbExternalProvider }, newUsageId] = await Promise.all([
     getUserChatInfo(runningUserInfo.tmbId),
     (() => {
       if (lastInteractive?.usageId) {
@@ -103,6 +105,11 @@ export async function dispatchWorkFlow({
       return usageId;
     })()
   ]);
+
+  const externalProvider = {
+    ...dbExternalProvider,
+    chHeaders: chHeaders ? { ...chHeaders } : {}
+  };
 
   let streamCheckTimer: NodeJS.Timeout | null = null;
 

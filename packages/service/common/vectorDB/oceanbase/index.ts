@@ -6,7 +6,8 @@ import {
   type DelDatasetVectorCtrlProps,
   type EmbeddingRecallCtrlProps,
   type EmbeddingRecallResponse,
-  type InsertVectorControllerProps
+  type InsertVectorControllerProps,
+  type UpdateCustomDataProps
 } from '../controller.d';
 import dayjs from 'dayjs';
 import { addLog } from '../../system/log';
@@ -95,6 +96,19 @@ export class ObVectorCtrl {
     if (!where) return;
 
     await ObClient.delete(DatasetVectorTableName, {
+      where: [where]
+    });
+  };
+  updateCustomData = async (props: UpdateCustomDataProps): Promise<void> => {
+    const { teamId, idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    const teamIdWhere = `team_id='${String(teamId)}' AND`;
+    const where = `${teamIdWhere} id IN (${idList.map((id) => String(id)).join(',')})`;
+
+    await ObClient.update(DatasetVectorTableName, {
+      values: [{ key: 'custom_data', value: JSON.stringify(customData) }],
       where: [where]
     });
   };

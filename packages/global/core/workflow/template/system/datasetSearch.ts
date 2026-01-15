@@ -132,8 +132,17 @@ export const DatasetSearchModule: FlowNodeTemplateType = {
       label: i18nT('workflow:collection_metadata_filter'),
 
       valueType: WorkflowIOValueTypeEnum.string,
-      isPro: true,
+      isPro: false,
       description: i18nT('workflow:filter_description')
+    },
+    {
+      key: NodeInputKeyEnum.customDataFilterMatch,
+      renderTypeList: [FlowNodeInputTypeEnum.textarea, FlowNodeInputTypeEnum.reference],
+      label: i18nT('workflow:custom_data_filter'),
+
+      valueType: WorkflowIOValueTypeEnum.string,
+      isPro: false,
+      description: i18nT('workflow:custom_data_filterdescription')
     }
   ],
   outputs: [
