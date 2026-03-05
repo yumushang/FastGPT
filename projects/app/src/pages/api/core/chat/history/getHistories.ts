@@ -29,7 +29,8 @@ export async function handler(
     startCreateTime,
     endCreateTime,
     startUpdateTime,
-    endUpdateTime
+    endUpdateTime,
+    allHistories
   } = GetHistoriesBodySchema.parse(req.body);
   const { offset, pageSize } = parsePaginationRequest(req);
 
@@ -53,6 +54,15 @@ export async function handler(
         source: ChatSourceEnum.team
       };
     }
+    if (allHistories) {
+      //获取当前用户所有历史记录
+      const { tmbId, userId } = await authCert({ req, authToken: true, authApiKey: false });
+      return {
+        tmbId,
+        ...(source && { source })
+      };
+    }
+
     if (appId) {
       const { tmbId } = await authCert({ req, authToken: true, authApiKey: true });
       return {
