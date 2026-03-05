@@ -2,7 +2,7 @@
 import { DatasetVectorTableName, OceanBaseIndexConfig } from '../constants';
 import { ObClass } from './controller';
 import { type RowDataPacket } from 'mysql2/promise';
-import type { VectorControllerType } from '../type';
+import type { UpdateCustomDataPropsType, VectorControllerType } from '../type';
 import dayjs from 'dayjs';
 import { getLogger, LogCategories } from '../../logger';
 
@@ -102,6 +102,21 @@ export class ObVectorCtrl implements VectorControllerType {
     if (!where) return;
 
     await this.obClient.delete(DatasetVectorTableName, {
+      where: [where]
+    });
+  };
+  updateCustomData: VectorControllerType['updateCustomData'] = async (
+    props: UpdateCustomDataPropsType
+  ): Promise<void> => {
+    const { teamId, idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    const teamIdWhere = `team_id='${String(teamId)}' AND`;
+    const where = `${teamIdWhere} id IN (${idList.map((id) => String(id)).join(',')})`;
+
+    await this.obClient.update(DatasetVectorTableName, {
+      values: [{ key: 'custom_data', value: JSON.stringify(customData) }],
       where: [where]
     });
   };

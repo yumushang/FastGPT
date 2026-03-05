@@ -103,6 +103,12 @@ const nextConfig: NextConfig = {
       };
     }
 
+    // 解决引入扣子罗盘api后找不到fsevents问题
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fsevents: false
+    };
+
     return config;
   },
   transpilePackages: ['@modelcontextprotocol/sdk', 'ahooks'],

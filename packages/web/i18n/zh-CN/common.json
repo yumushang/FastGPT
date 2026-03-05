@@ -656,6 +656,8 @@
   "core.module.http.Url and params have been split": "路径参数已被自动加入 Params 中",
   "core.module.http.curl import": "cURL 导入",
   "core.module.http.curl import placeholder": "请输入 cURL 格式内容，将会提取第一个接口的请求信息。",
+  "core.module.http.openapi import": "OpenAPI 导入",
+  "core.module.http.openapi import placeholder": "请输入 OpenAPI JSON Schema 内容",
   "core.module.input.Add Branch": "添加分支",
   "core.module.input.add": "添加条件",
   "core.module.input.description.Background": "你可以添加一些特定内容的介绍，从而更好的识别用户的问题类型。这个内容通常是给模型介绍一个它不知道的内容。",
@@ -1433,5 +1435,6 @@
   "zoomin_tip": "缩小  ctrl  -",
   "zoomin_tip_mac": "缩小  ⌘  -",
   "zoomout_tip": "放大  ctrl  +",
-  "zoomout_tip_mac": "放大  ⌘  +"
+  "zoomout_tip_mac": "放大  ⌘  +",
+  "custom_field": "自定义字段"
 }

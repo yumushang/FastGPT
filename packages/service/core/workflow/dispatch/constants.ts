@@ -81,3 +81,45 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   // @deprecated
   [FlowNodeTypeEnum.runApp]: dispatchAppRequest
 };
+
+export const FlowNodeTypeResTextMap: Record<FlowNodeTypeEnum, string> = {
+  [FlowNodeTypeEnum.workflowStart]: '',
+  [FlowNodeTypeEnum.answerNode]: 'textOutput',
+  [FlowNodeTypeEnum.chatNode]: '',
+  [FlowNodeTypeEnum.datasetSearchNode]: 'quoteList',
+  [FlowNodeTypeEnum.datasetConcatNode]: 'concatLength',
+  [FlowNodeTypeEnum.classifyQuestion]: 'cqResult',
+  [FlowNodeTypeEnum.contentExtract]: 'extractResult',
+  [FlowNodeTypeEnum.httpRequest468]: 'httpResult',
+  [FlowNodeTypeEnum.appModule]: '',
+  [FlowNodeTypeEnum.pluginModule]: '',
+  [FlowNodeTypeEnum.pluginInput]: '',
+  [FlowNodeTypeEnum.pluginOutput]: 'pluginOutput',
+  [FlowNodeTypeEnum.queryExtension]: 'queryExtensionResult',
+  [FlowNodeTypeEnum.agent]: '',
+  [FlowNodeTypeEnum.stopTool]: '',
+  [FlowNodeTypeEnum.toolParams]: 'toolParamsResult',
+  [FlowNodeTypeEnum.lafModule]: '',
+  [FlowNodeTypeEnum.ifElseNode]: 'ifElseResult',
+  [FlowNodeTypeEnum.variableUpdate]: 'updateVarResult',
+  [FlowNodeTypeEnum.code]: 'customOutputs',
+  [FlowNodeTypeEnum.textEditor]: 'textOutput',
+  [FlowNodeTypeEnum.customFeedback]: 'customOutputs',
+  [FlowNodeTypeEnum.readFiles]: 'readFiles',
+  [FlowNodeTypeEnum.userSelect]: 'userSelectResult',
+  [FlowNodeTypeEnum.loop]: 'loopResult',
+  [FlowNodeTypeEnum.loopStart]: 'loopInputValue',
+  [FlowNodeTypeEnum.loopEnd]: 'loopOutputValue',
+  [FlowNodeTypeEnum.formInput]: 'formInputResult',
+  [FlowNodeTypeEnum.tool]: 'toolRes',
+  [FlowNodeTypeEnum.toolCall]: 'toolRes',  // todo 需要确定
+
+  [FlowNodeTypeEnum.systemConfig]: '',
+  [FlowNodeTypeEnum.pluginConfig]: '',
+  [FlowNodeTypeEnum.emptyNode]: '',
+  [FlowNodeTypeEnum.globalVariable]: '',
+  [FlowNodeTypeEnum.comment]: '',
+  [FlowNodeTypeEnum.toolSet]: '',
+
+  [FlowNodeTypeEnum.runApp]: ''
+};

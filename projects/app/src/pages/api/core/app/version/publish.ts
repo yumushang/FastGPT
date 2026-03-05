@@ -14,6 +14,10 @@ import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nAppType } from '@fastgpt/service/support/user/audit/util';
 import { i18nT } from '@fastgpt/web/i18n/utils';
 import { updateParentFoldersUpdateTime } from '@fastgpt/service/core/app/controller';
+import { convertSqlCondition } from '@fastgpt/service/common/util/convertSqlCondition';
+import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 
 async function handler(req: ApiRequestProps<PostPublishAppProps>, res: NextApiResponse<any>) {
   const { appId } = req.query as { appId: string };
@@ -25,6 +29,8 @@ async function handler(req: ApiRequestProps<PostPublishAppProps>, res: NextApiRe
     per: WritePermissionVal,
     authToken: true
   });
+
+  checkSql(nodes);
 
   beforeUpdateAppFormat({
     nodes
@@ -143,6 +149,31 @@ async function handler(req: ApiRequestProps<PostPublishAppProps>, res: NextApiRe
       }
     });
   })();
+}
+
+/**
+ * 保存流程时校验知识库节点自定义数据过滤SQL
+ * @param nodes
+ */
+function checkSql(nodes: StoreNodeItemType[]) {
+  const datasetNodes = nodes.filter(
+    (item) => item.flowNodeType === FlowNodeTypeEnum.datasetSearchNode
+  );
+
+  const sqlList: string[] = [];
+  for (let node of datasetNodes) {
+    const input = node.inputs.find((input) => input.key === NodeInputKeyEnum.customDataFilterMatch);
+    if (input && input.value) {
+      sqlList.push(input.value.trim());
+    }
+  }
+
+  for (let sql of sqlList) {
+    const result = convertSqlCondition(sql);
+    if ('error' in result) {
+      throw new Error(`sql语法错误:${sql}`);
+    }
+  }
 }
 
 export default NextAPI(handler);

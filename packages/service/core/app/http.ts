@@ -6,6 +6,10 @@ import type { RequireOnlyOne } from '@fastgpt/global/common/type/utils';
 import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 import { contentTypeMap, ContentTypes } from '@fastgpt/global/core/workflow/constants';
 import { replaceEditorVariable } from '@fastgpt/global/core/workflow/runtime/utils';
+import { sign } from '../../common/xf/signUtil';
+import { getLogger, LogCategories } from '../../common/logger';
+
+const logger = getLogger(LogCategories.MODULE.WORKFLOW.TOOLS);
 
 export type RunHTTPToolParams = {
   baseUrl: string;
@@ -146,6 +150,16 @@ export const runHTTPTool = async ({
       staticBody
     });
 
+    let tempHeaders: Record<string, string> = { ...headers };
+    if (process.env.XF_SIGN_ENABLE === 'true' && process.env.XF_SIGN_MD5SECRET) {
+      const signHeaders = sign(method, body || queryParams);
+      tempHeaders = {
+        ...headers,
+        ...signHeaders
+      };
+    }
+    logger.info('runHTTPTool', { baseUrl, toolPath, queryParams, body, headers: tempHeaders });
+
     const { data } = await axios({
       method: method.toUpperCase(),
       baseURL:
@@ -153,7 +167,7 @@ export const runHTTPTool = async ({
           ? baseUrl
           : `https://${baseUrl}`,
       url: toolPath,
-      headers,
+      headers: tempHeaders,
       data: body,
       params: queryParams,
       timeout: 300000

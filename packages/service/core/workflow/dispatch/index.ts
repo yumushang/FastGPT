@@ -44,7 +44,7 @@ import { surrenderProcess } from '../../../common/system/tools';
 import type { DispatchFlowResponse, WorkflowDebugResponse } from './type';
 import { rewriteRuntimeWorkFlow, runtimeSystemVar2StoreType, filterOrphanEdges } from './utils';
 import { getHandleId } from '@fastgpt/global/core/workflow/utils';
-import { callbackMap } from './constants';
+import { callbackMap, FlowNodeTypeResTextMap } from './constants';
 import { anyValueDecrypt } from '../../../common/secret/utils';
 import { getUserChatInfo } from '../../../support/user/team/utils';
 import { checkTeamAIPoints } from '../../../support/permission/teamLimit';
@@ -56,6 +56,7 @@ import { addPreviewUrlToChatItems, presignVariablesFileUrls } from '../../chat/u
 import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
 import { i18nT } from '../../../../web/i18n/utils';
 import { validateFileUrlDomain } from '../../../common/security/fileUrlValidator';
+import { getCozeTracer } from '../../../common/cozeLoop';
 
 const logger = getLogger(LogCategories.MODULE.WORKFLOW.DISPATCH);
 import { delAgentRuntimeStopSign, shouldWorkflowStop } from './workflowStatus';
@@ -68,6 +69,7 @@ type Props = Omit<
   runtimeNodes: RuntimeNodeItemType[];
   runtimeEdges: RuntimeEdgeItemType[];
   defaultSkipNodeQueue?: WorkflowDebugResponse['skipNodeQueue'];
+  chHeaders?: Record<string, string>;
 };
 type NodeResponseType = DispatchNodeResultType<{
   [key: string]: any;
@@ -86,6 +88,7 @@ export async function dispatchWorkFlow({
   usageSource,
   usageId,
   concatUsage,
+  chHeaders,
   ...data
 }: Props & WorkflowUsageProps): Promise<DispatchFlowResponse> {
   const {
@@ -117,7 +120,7 @@ export async function dispatchWorkFlow({
   // Check point
   await checkTeamAIPoints(runningUserInfo.teamId);
 
-  const [{ timezone, externalProvider }, newUsageId] = await Promise.all([
+  const [{ timezone, externalProvider: dbExternalProvider }, newUsageId] = await Promise.all([
     getUserChatInfo(runningUserInfo.tmbId),
     (() => {
       if (lastInteractive?.usageId) {
@@ -151,6 +154,11 @@ export async function dispatchWorkFlow({
       chatId
     })
   ]);
+
+  const externalProvider = {
+    ...dbExternalProvider,
+    chHeaders: chHeaders ? { ...chHeaders } : {}
+  };
 
   let streamCheckTimer: NodeJS.Timeout | null = null;
 
@@ -215,49 +223,85 @@ export async function dispatchWorkFlow({
       : undefined;
 
   // Init some props
-  return new Promise((resolve, reject) => {
-    runWithContext(
-      {
-        queryUrlTypeMap: {},
-        mcpClientMemory: {}
+  const runWorkflowFn = () =>
+    new Promise<DispatchFlowResponse>((resolve, reject) => {
+      runWithContext(
+        {
+          queryUrlTypeMap: {},
+          mcpClientMemory: {}
+        },
+        (ctx) => {
+          runWorkflow({
+            ...data,
+            checkIsStopping,
+            query,
+            histories,
+            timezone,
+            externalProvider,
+            variables: defaultVariables,
+            workflowDispatchDeep: 0,
+            usageId: newUsageId,
+            concatUsage
+          })
+            .then(resolve)
+            .catch(reject)
+            .finally(async () => {
+              if (streamCheckTimer) {
+                clearInterval(streamCheckTimer);
+              }
+              if (checkStoppingTimer) {
+                clearInterval(checkStoppingTimer);
+              }
+
+              // Close mcpClient connections
+              Object.values(ctx.mcpClientMemory).forEach((client) => {
+                client.closeConnection();
+              });
+
+              // 工作流完成后删除 Redis 记录
+              await delAgentRuntimeStopSign({
+                appId: runningAppInfo.id,
+                chatId
+              });
+            });
+        }
+      );
+    });
+
+  if (process.env.COZELOOP_ENABLE !== 'true') {
+    return await runWorkflowFn();
+  } else {
+    let result: any;
+    await getCozeTracer().traceable(
+      async (span) => {
+        getCozeTracer().setInput(span, query?.[0].text?.content);
+        result = await runWorkflowFn();
+
+        // addLog.debug('-------runWorkflowFn result-------', result);
+        if (result?.flowResponses?.length > 0) {
+          const lastRes = result.flowResponses[result.flowResponses.length - 1];
+
+          const field = FlowNodeTypeResTextMap[lastRes.moduleType as FlowNodeTypeEnum];
+          if (field) {
+            return lastRes[field];
+          } else if (result?.assistantResponses?.length > 0) {
+            return result.assistantResponses[result.assistantResponses.length - 1].text?.content;
+          }
+        }
       },
-      (ctx) => {
-        runWorkflow({
-          ...data,
-          checkIsStopping,
-          query,
-          histories,
-          timezone,
-          externalProvider,
-          variables: defaultVariables,
-          workflowDispatchDeep: 0,
-          usageId: newUsageId,
-          concatUsage
-        })
-          .then(resolve)
-          .catch(reject)
-          .finally(async () => {
-            if (streamCheckTimer) {
-              clearInterval(streamCheckTimer);
-            }
-            if (checkStoppingTimer) {
-              clearInterval(checkStoppingTimer);
-            }
-
-            // Close mcpClient connections
-            Object.values(ctx.mcpClientMemory).forEach((client) => {
-              client.closeConnection();
-            });
-
-            // 工作流完成后删除 Redis 记录
-            await delAgentRuntimeStopSign({
-              appId: runningAppInfo.id,
-              chatId
-            });
-          });
+      {
+        name: runningAppInfo.name,
+        type: 'RootSpanType',
+        baggages: {
+          user_id: runningUserInfo.username,
+          message_id: chatId,
+          thread_id: runningAppInfo.id
+          // custom_id: 'custom-123',
+        }
       }
     );
-  });
+    return result as DispatchFlowResponse;
+  }
 }
 
 export type RunWorkflowProps = ChatDispatchProps & {
@@ -577,7 +621,7 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
       };
 
       // run module
-      const dispatchRes: NodeResponseType = await (async () => {
+      const runDispatchRes = async () => {
         if (callbackMap[node.flowNodeType]) {
           const targetEdges = runtimeEdges.filter((item) => item.source === node.nodeId);
           const errorHandleId = getHandleId(node.nodeId, 'source_catch', 'right');
@@ -642,11 +686,12 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
           }
         }
         return {};
-      })();
+      };
 
-      const nodeResponses = dispatchRes[DispatchNodeResponseKeyEnum.nodeResponses] || [];
+      let dispatchRes: NodeResponseType = {};
+      let nodeResponses: ChatHistoryItemResType[] = [];
       // format response data. Add modulename and module type
-      const formatResponseData: NodeResponseCompleteType['responseData'] = (() => {
+      const runFormatResponseData = () => {
         if (!dispatchRes[DispatchNodeResponseKeyEnum.nodeResponse]) return undefined;
 
         const val = {
@@ -660,7 +705,35 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
         };
         nodeResponses.push(val);
         return val;
-      })();
+      };
+
+      let formatResponseData: NodeResponseCompleteType['responseData'] | undefined;
+
+      // 第一个节点userGuide不上报
+      if (node.flowNodeType === 'userGuide' || process.env.COZELOOP_ENABLE !== 'true') {
+        dispatchRes = await runDispatchRes();
+        nodeResponses = dispatchRes[DispatchNodeResponseKeyEnum.nodeResponses] || [];
+        formatResponseData = runFormatResponseData();
+      } else {
+        await getCozeTracer().traceable(
+          async (span) => {
+            if (node.flowNodeType === 'workflowStart') {
+              getCozeTracer().setInput(span, dispatchData?.query[0]?.text?.content);
+            } else {
+              getCozeTracer().setInput(span, dispatchData.params);
+            }
+
+            dispatchRes = await runDispatchRes();
+            nodeResponses = dispatchRes[DispatchNodeResponseKeyEnum.nodeResponses] || [];
+            formatResponseData = runFormatResponseData();
+            return formatResponseData;
+          },
+          {
+            name: node.flowNodeType === 'workflowStart' ? '流程开始' : node.name,
+            type: node.flowNodeType
+          }
+        );
+      }
 
       // Response node response
       if (apiVersion === 'v2' && !data.isToolCall && isRootRuntime && nodeResponses.length > 0) {

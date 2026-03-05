@@ -32,6 +32,8 @@
   "code.Switch language confirm": "切换语言将重置代码，是否继续？",
   "code_execution": "代码运行",
   "collection_metadata_filter": "集合元数据过滤",
+  "custom_data_filter": "自定义数据过滤",
+  "custom_data_filterdescription": "根据自定义字段过滤数据再进行全文检索和向量检索，采用sql语法。\n使用变量时，如果变量是字符串，需将变量用单引号包裹 \n支持and和or任意嵌套，如A and (B or C)；\n支持=，in，>，<，>=，<=；\n例如：cfxfbz = '1' or (xfrq >= '2026-01-01' and xfrq <= '2026-12-31')",
   "complete_extraction_result": "完整提取结果",
   "complete_extraction_result_description": "一个 JSON 字符串，例如：{\"name:\":\"YY\",\"Time\":\"2023/7/2 18:00\"}",
   "concatenation_result": "拼接结果",

@@ -37,6 +37,7 @@ import { pushTrack } from '../../../common/middle/tracks/utils';
 import { replaceS3KeyToPreviewUrl } from '../../../core/dataset/utils';
 import { addDays, addHours } from 'date-fns';
 import { getLogger, LogCategories } from '../../../common/logger';
+import { convertSqlCondition } from '../../../common/util/convertSqlCondition';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.DATA);
 
@@ -72,6 +73,7 @@ export type SearchDatasetDataProps = {
     }
   */
   collectionFilterMatch?: string;
+  customDataFilterMatch?: string;
 };
 
 export type SearchDatasetDataResponse = {
@@ -171,7 +173,7 @@ export const filterDatasetDataByMaxTokens = async (
   return filterMaxTokensResult;
 };
 
-export async function searchDatasetData(
+async function searchDatasetData(
   props: SearchDatasetDataProps
 ): Promise<SearchDatasetDataResponse> {
   let {
@@ -187,7 +189,8 @@ export async function searchDatasetData(
     rerankModel,
     rerankWeight = 0.5,
     datasetIds = [],
-    collectionFilterMatch
+    collectionFilterMatch,
+    customDataFilterMatch
   } = props;
 
   // Constants data
@@ -308,7 +311,8 @@ export async function searchDatasetData(
       return Array.from(resultIds);
     };
 
-    if (!collectionFilterMatch || !global.feConfigs.isPlus) return;
+    // if (!collectionFilterMatch || !global.feConfigs.isPlus) return;
+    if (!collectionFilterMatch) return;
 
     let tagCollectionIdList: string[] | undefined = undefined;
     let createTimeCollectionIdList: string[] | undefined = undefined;
@@ -466,12 +470,14 @@ export async function searchDatasetData(
     queries,
     limit,
     forbidCollectionIdList,
-    filterCollectionIdList
+    filterCollectionIdList,
+    customDataFilterMatch
   }: {
     queries: string[];
     limit: number;
     forbidCollectionIdList: string[];
     filterCollectionIdList?: string[];
+    customDataFilterMatch?: string;
   }): Promise<{
     embeddingRecallResults: SearchDataResponseItemType[][];
     tokens: number;
@@ -497,7 +503,8 @@ export async function searchDatasetData(
           vector,
           limit,
           forbidCollectionIdList,
-          filterCollectionIdList
+          filterCollectionIdList,
+          customDataFilterMatch
         });
       })
     );
@@ -618,12 +625,14 @@ export async function searchDatasetData(
     queries,
     limit,
     filterCollectionIdList,
-    forbidCollectionIdList
+    forbidCollectionIdList,
+    customDataFilterMatch
   }: {
     queries: string[];
     limit: number;
     filterCollectionIdList?: string[];
     forbidCollectionIdList: string[];
+    customDataFilterMatch?: string;
   }): Promise<{
     fullTextRecallResults: SearchDataResponseItemType[][];
   }> => {
@@ -635,29 +644,32 @@ export async function searchDatasetData(
 
     const recallResults = await Promise.all(
       queries.map(async (query) => {
+        let match = {
+          teamId: new Types.ObjectId(teamId),
+          $text: { $search: await jiebaSplit({ text: query }) },
+          datasetId: { $in: datasetIds.map((id) => new Types.ObjectId(id)) },
+          ...(filterCollectionIdList
+            ? {
+                collectionId: {
+                  $in: filterCollectionIdList
+                    .filter((id) => !forbidCollectionIdList.includes(id))
+                    .map((id) => new Types.ObjectId(id))
+                }
+              }
+            : forbidCollectionIdList?.length
+              ? {
+                  collectionId: {
+                    $nin: forbidCollectionIdList.map((id) => new Types.ObjectId(id))
+                  }
+                }
+              : {}),
+          ...(customDataFilterMatch ? JSON.parse(customDataFilterMatch) : {})
+        };
+
         return (await MongoDatasetDataText.aggregate(
           [
             {
-              $match: {
-                teamId: new Types.ObjectId(teamId),
-                $text: { $search: await jiebaSplit({ text: query }) },
-                datasetId: { $in: datasetIds.map((id) => new Types.ObjectId(id)) },
-                ...(filterCollectionIdList
-                  ? {
-                      collectionId: {
-                        $in: filterCollectionIdList
-                          .filter((id) => !forbidCollectionIdList.includes(id))
-                          .map((id) => new Types.ObjectId(id))
-                      }
-                    }
-                  : forbidCollectionIdList?.length
-                    ? {
-                        collectionId: {
-                          $nin: forbidCollectionIdList.map((id) => new Types.ObjectId(id))
-                        }
-                      }
-                    : {})
-              }
+              $match: match
             },
             {
               $sort: {
@@ -800,18 +812,39 @@ export async function searchDatasetData(
       filterCollectionByMetadata()
     ]);
 
+    let mongoDbCustomDataFilterMatch = undefined;
+    let pgJsonbCustomDataFilterMatch = undefined;
+    logger.debug('convertSqlCondition:', { customDataFilterMatch });
+
+    if (customDataFilterMatch) {
+      const result = convertSqlCondition(customDataFilterMatch);
+      if ('error' in result) {
+        throw new Error(`sql语法错误:${customDataFilterMatch}`);
+      }
+
+      logger.debug('convertSqlCondition result:', result);
+      if ('pgJsonb' in result) {
+        pgJsonbCustomDataFilterMatch = result.pgJsonb;
+      }
+      if ('mongoDb' in result) {
+        mongoDbCustomDataFilterMatch = result.mongoDb;
+      }
+    }
+
     const [{ tokens, embeddingRecallResults }, { fullTextRecallResults }] = await Promise.all([
       embeddingRecall({
         queries,
         limit: embeddingLimit,
         forbidCollectionIdList,
-        filterCollectionIdList
+        filterCollectionIdList,
+        customDataFilterMatch: pgJsonbCustomDataFilterMatch
       }),
       fullTextRecall({
         queries,
         limit: fullTextLimit,
         filterCollectionIdList,
-        forbidCollectionIdList
+        forbidCollectionIdList,
+        customDataFilterMatch: mongoDbCustomDataFilterMatch
       })
     ]);
 
@@ -951,6 +984,8 @@ export async function searchDatasetData(
     usingSimilarityFilter
   };
 }
+
+export default searchDatasetData;
 
 export type DefaultSearchDatasetDataProps = SearchDatasetDataProps & {
   [NodeInputKeyEnum.datasetSearchUsingExtensionQuery]?: boolean;

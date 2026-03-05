@@ -41,6 +41,7 @@ type DatasetSearchProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.datasetDeepSearchModel]?: string;
   [NodeInputKeyEnum.datasetDeepSearchMaxTimes]?: number;
   [NodeInputKeyEnum.datasetDeepSearchBg]?: string;
+  [NodeInputKeyEnum.customDataFilterMatch]?: string;
 }>;
 export type DatasetSearchResponse = DispatchNodeResultType<{
   [NodeOutputKeyEnum.datasetQuoteQA]: SearchDataResponseItemType[];
@@ -61,6 +62,7 @@ export async function dispatchDatasetSearch(
       userChatInput = '',
       authTmbId = false,
       collectionFilterMatch,
+      customDataFilterMatch,
       searchMode,
       embeddingWeight,
       usingReRank,
@@ -138,7 +140,8 @@ export async function dispatchDatasetSearch(
       usingReRank,
       rerankModel: rerankModelData,
       rerankWeight,
-      collectionFilterMatch
+      collectionFilterMatch,
+      customDataFilterMatch
     };
     const {
       searchRes,
@@ -148,6 +151,7 @@ export async function dispatchDatasetSearch(
       usingReRank: searchUsingReRank,
       queryExtensionResult,
       deepSearchResult
+      // llmMetaData
     } = datasetDeepSearch
       ? await deepRagSearch({
           ...searchData,
@@ -238,6 +242,7 @@ export async function dispatchDatasetSearch(
     const totalPoints = nodeDispatchUsages.reduce((acc, item) => acc + item.totalPoints, 0);
 
     return {
+      // llmMetaData,
       data: {
         quoteQA: searchRes
       },

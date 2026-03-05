@@ -34,6 +34,7 @@ import z from 'zod';
 export type ExternalProviderType = {
   openaiAccount?: OpenaiAccountType;
   externalWorkflowVariables?: Record<string, string>;
+  chHeaders?: Record<string, string>;
 };
 
 /* workflow props */

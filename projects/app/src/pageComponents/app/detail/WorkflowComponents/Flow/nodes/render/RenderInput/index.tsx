@@ -9,6 +9,7 @@ import { useSystemStore } from '@/web/common/system/useSystemStore';
 import VariableTip from '@/components/common/Textarea/MyTextarea/VariableTip';
 import CommonInputForm from './templates/CommonInputForm';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
+import { WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 
 const RenderList: Record<
   FlowNodeInputTypeEnum,
@@ -103,7 +104,6 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
 
   const filterProInputs = useMemoEnhance(() => {
     return flowInputList.filter((input) => {
-      if (input.isPro && !feConfigs?.isPlus) return false;
       return true;
     });
   }, [feConfigs?.isPlus, flowInputList]);
@@ -118,6 +118,21 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
       return true;
     });
   }, [filterProInputs]);
+
+  console.log('filterInputs', filterInputs);
+
+  // filterInputs.push({
+  //   debugLabel: '',
+  //   description: 'workflow:filter_description11',
+  //   isPro: false,
+  //   key: 'collectionFilterMatch',
+  //   label: 'workflow:collection_metadata_filter',
+  //   renderTypeList: [FlowNodeInputTypeEnum.textarea, FlowNodeInputTypeEnum.reference],
+  //   selectedTypeIndex: undefined,
+  //   toolDescription: undefined,
+  //   value: undefined,
+  //   valueType: WorkflowIOValueTypeEnum.string
+  // });
 
   return (
     <>

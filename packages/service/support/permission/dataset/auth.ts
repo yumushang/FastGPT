@@ -216,7 +216,8 @@ export async function authDatasetData({
     collectionId: String(datasetData.collectionId),
     sourceName: result.collection.name || '',
     sourceId: result.collection?.fileId || result.collection?.rawLink,
-    isOwner: String(datasetData.tmbId) === String(result.tmbId)
+    isOwner: String(datasetData.tmbId) === String(result.tmbId),
+    customData: datasetData.customData
     // permission: result.permission
   };
 

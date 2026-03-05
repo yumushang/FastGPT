@@ -3,7 +3,11 @@ import { PgVectorCtrl } from './pg';
 import { ObVectorCtrl } from './oceanbase';
 import { SeekVectorCtrl } from './seekdb';
 import { getVectorsByText } from '../../core/ai/embedding';
-import type { VectorControllerType, InsertVectorControllerPropsType } from './type';
+import type {
+  VectorControllerType,
+  InsertVectorControllerPropsType,
+  UpdateCustomDataPropsType
+} from './type';
 import { type EmbeddingModelItemType } from '@fastgpt/global/core/ai/model.schema';
 import { MILVUS_ADDRESS, PG_ADDRESS, OCEANBASE_ADDRESS, SEEKDB_ADDRESS } from './constants';
 import { MilvusCtrl } from './milvus';
@@ -117,3 +121,7 @@ export const getVectorCountByTeamId = async (teamId: string) => {
   return count;
 };
 export const getVectorCount = Vector.getVectorCount;
+
+export const updateDatasetDataCustomData = async (props: UpdateCustomDataPropsType) => {
+  return retryFn(() => Vector.updateCustomData(props));
+};
