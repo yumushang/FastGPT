@@ -822,7 +822,7 @@ async function searchDatasetData(
         throw new Error(`sql语法错误:${customDataFilterMatch}`);
       }
 
-      logger.debug('convertSqlCondition result:', result);
+      // logger.debug('convertSqlCondition result:', { result });
       if ('pgJsonb' in result) {
         pgJsonbCustomDataFilterMatch = result.pgJsonb;
       }

@@ -106,7 +106,7 @@ const Test = ({ datasetId }: { datasetId: string }) => {
   } = useDisclosure();
 
   const { runAsync: onTextTest, loading: textTestIsLoading } = useRequest(
-    ({ inputText, searchParams }: FormType) =>
+    ({ customDataFilterMatch, inputText, searchParams }: FormType) =>
       postSearchText({ datasetId, text: inputText.trim(), customDataFilterMatch, ...searchParams }),
     {
       onSuccess(res: SearchTestResponse) {

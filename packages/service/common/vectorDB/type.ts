@@ -17,13 +17,13 @@ export const InsertVectorControllerPropsSchema = z.object({
   datasetId: z.string(),
   collectionId: z.string(),
   vectors: z.array(z.array(z.number())),
-  customData: z.any()
+  customData: z.any().optional()
 });
 export type InsertVectorControllerPropsType = z.infer<typeof InsertVectorControllerPropsSchema>;
 
 export const UpdateCustomDataPropsSchema = z.object({
   teamId: z.string(),
-  customData: z.any(),
+  customData: z.any().optional(),
   idList: z.array(z.string())
 });
 
