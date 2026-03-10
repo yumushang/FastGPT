@@ -29,7 +29,8 @@ export async function register() {
         { instrumentationCheck },
         { getErrText },
         { configureLogger, getLogger, LogCategories },
-        { InitialErrorEnum }
+        { InitialErrorEnum },
+        {}
       ] = await Promise.all([
         import('@fastgpt/service/common/mongo/init'),
         import('@fastgpt/service/common/mongo/index'),
@@ -50,7 +51,8 @@ export async function register() {
         import('@/service/common/system/health'),
         import('@fastgpt/global/common/error/utils'),
         import('@fastgpt/service/common/logger'),
-        import('@fastgpt/service/common/system/constants')
+        import('@fastgpt/service/common/system/constants'),
+        import('@fastgpt/service/common/langfuse')
       ]);
 
       await configureLogger();

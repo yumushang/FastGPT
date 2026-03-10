@@ -31,8 +31,7 @@ import { getErrText } from '@fastgpt/global/common/error/utils';
 import json5 from 'json5';
 import { getLogger, LogCategories } from '../../../common/logger';
 import { saveLLMRequestRecord } from '../record/controller';
-import { SpanKind } from '@cozeloop/ai';
-import { getCozeTracer } from '../../../common/cozeLoop';
+import { startActiveObservation } from '@langfuse/tracing';
 
 const getRequestId = () => {
   return customNanoid('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890_-', 16);
@@ -365,20 +364,23 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
     }
   };
 
-  if (process.env.COZELOOP_ENABLE !== 'true') {
-    return await runCreateChatCompletion() as LLMResponse;
+  if (process.env.LANGFUSE_ENABLE !== 'true') {
+    return (await runCreateChatCompletion()) as LLMResponse;
   } else {
-    let result = {};
-    await getCozeTracer().traceable(
+    let result: LLMResponse | undefined;
+    await startActiveObservation(
+      '大模型',
       async (span) => {
-        getCozeTracer().setInput(span, requestBody);
-        result = await runCreateChatCompletion();
-        return result;
+        result = (await runCreateChatCompletion()) as LLMResponse;
+        
+        span.update({
+          model: requestBody.model,
+          input: requestBody.messages,
+          metadata: requestBody as any,
+          output: result.assistantMessage?.content
+        }).end();
       },
-      {
-        name: '大模型',
-        type: SpanKind.Model
-      }
+      { asType: 'generation' }
     );
     return result as LLMResponse;
   }
