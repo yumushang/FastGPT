@@ -30,7 +30,7 @@ export async function register() {
         { getErrText },
         { configureLogger, getLogger, LogCategories },
         { InitialErrorEnum },
-        {}
+        { initLangfuse }
       ] = await Promise.all([
         import('@fastgpt/service/common/mongo/init'),
         import('@fastgpt/service/common/mongo/index'),
@@ -108,6 +108,9 @@ export async function register() {
       startTrainingQueue(true);
       trackTimerProcess();
 
+      if (process.env.LANGFUSE_ENABLE === 'true') {
+        initLangfuse();
+      }
       logger.info('System initialized successfully');
     }
   } catch (error) {

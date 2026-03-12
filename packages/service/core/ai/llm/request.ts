@@ -32,6 +32,8 @@ import json5 from 'json5';
 import { getLogger, LogCategories } from '../../../common/logger';
 import { saveLLMRequestRecord } from '../record/controller';
 import { startActiveObservation } from '@langfuse/tracing';
+import { SpanKind } from '@cozeloop/ai';
+import { getCozeTracer } from '../../../common/cozeLoop';
 
 const getRequestId = () => {
   return customNanoid('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890_-', 16);
@@ -364,25 +366,41 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
     }
   };
 
-  if (process.env.LANGFUSE_ENABLE !== 'true') {
-    return (await runCreateChatCompletion()) as LLMResponse;
-  } else {
+  if (process.env.LANGFUSE_ENABLE === 'true') {
     let result: LLMResponse | undefined;
     await startActiveObservation(
       '大模型',
       async (span) => {
         result = (await runCreateChatCompletion()) as LLMResponse;
-        
-        span.update({
-          model: requestBody.model,
-          input: requestBody.messages,
-          metadata: requestBody as any,
-          output: result.assistantMessage?.content
-        }).end();
+
+        span
+          .update({
+            model: requestBody.model,
+            input: requestBody.messages,
+            metadata: requestBody as any,
+            output: result.assistantMessage
+          })
+          .end();
       },
       { asType: 'generation' }
     );
     return result as LLMResponse;
+  } else if (process.env.COZELOOP_ENABLE === 'true') {
+    let result: LLMResponse | undefined;
+    await getCozeTracer().traceable(
+      async (span) => {
+        getCozeTracer().setInput(span, requestBody);
+        result = (await runCreateChatCompletion()) as LLMResponse;
+        return result.assistantMessage;
+      },
+      {
+        name: '大模型',
+        type: SpanKind.Model
+      }
+    );
+    return result as LLMResponse;
+  } else {
+    return (await runCreateChatCompletion()) as LLMResponse;
   }
 };
 
