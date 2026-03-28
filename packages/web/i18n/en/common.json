@@ -834,7 +834,7 @@
   "dataset.data.edit.Index": "Data Index ({{amount}})",
   "dataset.data.edit.divide_content": "Segment Content",
   "dataset.data.input is empty": "Data Content Cannot Be Empty",
-  "dataset.dataset_name": "Dataset Name",
+  "dataset.dataset_name": "Dataset Name/ID",
   "dataset.deleteFolderTips": "Confirm to Delete This Folder and All Its Contained Datasets? Data Cannot Be Recovered After Deletion, Please Confirm!",
   "dataset.test.noResult": "No Search Results",
   "dataset_data_input_a": "Answer",

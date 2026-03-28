@@ -834,7 +834,7 @@
   "dataset.data.edit.Index": "数据索引({{amount}})",
   "dataset.data.edit.divide_content": "分块内容",
   "dataset.data.input is empty": "数据内容不能为空 ",
-  "dataset.dataset_name": "知识库名称",
+  "dataset.dataset_name": "知识库名称/ID",
   "dataset.deleteFolderTips": "确认删除该文件夹及其包含的所有知识库？删除后数据无法恢复，请确认！",
   "dataset.test.noResult": "搜索结果为空",
   "dataset_data_input_a": "答案",

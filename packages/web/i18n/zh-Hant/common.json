@@ -827,7 +827,7 @@
   "dataset.data.edit.Index": "資料索引（{{amount}}）",
   "dataset.data.edit.divide_content": "分割內容",
   "dataset.data.input is empty": "資料內容不能為空",
-  "dataset.dataset_name": "知識庫名稱",
+  "dataset.dataset_name": "知識庫名稱/ID",
   "dataset.deleteFolderTips": "確認刪除此資料夾及其包含的所有知識庫？刪除後資料無法復原，請確認！",
   "dataset.test.noResult": "搜尋結果為空",
   "dataset_data_input_a": "答案",
