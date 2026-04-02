@@ -60,6 +60,7 @@ export const appWorkflow2AgentForm = ({
       defaultAppForm.aiSettings.temperature = inputMap.get(NodeInputKeyEnum.aiChatTemperature);
       defaultAppForm.aiSettings.maxHistories = inputMap.get(NodeInputKeyEnum.history);
       defaultAppForm.aiSettings.aiChatTopP = inputMap.get(NodeInputKeyEnum.aiChatTopP);
+      defaultAppForm.aiSettings.useAgentSandbox = inputMap.get(NodeInputKeyEnum.useAgentSandbox);
 
       const tools = inputMap.get(NodeInputKeyEnum.selectedTools) as FlowNodeTemplateType[];
       if (tools) {
@@ -73,7 +74,13 @@ export const appWorkflow2AgentForm = ({
       // Dataset configuration
       const datasetParams = inputMap.get(NodeInputKeyEnum.datasetParams);
       if (datasetParams) {
-        defaultAppForm.dataset = datasetParams;
+        const parsedDatasetParams = datasetParams as AppFormEditFormType['dataset'];
+        defaultAppForm.dataset = {
+          ...defaultAppForm.dataset,
+          ...parsedDatasetParams,
+          searchMode: parsedDatasetParams.searchMode || DatasetSearchModeEnum.embedding,
+          usingReRank: !!parsedDatasetParams.usingReRank
+        };
       }
     } else if (node.flowNodeType === FlowNodeTypeEnum.systemConfig) {
       defaultAppForm.chatConfig = getAppChatConfig({
@@ -164,6 +171,13 @@ export function agentForm2AppWorkflow(
               value: [[workflowStartNodeId, NodeOutputKeyEnum.userFiles]]
             },
             {
+              key: NodeInputKeyEnum.aiChatVision,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: true
+            },
+            {
               key: NodeInputKeyEnum.history,
               renderTypeList: [FlowNodeInputTypeEnum.numberInput, FlowNodeInputTypeEnum.reference],
               valueType: WorkflowIOValueTypeEnum.chatHistory,
@@ -227,6 +241,14 @@ export function agentForm2AppWorkflow(
                 datasetSearchExtensionModel: data.dataset.datasetSearchExtensionModel,
                 datasetSearchExtensionBg: data.dataset.datasetSearchExtensionBg
               })
+            },
+            // agent sandbox
+            {
+              key: NodeInputKeyEnum.useAgentSandbox,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: data.aiSettings.useAgentSandbox ?? false
             }
           ],
           outputs: AgentNode.outputs
@@ -253,6 +275,8 @@ export function agentForm2AppWorkflow(
 }
 
 export const getEmptyAgentConfig = (t: any) => {
+  const defaultAppForm = getDefaultAppForm();
+
   return agentForm2AppWorkflow(
     {
       aiSettings: {
@@ -261,6 +285,7 @@ export const getEmptyAgentConfig = (t: any) => {
         isResponseAnswerText: true
       },
       dataset: {
+        ...defaultAppForm.dataset,
         datasets: [],
         searchMode: DatasetSearchModeEnum.embedding
       },

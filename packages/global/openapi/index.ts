@@ -34,7 +34,7 @@ export const openAPIDocument = createDocument({
     },
     {
       name: 'AI 相关',
-      tags: [TagsMap.aiSkill]
+      tags: [TagsMap.aiSkill, TagsMap.sandbox]
     },
     {
       name: '对话',
@@ -54,12 +54,18 @@ export const openAPIDocument = createDocument({
     },
     {
       name: '用户体系',
-      tags: [TagsMap.userInform, TagsMap.walletBill, TagsMap.walletDiscountCoupon]
+      tags: [
+        TagsMap.userInform,
+        TagsMap.walletBill,
+        TagsMap.walletDiscountCoupon,
+        TagsMap.userLogin
+      ]
     },
     {
       name: '通用-核心功能',
       tags: [TagsMap.aiCommon]
     },
+
     {
       name: '通用-辅助功能',
       tags: [TagsMap.customDomain, TagsMap.apiKey]

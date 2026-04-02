@@ -4,13 +4,17 @@ import type {
   ChatCompletionTool
 } from '@fastgpt/global/core/ai/type';
 import { createLLMResponse } from '../../../../../../ai/llm/request';
-import { getInitialPlanPrompt, getContinuePlanPrompt, getInitialPlanQuery } from './prompt';
+import {
+  getInitialPlanPrompt,
+  getContinuePlanPrompt,
+  getInitialPlanQuery,
+  reTryPlanPrompt
+} from './prompt';
 import { getLLMModel } from '../../../../../../ai/model';
 import { formatModelChars2Points } from '../../../../../../../support/wallet/usage/utils';
 import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
 import type {
-  AgentPlanAskQueryInteractive,
-  UserInputInteractive,
+  InteractiveNodeResponseType,
   WorkflowInteractiveResponseType
 } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import { parseJsonArgs } from '../../../../../../ai/utils';
@@ -28,6 +32,9 @@ import { SubAppIds } from '@fastgpt/global/core/workflow/node/agent/constants';
 import type { PlanAgentParamsType } from './constants';
 import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import { getLogger, LogCategories } from '../../../../../../../common/logger';
+import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
+
+const agentLogger = getLogger(LogCategories.MODULE.AI.AGENT);
 
 type PlanAgentConfig = {
   systemPrompt?: string;
@@ -58,10 +65,11 @@ type DispatchPlanAgentProps = PlanAgentConfig &
     checkIsStopping: () => boolean;
     completionTools: ChatCompletionTool[];
     getSubAppInfo: GetSubAppInfoFnType;
+    userKey?: OpenaiAccountType;
   } & (InitialParams | ContinueParams | InteractiveParams);
 
 export type DispatchPlanAgentResponse = {
-  askInteractive?: UserInputInteractive | AgentPlanAskQueryInteractive;
+  askInteractive?: InteractiveNodeResponseType;
   plan?: AgentPlanType;
   planBuffer: PlanAgentParamsType;
   completeMessages: ChatCompletionMessageParam[];
@@ -71,6 +79,7 @@ export type DispatchPlanAgentResponse = {
 
 const parsePlan = async ({
   text,
+  planId,
   task,
   description,
   background
@@ -81,19 +90,22 @@ const parsePlan = async ({
     return;
   }
 
-  const result = parseJsonArgs(text);
+  const result = parseJsonArgs<{ steps: AgentPlanType['steps'] }>(text);
+
   if (!result) {
-    return;
+    return result;
   }
 
   const params = await AgentPlanSchema.safeParseAsync({
     ...result,
+    planId,
     task,
     description,
     background
   });
+
   if (!params.success) {
-    getLogger(LogCategories.MODULE.AI.AGENT).warn(`[Plan Agent] Not plan`, { text });
+    agentLogger.warn(`[Plan Agent] Not plan`, { text });
     return;
   }
 
@@ -101,7 +113,7 @@ const parsePlan = async ({
 };
 const parseAskInteractive = async (
   toolCalls: ChatCompletionMessageToolCall[]
-): Promise<UserInputInteractive | AgentPlanAskQueryInteractive | undefined> => {
+): Promise<InteractiveNodeResponseType | undefined> => {
   const tooCall = toolCalls[0];
   if (!tooCall) return;
   const params = await AIAskAnswerSchema.safeParseAsync(parseJsonArgs(tooCall.function.arguments));
@@ -141,7 +153,7 @@ const parseAskInteractive = async (
       }
     };
   } else {
-    getLogger(LogCategories.MODULE.AI.AGENT).warn(`[Plan Agent] Ask tool params is not valid`, {
+    agentLogger.warn(`[Plan Agent] Ask tool params is not valid`, {
       tooCall
     });
     return;
@@ -161,9 +173,11 @@ export const dispatchPlanAgent = async ({
   getSubAppInfo,
   systemPrompt,
   model,
+  planId,
   task,
   description,
   background,
+  userKey,
   ...props
 }: DispatchPlanAgentProps): Promise<DispatchPlanAgentResponse> => {
   const startTime = Date.now();
@@ -189,7 +203,6 @@ export const dispatchPlanAgent = async ({
   ];
 
   // 分类：query/user select/user form
-
   // 上一轮是 Ask 模式，进行工具调用拼接
   if (props.mode === 'interactive') {
     const lastMessages = props.planMessages[props.planMessages.length - 1];
@@ -202,7 +215,7 @@ export const dispatchPlanAgent = async ({
         content: props.queryInput
       });
     } else {
-      getLogger(LogCategories.MODULE.AI.AGENT).error('Plan interactive mode error', {
+      agentLogger.error('Plan interactive mode error', {
         planMessages: props.planMessages
       });
       return Promise.reject('Plan interactive mode error');
@@ -226,6 +239,14 @@ export const dispatchPlanAgent = async ({
   // console.dir({ requestMessages }, { depth: null });
   // console.log('userInput:', userInput, 'mode:', mode, 'interactive?.type:', interactive?.type);
 
+  const requestParams = {
+    model: modelData.model,
+    stream: true,
+    tools: props.mode === 'continue' ? undefined : [AIAskTool],
+    tool_choice: 'auto' as const,
+    toolCallMode: modelData.toolChoice ? ('toolChoice' as const) : ('prompt' as const),
+    parallel_tool_calls: false
+  };
   let {
     answerText,
     toolCalls = [],
@@ -235,14 +256,10 @@ export const dispatchPlanAgent = async ({
     requestId
   } = await createLLMResponse({
     isAborted: checkIsStopping,
+    userKey,
     body: {
-      model: modelData.model,
       messages: requestMessages,
-      stream: true,
-      tools: props.mode === 'continue' ? undefined : [AIAskTool],
-      tool_choice: 'auto',
-      toolCallMode: modelData.toolChoice ? 'toolChoice' : 'prompt',
-      parallel_tool_calls: false
+      ...requestParams
     }
   });
 
@@ -250,27 +267,120 @@ export const dispatchPlanAgent = async ({
     return Promise.reject(responseEmptyTip);
   }
 
-  /* 
+  const llmRequestIds: string[] = [requestId];
+  let totalPoints = 0; // 每次 LLM 调用单独计价后累加，避免梯度计费错误
+
+  // 初始调用的价格计算
+  const initialPoints = userKey
+    ? 0
+    : formatModelChars2Points({
+        model: modelData.model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens
+      }).totalPoints;
+  totalPoints += initialPoints;
+
+  /*
     正常输出情况：
     1. text: 正常生成plan
     2. toolCall: 调用ask工具
     3. text + confirm: 成功生成工具 + 确认操作
   */
-  // 获取生成的 plan
-  const plan = await parsePlan({
-    text: answerText,
-    task,
-    description,
-    background
-  });
-  // 获取交互结果
-  const askInteractive = await parseAskInteractive(toolCalls);
+  // 1. 首次获取交互结果
+  const { askInteractive, plan } = await (async () => {
+    // 1. 首次获取交互结果
+    let [askInteractive, plan] = await Promise.all([
+      parseAskInteractive(toolCalls),
+      parsePlan({
+        text: answerText,
+        planId,
+        task,
+        description,
+        background
+      })
+    ]);
+    if (plan || askInteractive) {
+      return {
+        askInteractive,
+        plan
+      };
+    }
 
-  const { totalPoints, modelName } = formatModelChars2Points({
-    model: modelData.model,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens
-  });
+    // 2. 二次尝试生成 plan
+    agentLogger.warn('[Plan Agent] parse failed, try regenerate plan once', {
+      requestId,
+      mode: props.mode,
+      answerText: answerText.slice(0, 2000)
+    });
+
+    const regenerateResponse = await createLLMResponse({
+      isAborted: checkIsStopping,
+      userKey,
+      body: {
+        messages: [
+          ...completeMessages,
+          {
+            role: 'user',
+            content: reTryPlanPrompt
+          }
+        ],
+        ...requestParams
+      }
+    });
+    completeMessages = regenerateResponse.completeMessages;
+
+    // 再生成的价格计算（单独计价）
+    const regenPoints = userKey
+      ? 0
+      : formatModelChars2Points({
+          model: modelData.model,
+          inputTokens: regenerateResponse.usage.inputTokens,
+          outputTokens: regenerateResponse.usage.outputTokens
+        }).totalPoints;
+    totalPoints += regenPoints;
+    // 累加 tokens 仅用于展示
+    usage.inputTokens += regenerateResponse.usage.inputTokens;
+    usage.outputTokens += regenerateResponse.usage.outputTokens;
+    llmRequestIds.push(regenerateResponse.requestId);
+
+    [askInteractive, plan] = await Promise.all([
+      parseAskInteractive(regenerateResponse.toolCalls || []),
+      parsePlan({
+        text: regenerateResponse.answerText,
+        planId,
+        task,
+        description,
+        background
+      })
+    ]);
+    if (plan || askInteractive) {
+      return {
+        askInteractive,
+        plan
+      };
+    }
+
+    // 真的失败了
+    agentLogger.warn('[Plan Agent] plan regenerate failed', {
+      requestId,
+      regenerateRequestId: regenerateResponse.requestId,
+      mode: props.mode,
+      answerText: regenerateResponse.answerText.slice(0, 2000)
+    });
+    askInteractive = {
+      type: 'agentPlanAskQuery',
+      params: {
+        content: i18nT('chat:agent_plan_parse_retry_tip')
+      }
+    };
+
+    return {
+      askInteractive
+    };
+  })();
+
+  // 使用累加的价格（每次调用单独计价后累加），保证梯度计费正确
+  const modelName = modelData.name;
 
   const nodeId = getNanoid(6);
   const nodeResponse: ChatHistoryItemResType = {
@@ -285,13 +395,14 @@ export const dispatchPlanAgent = async ({
     totalPoints,
     model: modelName,
     runningTime: +((Date.now() - startTime) / 1000).toFixed(2),
-    llmRequestIds: [requestId]
+    llmRequestIds
   };
 
   return {
     askInteractive,
     plan,
     planBuffer: {
+      planId,
       task,
       description,
       background

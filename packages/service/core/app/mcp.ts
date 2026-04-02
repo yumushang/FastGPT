@@ -39,18 +39,14 @@ export class MCPClient {
       throw error;
     });
 
-    this.client.onerror = (error) => {
-      logger.error('MCP client connection error', { url: this.url, error });
-      this.connectionPromise = null;
-    };
-    this.client.onclose = () => {
-      this.connectionPromise = null;
-    };
-
     return this.connectionPromise;
   }
 
   private async doConnect(): Promise<Client> {
+    // 避免连接重复，强制关闭一次
+    await this.client.close().catch(() => {});
+
+    logger.debug('Start connect mcp client', { url: this.url });
     try {
       const transport = new StreamableHTTPClientTransport(new URL(this.url), {
         requestInit: {
@@ -58,9 +54,7 @@ export class MCPClient {
         }
       });
       await this.client.connect(transport);
-      return this.client;
     } catch (error) {
-      logger.debug('StreamableHTTP connect failed, falling back to SSE', { url: this.url, error });
       await this.client.connect(
         new SSEClientTransport(new URL(this.url), {
           requestInit: {
@@ -90,8 +84,19 @@ export class MCPClient {
           }
         })
       );
-      return this.client;
     }
+
+    this.client.onerror = (error) => {
+      // 忽略掉不支持 streamable 的错误
+      if (error?.message?.includes('SSE stream: Not Found')) return;
+      logger.warn('MCP client connection error', { url: this.url, error });
+      this.connectionPromise = null;
+    };
+    this.client.onclose = () => {
+      this.connectionPromise = null;
+    };
+
+    return this.client;
   }
 
   // 内部方法：关闭连接
@@ -120,24 +125,24 @@ export class MCPClient {
 
       const tools = await Promise.all(
         response.tools.map(async (tool) => {
-          let processedSchema;
-
-          if (tool.inputSchema) {
-            try {
-              // Deep clone to avoid dereference() mutating the original object
-              const schemaClone = JSON.parse(JSON.stringify(tool.inputSchema));
-              processedSchema = await $RefParser.dereference(schemaClone, {
-                resolve: {
-                  // Disable file and HTTP $ref resolution to prevent SSRF
-                  file: false,
-                  http: false
-                }
-              });
-            } catch (error) {
-              logger.error(`Failed to dereference schema for tool "${tool.name}":`, { error });
-              processedSchema = tool.inputSchema;
+          const processedSchema = await (async () => {
+            if (tool.inputSchema) {
+              try {
+                // Deep clone to avoid dereference() mutating the original object
+                const schemaClone = JSON.parse(JSON.stringify(tool.inputSchema));
+                return await $RefParser.dereference(schemaClone, {
+                  resolve: {
+                    // Disable file and HTTP $ref resolution to prevent SSRF
+                    file: false,
+                    http: false
+                  }
+                });
+              } catch (error) {
+                logger.error(`Failed to dereference schema for tool "${tool.name}":`, { error });
+                return tool.inputSchema;
+              }
             }
-          }
+          })();
 
           return {
             name: tool.name,

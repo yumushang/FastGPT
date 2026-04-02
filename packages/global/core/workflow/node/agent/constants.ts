@@ -1,3 +1,10 @@
+import {
+  SANDBOX_GET_FILE_URL_TOOL,
+  SANDBOX_ICON,
+  SANDBOX_NAME,
+  SANDBOX_READ_FILE_TOOL_NAME,
+  SANDBOX_SHELL_TOOL
+} from '../../../ai/sandbox/constants';
 import type { I18nStringType } from '../../../../common/i18n/type';
 
 export enum SubAppIds {
@@ -5,13 +12,25 @@ export enum SubAppIds {
   ask = 'ask_agent',
   model = 'model_agent',
   fileRead = 'file_read',
-  datasetSearch = 'dataset_search'
+  datasetSearch = 'dataset_search',
+  sandboxTool = 'sandbox_shell',
+  sandboxGetFileUrl = 'sandbox_get_file_url'
 }
 
 export const systemSubInfo: Record<
   string,
   { name: I18nStringType; avatar: string; toolDescription: string }
 > = {
+  [SubAppIds.sandboxTool]: {
+    name: SANDBOX_NAME,
+    avatar: SANDBOX_ICON,
+    toolDescription: SANDBOX_SHELL_TOOL.function.description!
+  },
+  [SubAppIds.sandboxGetFileUrl]: {
+    name: SANDBOX_READ_FILE_TOOL_NAME,
+    avatar: SANDBOX_ICON,
+    toolDescription: SANDBOX_GET_FILE_URL_TOOL.function.description!
+  },
   [SubAppIds.plan]: {
     name: {
       'zh-CN': '规划Agent',

@@ -25,12 +25,18 @@ import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { i18nT } from '../../../../../../../web/i18n/utils';
-import { formatModelChars2Points } from '../../../../../../support/wallet/usage/utils';
 import { getMasterSystemPrompt } from './prompt';
 import { PlanAgentParamsSchema } from '../sub/plan/constants';
 import { filterMemoryMessages } from '../../utils';
 import { dispatchApp, dispatchPlugin } from '../sub/app';
 import { getLogger, LogCategories } from '../../../../../../common/logger';
+import {
+  SandboxShellToolSchema,
+  SANDBOX_TOOL_NAME,
+  SANDBOX_GET_FILE_URL_TOOL_NAME,
+  SandboxGetFileUrlToolSchema
+} from '@fastgpt/global/core/ai/sandbox/constants';
+import { dispatchSandboxShell, dispatchSandboxGetFileUrl } from '../sub/sandbox';
 
 type Response = {
   stepResponse?: {
@@ -85,7 +91,10 @@ export const masterCall = async ({
     params: {
       model,
       // Dataset search configuration
-      agent_datasetParams: datasetParams
+      agent_datasetParams: datasetParams,
+      // Sandbox (Computer Use)
+      useAgentSandbox = false,
+      aiChatVision
     }
   } = props;
 
@@ -177,7 +186,11 @@ export const masterCall = async ({
     const messages: ChatCompletionMessageParam[] = [
       {
         role: 'system' as const,
-        content: getMasterSystemPrompt(systemPrompt, hasUserTools)
+        content: getMasterSystemPrompt({
+          systemPrompt,
+          hasUserTools,
+          useAgentSandbox: useAgentSandbox && !!global.feConfigs?.show_agent_sandbox
+        })
       },
       ...masterMessages
     ];
@@ -194,6 +207,7 @@ export const masterCall = async ({
     completeMessages,
     inputTokens,
     outputTokens,
+    llmTotalPoints,
     childrenUsages,
     finish_reason,
     requestIds,
@@ -204,6 +218,7 @@ export const masterCall = async ({
       messages: requestMessages,
       model: getLLMModel(model),
       stream: true,
+      useVision: aiChatVision,
       tools: isStepCall
         ? completionTools.filter((item) => item.function.name !== SubAppIds.plan)
         : completionTools
@@ -305,7 +320,8 @@ export const masterCall = async ({
               teamId: runningUserInfo.teamId,
               tmbId: runningUserInfo.tmbId,
               customPdfParse: chatConfig?.fileSelectConfig?.customPdfParse,
-              model
+              model,
+              userKey: externalProvider.openaiAccount
             });
 
             if (result.nodeResponse) {
@@ -365,6 +381,59 @@ export const masterCall = async ({
               usages: result.usages
             };
           }
+          if (toolId === SANDBOX_TOOL_NAME) {
+            const toolParams = SandboxShellToolSchema.safeParse(
+              parseJsonArgs(call.function.arguments)
+            );
+            if (!toolParams.success) {
+              return {
+                response: toolParams.error.message,
+                usages: []
+              };
+            }
+
+            const result = await dispatchSandboxShell({
+              command: toolParams.data.command,
+              timeout: toolParams.data.timeout,
+              appId: runningAppInfo.id,
+              userId: props.uid,
+              chatId,
+              lang: props.lang
+            });
+
+            childrenResponses.push(result.nodeResponse);
+
+            return {
+              response: result.response,
+              usages: result.usages
+            };
+          }
+          if (toolId === SANDBOX_GET_FILE_URL_TOOL_NAME) {
+            const toolParams = SandboxGetFileUrlToolSchema.safeParse(
+              parseJsonArgs(call.function.arguments)
+            );
+            if (!toolParams.success) {
+              return {
+                response: toolParams.error.message,
+                usages: []
+              };
+            }
+
+            const result = await dispatchSandboxGetFileUrl({
+              paths: toolParams.data.paths,
+              appId: runningAppInfo.id,
+              userId: props.uid,
+              chatId,
+              lang: props.lang
+            });
+
+            childrenResponses.push(result.nodeResponse);
+
+            return {
+              response: result.response,
+              usages: result.usages
+            };
+          }
           if (toolId === SubAppIds.plan) {
             try {
               const toolArgs = await PlanAgentParamsSchema.safeParseAsync(
@@ -387,14 +456,14 @@ export const masterCall = async ({
                 model,
                 stream,
                 mode: 'initial',
-                task: toolArgs.data.task,
-                description: toolArgs.data.description,
-                background: toolArgs.data.background
+                ...toolArgs.data,
+                planId: call.id
               });
 
               return {
                 response: '',
-                stop: true
+                stop: true,
+                usages: [] // 外部会单独对 plan 计费
               };
             } catch (error) {
               getLogger(LogCategories.MODULE.AI.AGENT).error('dispatchPlanAgent error', { error });
@@ -590,11 +659,11 @@ export const masterCall = async ({
     }
   });
 
-  const llmUsage = formatModelChars2Points({
-    model: agentModel,
-    inputTokens,
-    outputTokens
-  });
+  // llmTotalPoints 是 runAgentCall 内每次 LLM 调用单独计价后的累计值，保证梯度计费正确
+  const llmUsage = {
+    modelName: getLLMModel(agentModel).name,
+    totalPoints: llmTotalPoints
+  };
   const childTotalPoints = childrenUsages.reduce((sum, item) => sum + item.totalPoints, 0);
   const nodeResponse: ChatHistoryItemResType = {
     nodeId: getNanoid(6),

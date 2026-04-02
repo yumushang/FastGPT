@@ -8,6 +8,8 @@ export const TagsMap = {
   aiSkill: 'AI技能管理',
   // AI
   aiCommon: 'AI 通用 接口',
+  // Sandbox
+  sandbox: 'AI 沙盒',
 
   // App 管理
   // Agent - common
@@ -40,6 +42,7 @@ export const TagsMap = {
   customDomain: '自定义域名',
   // User
   userInform: '用户通知',
+  userLogin: '用户账号',
 
   /* Common */
   // APIKey

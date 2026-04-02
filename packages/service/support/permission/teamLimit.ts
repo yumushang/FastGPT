@@ -8,6 +8,7 @@ import { AppTypeEnum, ToolTypeList, AppFolderTypeList } from '@fastgpt/global/co
 import { MongoTeamMember } from '../user/team/teamMemberSchema';
 import { TeamMemberStatusEnum } from '@fastgpt/global/support/user/team/constant';
 import { getVectorCountByTeamId } from '../../common/vectorDB/controller';
+import { env } from '../../env';
 
 export const checkTeamAIPoints = async (teamId: string) => {
   if (!global.subPlans?.standard) return;
@@ -25,7 +26,7 @@ export const checkTeamAIPoints = async (teamId: string) => {
 };
 
 export const checkTeamMemberLimit = async (teamId: string, newCount: number) => {
-  const [{ standardConstants }, memberCount] = await Promise.all([
+  const [{ standard }, memberCount] = await Promise.all([
     getTeamStandPlan({
       teamId
     }),
@@ -35,8 +36,24 @@ export const checkTeamMemberLimit = async (teamId: string, newCount: number) => 
     })
   ]);
 
-  if (standardConstants && newCount + memberCount > standardConstants.maxTeamMember) {
+  if (standard?.maxTeamMember && newCount + memberCount > standard.maxTeamMember) {
     return Promise.reject(TeamErrEnum.teamOverSize);
+  }
+};
+
+export const checkTeamDatasetFolderLimit = async ({
+  teamId,
+  amount = 1
+}: {
+  teamId: string;
+  amount?: number;
+}) => {
+  const folderCount = await MongoDataset.countDocuments({
+    teamId,
+    type: DatasetTypeEnum.folder
+  });
+  if (folderCount + amount > env.DATASET_FOLDER_MAX_AMOUNT) {
+    return Promise.reject(TeamErrEnum.datasetFolderAmountNotEnough);
   }
 };
 
@@ -50,7 +67,7 @@ export const checkTeamAppTypeLimit = async ({
   amount?: number;
 }) => {
   if (appCheckType === 'app') {
-    const [{ standardConstants }, appCount] = await Promise.all([
+    const [{ standard }, appCount] = await Promise.all([
       getTeamStandPlan({ teamId }),
       MongoApp.countDocuments({
         teamId,
@@ -60,7 +77,7 @@ export const checkTeamAppTypeLimit = async ({
       })
     ]);
 
-    if (standardConstants && appCount + amount > standardConstants.maxAppAmount) {
+    if (standard?.maxAppAmount && appCount + amount > standard.maxAppAmount) {
       return Promise.reject(TeamErrEnum.appAmountNotEnough);
     }
 
@@ -93,7 +110,7 @@ export const checkTeamAppTypeLimit = async ({
         $in: AppFolderTypeList
       }
     });
-    const maxAppFolderAmount = 1000;
+    const maxAppFolderAmount = env.APP_FOLDER_MAX_AMOUNT;
     if (folderCount + amount > maxAppFolderAmount) {
       return Promise.reject(TeamErrEnum.appFolderAmountNotEnough);
     }
@@ -107,10 +124,10 @@ export const checkDatasetIndexLimit = async ({
   teamId: string;
   insertLen?: number;
 }) => {
-  const [{ standardConstants, totalPoints, usedPoints, datasetMaxSize }, usedDatasetIndexSize] =
+  const [{ standard, totalPoints, usedPoints, datasetMaxSize }, usedDatasetIndexSize] =
     await Promise.all([getTeamPlanStatus({ teamId }), getVectorCountByTeamId(teamId)]);
 
-  if (!standardConstants) return;
+  if (!standard) return;
 
   if (usedDatasetIndexSize + insertLen >= datasetMaxSize) {
     return Promise.reject(TeamErrEnum.datasetSizeNotEnough);
@@ -123,7 +140,7 @@ export const checkDatasetIndexLimit = async ({
 };
 
 export const checkTeamDatasetLimit = async (teamId: string) => {
-  const [{ standardConstants }, datasetCount] = await Promise.all([
+  const [{ standard }, datasetCount] = await Promise.all([
     getTeamStandPlan({ teamId }),
     MongoDataset.countDocuments({
       teamId,
@@ -132,7 +149,7 @@ export const checkTeamDatasetLimit = async (teamId: string) => {
   ]);
 
   // User check
-  if (standardConstants && datasetCount >= standardConstants.maxDatasetAmount) {
+  if (standard?.maxDatasetAmount && datasetCount >= standard.maxDatasetAmount) {
     return Promise.reject(TeamErrEnum.datasetAmountNotEnough);
   }
 
@@ -148,11 +165,11 @@ export const checkTeamDatasetLimit = async (teamId: string) => {
 };
 
 export const checkTeamDatasetSyncPermission = async (teamId: string) => {
-  const { standardConstants } = await getTeamStandPlan({
+  const { standard } = await getTeamStandPlan({
     teamId
   });
 
-  if (standardConstants && !standardConstants?.websiteSyncPerDataset) {
+  if (standard && !standard?.websiteSyncPerDataset) {
     return Promise.reject(TeamErrEnum.websiteSyncNotEnough);
   }
 };

@@ -1,5 +1,4 @@
 import { LLMModelItemSchema } from '../../ai/model.schema';
-import { LLMModelTypeEnum } from '../../ai/constants';
 import { WorkflowIOValueTypeEnum, NodeInputKeyEnum, NodeOutputKeyEnum } from '../constants';
 import { FlowNodeInputTypeEnum, FlowNodeOutputTypeEnum } from '../node/constant';
 import { SecretValueTypeSchema } from '../../../common/secret/type';
@@ -45,7 +44,6 @@ export const InputComponentPropsTypeSchema = z.object({
   max: z.number().optional(), // slider, number input
   min: z.number().optional(), // slider, number input
   precision: z.number().optional(), // number input
-  llmModelType: z.enum(LLMModelTypeEnum).optional(), // ai model select
 
   canSelectFile: z.boolean().optional(), // file select
   canSelectImg: z.boolean().optional(), // file select
@@ -68,7 +66,7 @@ export const InputComponentPropsTypeSchema = z.object({
   // dynamic input
   customInputConfig: CustomFieldConfigTypeSchema.optional(),
 
-  // @deprecated
+  /** @deprecated */
   enums: z.array(z.object({ value: z.string(), label: z.string() })).optional()
 });
 export type InputComponentPropsType = z.infer<typeof InputComponentPropsTypeSchema>;

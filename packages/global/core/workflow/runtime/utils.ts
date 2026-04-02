@@ -1,5 +1,5 @@
 import json5 from 'json5';
-import { replaceVariable, valToStr } from '../../../common/string/tools';
+import { checkStrOversize, replaceVariable, valToStr } from '../../../common/string/tools';
 import { ChatRoleEnum } from '../../../core/chat/constants';
 import type { ChatItemType } from '../../../core/chat/type';
 import type { NodeOutputItemType } from './type';
@@ -290,146 +290,22 @@ export const filterWorkflowEdges = (edges: RuntimeEdgeItemType[]) => {
 };
 
 /*
-  1. 输入线分类：普通线(实际上就是从 start 直接过来的分支）和递归线（可以追溯到自身的分支）
-  2. 递归线，会根据最近的一个 target 分支进行分类，同一个分支的属于一组
-  2. 起始线全部非 waiting 执行，或递归线任意一组全部非 waiting 执行
-*/
-export const checkNodeRunStatus = ({
-  nodesMap,
-  node,
-  runtimeEdges
-}: {
-  nodesMap: Map<string, RuntimeNodeItemType>;
-  node: RuntimeNodeItemType;
-  runtimeEdges: RuntimeEdgeItemType[];
-}) => {
-  const isStartNode = (nodeType: string) => {
-    const map: Record<any, boolean> = {
-      [FlowNodeTypeEnum.workflowStart]: true,
-      [FlowNodeTypeEnum.pluginInput]: true,
-      [FlowNodeTypeEnum.loopStart]: true
-    };
-    return !!map[nodeType];
-  };
-  const splitNodeEdges = (targetNode: RuntimeNodeItemType) => {
-    const commonEdges: RuntimeEdgeItemType[] = [];
-    const recursiveEdgeGroupsMap = new Map<string, RuntimeEdgeItemType[]>();
-
-    const sourceEdges = runtimeEdges.filter((item) => item.target === targetNode.nodeId);
-
-    sourceEdges.forEach((sourceEdge) => {
-      const stack: Array<{
-        edge: RuntimeEdgeItemType;
-        visited: Set<string>;
-      }> = [
-        {
-          edge: sourceEdge,
-          visited: new Set([targetNode.nodeId])
-        }
-      ];
-      const MAX_DEPTH = 3000;
-      let iterations = 0;
-
-      while (stack.length > 0 && iterations < MAX_DEPTH) {
-        iterations++;
-        const { edge, visited } = stack.pop()!;
-
-        // Start node
-        const sourceNode = nodesMap.get(edge.source);
-        if (!sourceNode) continue;
-
-        if (isStartNode(sourceNode.flowNodeType) || sourceEdge.sourceHandle === 'selectedTools') {
-          commonEdges.push(sourceEdge);
-          continue;
-        }
-
-        // Circle detected
-        if (edge.source === targetNode.nodeId) {
-          recursiveEdgeGroupsMap.set(edge.target, [
-            ...(recursiveEdgeGroupsMap.get(edge.target) || []),
-            sourceEdge
-          ]);
-          continue;
-        }
-
-        if (visited.has(edge.source)) {
-          continue; // 已访问过此节点，跳过（避免子环干扰）
-        }
-
-        const newVisited = new Set(visited);
-        newVisited.add(edge.source);
-
-        // 查找目标节点的 source edges 并加入栈中
-        const nextEdges = runtimeEdges.filter((item) => item.target === edge.source);
-
-        for (const nextEdge of nextEdges) {
-          stack.push({
-            edge: nextEdge,
-            visited: newVisited
-          });
-        }
-      }
-    });
-
-    return { commonEdges, recursiveEdgeGroups: Array.from(recursiveEdgeGroupsMap.values()) };
-  };
-
-  // Classify edges
-  const { commonEdges, recursiveEdgeGroups } = splitNodeEdges(node);
-  // Entry
-  if (commonEdges.length === 0 && recursiveEdgeGroups.length === 0) {
-    return 'run';
-  }
-
-  // check active（其中一组边，至少有一个 active，且没有 waiting 即可运行）
-  if (
-    commonEdges.some((item) => item.status === 'active') &&
-    commonEdges.every((item) => item.status !== 'waiting')
-  ) {
-    return 'run';
-  }
-  if (
-    recursiveEdgeGroups.some(
-      (item) =>
-        item.some((item) => item.status === 'active') &&
-        item.every((item) => item.status !== 'waiting')
-    )
-  ) {
-    return 'run';
-  }
-
-  // check skip（其中一组边，全是 skiped 则跳过运行）
-  if (commonEdges.length > 0 && commonEdges.every((item) => item.status === 'skipped')) {
-    return 'skip';
-  }
-  if (
-    recursiveEdgeGroups.length > 0 &&
-    recursiveEdgeGroups.some((item) => item.every((item) => item.status === 'skipped'))
-  ) {
-    return 'skip';
-  }
-
-  return 'wait';
-};
-
-/*
   Get the value of the reference variable/node output
   1. [string,string]
   2. [string,string][]
 */
 export const getReferenceVariableValue = ({
   value,
-  nodes,
+  nodesMap,
   variables
 }: {
   value?: ReferenceValueType;
-  nodes: RuntimeNodeItemType[];
+  nodesMap: Record<string, RuntimeNodeItemType> | Map<string, RuntimeNodeItemType>;
   variables: Record<string, any>;
 }) => {
   if (!value) return value;
 
-  // handle single reference value
-  if (isValidReferenceValueFormat(value)) {
+  const resoleValue = (value: [string, string | undefined]) => {
     const sourceNodeId = value[0];
     const outputId = value[1];
 
@@ -439,12 +315,17 @@ export const getReferenceVariableValue = ({
     }
 
     // 避免 value 刚好就是二个元素的字符串数组
-    const node = nodes.find((node) => node.nodeId === sourceNodeId);
+    const node = nodesMap instanceof Map ? nodesMap.get(sourceNodeId) : nodesMap[sourceNodeId];
     if (!node) {
       return value;
     }
 
     return node.outputs.find((output) => output.id === outputId)?.value;
+  };
+
+  // handle single reference value
+  if (isValidReferenceValueFormat(value)) {
+    return resoleValue(value as [string, string | undefined]);
   }
 
   // handle reference array
@@ -453,15 +334,12 @@ export const getReferenceVariableValue = ({
     value.length > 0 &&
     value.every((item) => isValidReferenceValueFormat(item))
   ) {
-    const result = value.map<any>((val) => {
-      return getReferenceVariableValue({
-        value: val,
-        nodes,
-        variables
-      });
-    });
-
-    return result.flat().filter((item) => item !== undefined);
+    return value
+      .map<any>((val) => {
+        return resoleValue(val as [string, string | undefined]);
+      })
+      .flat()
+      .filter((item) => item !== undefined);
   }
 
   return value;
@@ -491,20 +369,42 @@ export const formatVariableValByType = (val: any, valueType?: WorkflowIOValueTyp
   return val;
 };
 
+// 模块级 RegExp 缓存，避免每次变量替换都重新编译正则
+const _replaceRegexCache = new Map<string, RegExp>();
+const _MAX_REGEX_CACHE_SIZE = 5000;
+
+const _getCachedRegex = (pattern: string): RegExp => {
+  let re = _replaceRegexCache.get(pattern);
+  if (!re) {
+    if (_replaceRegexCache.size >= _MAX_REGEX_CACHE_SIZE) {
+      _replaceRegexCache.clear();
+    }
+    re = new RegExp(pattern, 'g');
+    _replaceRegexCache.set(pattern, re);
+  }
+  return re;
+};
+
 // replace {{$xx.xx$}} variables for text
 export function replaceEditorVariable({
   text,
-  nodes,
+  nodesMap,
   variables,
   depth = 0
 }: {
   text: any;
-  nodes: RuntimeNodeItemType[];
+  nodesMap: Record<string, RuntimeNodeItemType> | Map<string, RuntimeNodeItemType>;
   variables: Record<string, any>; // global variables
   depth?: number;
 }) {
+  const getNode = (nodeId: string) => {
+    return nodesMap instanceof Map ? nodesMap.get(nodeId) : nodesMap[nodeId];
+  };
   if (typeof text !== 'string') return text;
   if (text === '') return text;
+  if (checkStrOversize(text)) {
+    throw new Error('Text length exceeds 100,000,000 characters.');
+  }
 
   const MAX_REPLACEMENT_DEPTH = 10;
   const processedVariables = new Set<string>();
@@ -521,10 +421,10 @@ export function replaceEditorVariable({
     if (typeof value !== 'string') return false;
 
     // Check if the value contains the target variable pattern (direct self-reference)
-    const selfRefPattern = new RegExp(
-      `\\{\\{\\$${targetKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\$\\}\\}`,
-      'g'
+    const selfRefPattern = _getCachedRegex(
+      `\\{\\{\\$${targetKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\$\\}\\}`
     );
+    selfRefPattern.lastIndex = 0;
     return selfRefPattern.test(value);
   };
 
@@ -554,7 +454,7 @@ export function replaceEditorVariable({
         return variables[id];
       }
       // Find upstream node input/output
-      const node = nodes.find((node) => node.nodeId === nodeId);
+      const node = getNode(nodeId);
       if (!node) return;
 
       const output = node.outputs.find((output) => output.id === id);
@@ -562,7 +462,13 @@ export function replaceEditorVariable({
 
       // Use the node's input as the variable value(Example: HTTP data will reference its own dynamic input)
       const input = node.inputs.find((input) => input.key === id);
-      if (input) return getReferenceVariableValue({ value: input.value, nodes, variables });
+      if (input) {
+        return getReferenceVariableValue({
+          value: input.value,
+          nodesMap,
+          variables
+        });
+      }
     })();
 
     // Check for direct circular reference
@@ -575,7 +481,7 @@ export function replaceEditorVariable({
     const escapedId = id.replace(variableRegex, '\\$&');
 
     replacements.push({
-      pattern: `\\{\\{\\$(${escapedNodeId}\\.${escapedId})\\$\\}\\}`,
+      pattern: `\\{\\{\\$${escapedNodeId}\\.${escapedId}\\$\\}\\}`,
       replacement: formatVal
     });
 
@@ -584,13 +490,20 @@ export function replaceEditorVariable({
   }
 
   // Apply all replacements
-  replacements.forEach(({ pattern, replacement }) => {
-    result = result.replace(new RegExp(pattern, 'g'), replacement);
-  });
+  for (const { pattern, replacement } of replacements) {
+    if (checkStrOversize(result)) {
+      console.warn('Text length exceeds 100,000,000 characters.');
+      break;
+    }
+
+    const re = _getCachedRegex(pattern);
+    re.lastIndex = 0;
+    result = result.replace(re, () => replacement);
+  }
 
   // If we made replacements and there might be nested variables, recursively process
   if (hasReplacements && /\{\{\$[^.]+\.[^$]+\$\}\}/.test(result)) {
-    result = replaceEditorVariable({ text: result, nodes, variables, depth: depth + 1 });
+    result = replaceEditorVariable({ text: result, nodesMap, variables, depth: depth + 1 });
   }
 
   return result || '';

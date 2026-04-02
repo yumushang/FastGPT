@@ -16,7 +16,7 @@ description: FastGPT 代码运行节点介绍（适用于 4.14.8 及以上版本
 
 **注意事项**
 
-- 私有化用户需要部署 `fastgpt-sandbox` 镜像，并配置 `SANDBOX_URL` 环境变量。
+- 私有化用户需要部署 `fastgpt-sandbox` 镜像，并配置 `CODE_SANDBOX_URL` 环境变量。
 - 沙盒默认最大运行 60s，可通过配置调整。
 - 代码运行在隔离的进程池中，无法访问文件系统和内网。
 
@@ -34,7 +34,7 @@ async function main({data1, data2}){
 }
 ```
 
-**Python** — 在 main 函数参数中按变量名接收：
+**Python** — 在 main 函数参数中按变量名接收, 节点里输入的变量名一定要与`main`中的变量名一致，顺序可以任意：
 
 ```python
 def main(data1, data2):

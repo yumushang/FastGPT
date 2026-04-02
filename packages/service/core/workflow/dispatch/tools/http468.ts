@@ -26,7 +26,7 @@ import type { StoreSecretValueType } from '@fastgpt/global/common/secret/type';
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { SERVICE_LOCAL_HOST } from '../../../../common/system/tools';
 import { formatHttpError } from '../utils';
-import { isInternalAddress } from '../../../../common/system/utils';
+import { isInternalAddress, PRIVATE_URL_TEXT } from '../../../../common/system/utils';
 import { serviceRequestMaxContentLength } from '../../../../common/system/constants';
 import { axios } from '../../../../common/api/axios';
 
@@ -69,7 +69,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
     responseChatItemId,
     variables,
     node,
-    runtimeNodes,
+    runtimeNodesMap,
     histories,
     params: {
       system_httpMethod: httpMethod = 'POST',
@@ -110,7 +110,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
   const replaceStringVariables = (text: string) => {
     return replaceEditorVariable({
       text,
-      nodes: runtimeNodes,
+      nodesMap: runtimeNodesMap,
       variables: allVariables
     });
   };
@@ -178,7 +178,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
       if (httpContentType === ContentTypes.json) {
         httpJsonBody = replaceJsonBodyString(
           { text: httpJsonBody },
-          { variables, allVariables, runtimeNodes }
+          { variables, allVariables, runtimeNodesMap }
         );
         return json5.parse(httpJsonBody);
       }
@@ -306,10 +306,10 @@ export const replaceJsonBodyString = (
   props: {
     variables: Record<string, any>;
     allVariables: Record<string, any>;
-    runtimeNodes: RuntimeNodeItemType[];
+    runtimeNodesMap: Map<string, RuntimeNodeItemType>;
   }
 ) => {
-  const { variables, allVariables, runtimeNodes } = props;
+  const { variables, allVariables, runtimeNodesMap } = props;
 
   const MAX_REPLACEMENT_DEPTH = 10;
   const processedVariables = new Set<string>();
@@ -405,15 +405,20 @@ export const replaceJsonBodyString = (
         return variables[id];
       }
       // Find upstream node input/output
-      const node = runtimeNodes.find((node) => node.nodeId === nodeId);
+      const node = runtimeNodesMap.get(nodeId);
       if (!node) return;
 
       const output = node.outputs.find((output) => output.id === id);
       if (output) return formatVariableValByType(output.value, output.valueType);
 
       const input = node.inputs.find((input) => input.key === id);
-      if (input)
-        return getReferenceVariableValue({ value: input.value, nodes: runtimeNodes, variables });
+      if (input) {
+        return getReferenceVariableValue({
+          value: input.value,
+          nodesMap: runtimeNodesMap,
+          variables
+        });
+      }
     })();
 
     const formatVal = valToStr(variableVal, isInQuotes);
@@ -422,7 +427,7 @@ export const replaceJsonBodyString = (
       continue;
     }
 
-    const escapedPattern = `\\{\\{\\$(${nodeId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\$\\}\\}`;
+    const escapedPattern = `\\{\\{\\$${nodeId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\$\\}\\}`;
 
     replacements1.push({
       pattern: escapedPattern,
@@ -461,7 +466,7 @@ export const replaceJsonBodyString = (
     const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     replacements2.push({
-      pattern: `{{(${escapedKey})}}`,
+      pattern: `{{${escapedKey}}}`,
       replacement: formatVal
     });
 
@@ -496,7 +501,7 @@ async function fetchData({
   timeout: number;
 }) {
   if (await isInternalAddress(url)) {
-    return Promise.reject('Url is invalid');
+    return Promise.reject(PRIVATE_URL_TEXT);
   }
 
   const { data: response } = await axios({
