@@ -11,6 +11,7 @@ export type CreateDatasetDataProps = {
   imageId?: string;
   indexes?: Omit<DatasetDataIndexItemType, 'dataId'>[];
   indexPrefix?: string;
+  customData?: any;
 };
 
 export type UpdateDatasetDataProps = {
@@ -23,6 +24,7 @@ export type UpdateDatasetDataProps = {
   })[];
   imageId?: string;
   indexPrefix?: string;
+  customData?: any;
 };
 
 export type PatchIndexesProps =

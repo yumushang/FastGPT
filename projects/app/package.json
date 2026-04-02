@@ -3,7 +3,7 @@
   "version": "4.14.10",
   "private": false,
   "scripts": {
-    "dev": "NODE_OPTIONS='--max-old-space-size=8192' npm run build:workers && next dev",
+    "dev": "set NODE_OPTIONS=--max-old-space-size=8192 && npm run build:workers && next dev",
     "dev:webpack": "NODE_OPTIONS='--max-old-space-size=8192' npm run build:workers && WEBPACK=1 next dev --webpack",
     "build": "npm run build:workers && next build --debug --webpack",
     "start": "next start",
@@ -13,7 +13,7 @@
   },
   "engines": {
     "node": ">=20",
-    "pnpm": "9.x"
+    "pnpm": ">=9.x"
   },
   "dependencies": {
     "@chakra-ui/anatomy": "catalog:",

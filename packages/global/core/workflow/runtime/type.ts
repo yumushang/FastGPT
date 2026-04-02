@@ -44,6 +44,7 @@ export type NodeEdgeGroupsMap = Map<string, NodeEdgeGroups>;
 export type ExternalProviderType = {
   openaiAccount?: OpenaiAccountType;
   externalWorkflowVariables?: Record<string, string>;
+  chHeaders?: Record<string, string>;
 };
 
 /* workflow props */

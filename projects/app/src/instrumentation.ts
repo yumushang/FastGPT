@@ -31,7 +31,8 @@ export async function register() {
         { configureMetrics },
         { configureTracing },
         { configureLogger, getLogger, LogCategories },
-        { InitialErrorEnum }
+        { InitialErrorEnum },
+        { initLangfuse }
       ] = await Promise.all([
         import('@fastgpt/service/common/mongo/init'),
         import('@fastgpt/service/common/mongo/index'),
@@ -54,7 +55,8 @@ export async function register() {
         import('@fastgpt/service/common/metrics'),
         import('@fastgpt/service/common/tracing'),
         import('@fastgpt/service/common/logger'),
-        import('@fastgpt/service/common/system/constants')
+        import('@fastgpt/service/common/system/constants'),
+        import('@fastgpt/service/common/langfuse')
       ]);
 
       await configureMetrics();
@@ -112,6 +114,9 @@ export async function register() {
       startTrainingQueue(true);
       trackTimerProcess();
 
+      if (process.env.LANGFUSE_ENABLE === 'true') {
+        initLangfuse();
+      }
       logger.info('System initialized successfully');
     }
   } catch (error) {

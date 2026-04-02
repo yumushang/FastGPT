@@ -68,7 +68,10 @@ const nextConfig: NextConfig = {
       {
         module: /@fastgpt-sdk[\\/]sandbox-adapter[\\/]/,
         message: /Critical dependency/
-      }
+      },
+      { module: /require-in-the-middle/ },
+      // 兼容 Next.js 其他格式警告
+      (warning: any) => warning.message.includes('Critical dependency: require function')
     ];
 
     Object.assign(config.resolve!.alias, {
@@ -166,6 +169,12 @@ const nextConfig: NextConfig = {
         aggregateTimeout: 300
       };
     }
+
+    // 解决引入扣子罗盘api后找不到fsevents问题
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fsevents: false
+    };
 
     return config;
   },

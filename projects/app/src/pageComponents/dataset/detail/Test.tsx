@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Textarea, Button, Flex, useTheme, useDisclosure } from '@chakra-ui/react';
+import {
+  Box,
+  Textarea,
+  Button,
+  Flex,
+  useTheme,
+  useDisclosure,
+  Input,
+  Tooltip,
+  InputGroup
+} from '@chakra-ui/react';
+
 import {
   useSearchTestStore,
   type SearchTestStoreItemType
@@ -34,6 +45,7 @@ const DatasetParamsModal = dynamic(() => import('@/components/core/app/DatasetPa
 
 type FormType = {
   inputText: string;
+  customDataFilterMatch?: string;
   searchParams: {
     searchMode: DatasetSearchModeEnum;
     embeddingWeight?: number;
@@ -68,6 +80,7 @@ const Test = ({ datasetId }: { datasetId: string }) => {
   const { getValues, setValue, register, handleSubmit } = useForm<FormType>({
     defaultValues: {
       inputText: '',
+      customDataFilterMatch: undefined,
       searchParams: {
         searchMode: DatasetSearchModeEnum.embedding,
         embeddingWeight: 0.5,
@@ -93,8 +106,8 @@ const Test = ({ datasetId }: { datasetId: string }) => {
   } = useDisclosure();
 
   const { runAsync: onTextTest, loading: textTestIsLoading } = useRequest(
-    ({ inputText, searchParams }: FormType) =>
-      postSearchText({ datasetId, text: inputText.trim(), ...searchParams }),
+    ({ customDataFilterMatch, inputText, searchParams }: FormType) =>
+      postSearchText({ datasetId, text: inputText.trim(), customDataFilterMatch, ...searchParams }),
     {
       onSuccess(res: SearchTestResponse) {
         if (!res || res.list.length === 0) {
@@ -144,6 +157,35 @@ const Test = ({ datasetId }: { datasetId: string }) => {
         maxW={'500px'}
         py={4}
       >
+        <Box
+          border={'none'}
+          p={0}
+          mx={4}
+          mb={2}
+          borderRadius={'md'}
+          {...{
+            borderColor: 'primary.300'
+          }}
+        >
+          {/*<InputGroup startElement={ <Tooltip content="测试测试">水电费水电费但是</Tooltip>}>*/}
+          <Box>
+            <Input
+              size="sm"
+              border={'2px solid'}
+              placeholder="可输入sql根据自定义字段过滤数据"
+              {...{
+                borderColor: 'primary.300'
+              }}
+              {...register('customDataFilterMatch', {})}
+            />
+            {/*<Tooltip content="This is the tooltip content">*/}
+            {/*  <Button variant="outline" size="sm">*/}
+            {/*    Hover me*/}
+            {/*  </Button>*/}
+            {/*</Tooltip>*/}
+          </Box>
+        </Box>
+
         <Box
           border={'2px solid'}
           p={3}

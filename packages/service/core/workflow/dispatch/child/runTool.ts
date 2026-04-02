@@ -20,6 +20,7 @@ import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/util
 import { pushTrack } from '../../../../common/middle/tracks/utils';
 import { getNodeErrResponse } from '../utils';
 import { getAppVersionById } from '../../../../core/app/version/controller';
+import type { RunHTTPToolParams } from '../../../app/http';
 import { runHTTPTool } from '../../../app/http';
 import { getS3ChatSource } from '../../../../common/s3/sources/chat';
 import { getWorkflowContext } from '../../utils/context';
@@ -216,14 +217,21 @@ export const dispatchRunTool = async (props: RunToolProps): Promise<RunToolRespo
         tool.nodes[0].toolConfig?.mcpToolSet ?? tool.nodes[0].inputs[0].value;
 
       const context = getWorkflowContext();
+
+      const baseHeaders = getSecretValue({
+        storeSecret: headerSecret
+      });
+      const mergedHeaders = {
+        ...baseHeaders,
+        ...props.externalProvider?.chHeaders
+      };
+
       // Buffer mcpClient in this workflow
       const mcpClient =
         context.mcpClientMemory?.[url] ??
         new MCPClient({
           url,
-          headers: getSecretValue({
-            storeSecret: headerSecret
-          })
+          headers: mergedHeaders
         });
       context.mcpClientMemory[url] = mcpClient;
 
@@ -257,7 +265,8 @@ export const dispatchRunTool = async (props: RunToolProps): Promise<RunToolRespo
       }
 
       toolInput = params;
-      const { data, errorMsg } = await runHTTPTool({
+
+      let runHTTPToolParams: RunHTTPToolParams = {
         baseUrl: baseUrl || '',
         toolPath: httpTool.path,
         method: httpTool.method,
@@ -271,7 +280,15 @@ export const dispatchRunTool = async (props: RunToolProps): Promise<RunToolRespo
         staticParams: httpTool.staticParams,
         staticHeaders: httpTool.staticHeaders,
         staticBody: httpTool.staticBody
-      });
+      };
+
+      // 自定义请求头
+      runHTTPToolParams.customHeaders = {
+        ...runHTTPToolParams?.customHeaders,
+        ...props.externalProvider?.chHeaders
+      };
+
+      const { data, errorMsg } = await runHTTPTool(runHTTPToolParams);
 
       if (errorMsg) {
         if (catchError) {
@@ -302,11 +319,17 @@ export const dispatchRunTool = async (props: RunToolProps): Promise<RunToolRespo
       const { toolData, system_toolData, ...restParams } = params;
       const { name: toolName, url, headerSecret } = toolData || system_toolData;
 
+      const baseHeaders = getSecretValue({
+        storeSecret: headerSecret
+      });
+      const mergedHeaders = {
+        ...baseHeaders,
+        ...props.externalProvider?.chHeaders
+      };
+
       const mcpClient = new MCPClient({
         url,
-        headers: getSecretValue({
-          storeSecret: headerSecret
-        })
+        headers: mergedHeaders
       });
       toolInput = restParams;
       const result = await mcpClient.toolCall({ toolName, params: restParams });

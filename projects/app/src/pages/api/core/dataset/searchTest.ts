@@ -17,10 +17,12 @@ import { getRerankModel } from '@fastgpt/service/core/ai/model';
 import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
+import { convertSqlCondition } from '@fastgpt/service/common/util/convertSqlCondition';
 async function handler(req: ApiRequestProps<SearchTestProps>): Promise<SearchTestResponse> {
   const {
     datasetId,
     text,
+    customDataFilterMatch,
     limit = 5000,
     similarity,
     searchMode,
@@ -42,6 +44,13 @@ async function handler(req: ApiRequestProps<SearchTestProps>): Promise<SearchTes
 
   if (!datasetId || !text) {
     return Promise.reject(CommonErrEnum.missingParams);
+  }
+
+  if (customDataFilterMatch) {
+    const result = convertSqlCondition(customDataFilterMatch);
+    if ('error' in result) {
+      throw new Error(`sql语法错误:${customDataFilterMatch}`);
+    }
   }
 
   const start = Date.now();
@@ -72,7 +81,8 @@ async function handler(req: ApiRequestProps<SearchTestProps>): Promise<SearchTes
     embeddingWeight,
     usingReRank,
     rerankModel: rerankModelData,
-    rerankWeight
+    rerankWeight,
+    customDataFilterMatch
   };
   const {
     searchRes,

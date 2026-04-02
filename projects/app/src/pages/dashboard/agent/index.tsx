@@ -140,6 +140,7 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                   onChange={(e) => setSearchKey(e.target.value)}
                   placeholder={t('app:search_agent')}
                   maxLength={30}
+                  isClearable
                 />
               )}
 
@@ -177,6 +178,7 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                   onChange={(e) => setSearchKey(e.target.value)}
                   placeholder={t('app:search_app')}
                   maxLength={30}
+                  isClearable
                 />
               }
             </Box>

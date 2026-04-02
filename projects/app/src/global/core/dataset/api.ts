@@ -49,12 +49,14 @@ export type CreateCollectionResponse = Promise<{
 /* ================= data ===================== */
 export type InsertOneDatasetDataProps = PushDatasetDataChunkProps & {
   collectionId: string;
+  customData?: any;
 };
 
 /* -------------- search ---------------- */
 export type SearchTestProps = {
   datasetId: string;
   text: string;
+  customDataFilterMatch?: string;
   [NodeInputKeyEnum.datasetSimilarity]?: number;
   [NodeInputKeyEnum.datasetMaxTokens]?: number;
 
