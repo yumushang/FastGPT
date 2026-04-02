@@ -202,7 +202,8 @@ export const DatasetDataSchema = DatasetDataFieldSchema.extend({
   fullTextToken: z.string().meta({ description: '全文 token' }),
   indexes: z.array(DatasetDataIndexItemSchema).meta({ description: '向量索引' }),
   rebuilding: z.boolean().optional().meta({ description: '重建中' }),
-  imageDescMap: z.record(z.string(), z.string()).optional().meta({ description: '图片描述映射' })
+  imageDescMap: z.record(z.string(), z.string()).optional().meta({ description: '图片描述映射' }),
+  customData: z.any().optional()
 });
 export type DatasetDataSchemaType = z.infer<typeof DatasetDataSchema>;
 
@@ -332,7 +333,8 @@ export const DatasetDataItemSchema = DatasetDataFieldSchema.extend({
   sourceId: z.string().optional().meta({ description: '来源 ID' }),
   chunkIndex: z.number().meta({ description: '块索引' }),
   indexes: z.array(DatasetDataIndexItemSchema).meta({ description: '向量索引' }),
-  isOwner: z.boolean().meta({ description: '是否为 owner' })
+  isOwner: z.boolean().meta({ description: '是否为 owner' }),
+  customData: z.any().optional()
 });
 export type DatasetDataItemType = z.infer<typeof DatasetDataItemSchema>;
 
@@ -358,7 +360,8 @@ export const UpdateDatasetDataPropsSchema = z.object({
   }),
   indexPrefix: z.string().optional().meta({
     description: '索引前缀标题'
-  })
+  }),
+  customData: z.object().optional()
 });
 export type UpdateDatasetDataPropsType = z.infer<typeof UpdateDatasetDataPropsSchema>;
 
@@ -376,7 +379,8 @@ export const CreateDatasetDataPropsSchema = z.object({
     .array(DatasetDataIndexItemSchema.omit({ dataId: true }))
     .optional()
     .meta({ description: '向量索引列表' }),
-  indexPrefix: z.string().optional().meta({ description: '索引前缀标题' })
+  indexPrefix: z.string().optional().meta({ description: '索引前缀标题' }),
+  customData: z.any().optional()
 });
 export type CreateDatasetDataPropsType = z.infer<typeof CreateDatasetDataPropsSchema>;
 

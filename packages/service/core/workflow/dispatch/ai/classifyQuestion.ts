@@ -81,6 +81,7 @@ export const dispatchClassifyQuestion = async (props: Props): Promise<CQResponse
   ]);
 
   return {
+    // llmMetaData,
     data: {
       [NodeOutputKeyEnum.cqResult]: result.value
     },
@@ -140,16 +141,17 @@ const completions = async ({
     }
   ];
 
+  const body = {
+    model: cqModel.model,
+    temperature: 0.01,
+    messages: chats2GPTMessages({ messages, reserveId: false }),
+    stream: true
+  };
   const {
     answerText: answer,
     usage: { inputTokens, outputTokens }
   } = await createLLMResponse({
-    body: {
-      model: cqModel.model,
-      temperature: 0.01,
-      messages: chats2GPTMessages({ messages, reserveId: false }),
-      stream: true
-    },
+    body,
     userKey: externalProvider.openaiAccount
   });
 
@@ -165,6 +167,10 @@ const completions = async ({
   }
 
   return {
+    // llmMetaData: {
+    //   input: body,
+    //   output: answer
+    // },
     inputTokens,
     outputTokens,
     arg: { type: id }

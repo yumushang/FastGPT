@@ -9,6 +9,10 @@ import { replaceEditorVariable } from '@fastgpt/global/core/workflow/runtime/uti
 import { isInternalAddress, PRIVATE_URL_TEXT } from '../../common/system/utils';
 import type { AppSchemaType } from '@fastgpt/global/core/app/type';
 import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
+import { sign } from '../../common/xf/signUtil';
+import { getLogger, LogCategories } from '../../common/logger';
+
+const logger = getLogger(LogCategories.MODULE.WORKFLOW.TOOLS);
 
 export type RunHTTPToolParams = {
   baseUrl: string;
@@ -166,11 +170,21 @@ export const runHTTPTool = async ({
       staticBody
     });
 
+    let tempHeaders: Record<string, string> = { ...headers };
+    if (process.env.XF_SIGN_ENABLE === 'true' && process.env.XF_SIGN_MD5SECRET) {
+      const signHeaders = sign(method, body || queryParams);
+      tempHeaders = {
+        ...headers,
+        ...signHeaders
+      };
+    }
+    logger.info('runHTTPTool', { baseUrl, toolPath, queryParams, body, headers: tempHeaders });
+
     const { data } = await axios({
       method: method.toUpperCase(),
       baseURL: fullBaseUrl,
       url: toolPath,
-      headers,
+      headers: tempHeaders,
       data: body,
       params: queryParams,
       timeout: 300000

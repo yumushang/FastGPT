@@ -11,7 +11,8 @@ export const GetHistoriesBodySchema = PaginationSchema.extend(OutLinkChatAuthSch
   startCreateTime: z.string().optional().describe('创建时间开始'),
   endCreateTime: z.string().optional().describe('创建时间结束'),
   startUpdateTime: z.string().optional().describe('更新时间开始'),
-  endUpdateTime: z.string().optional().describe('更新时间结束')
+  endUpdateTime: z.string().optional().describe('更新时间结束'),
+  allHistories: z.boolean().optional().describe('是否获取所有对话')
 });
 export type GetHistoriesBodyType = z.infer<typeof GetHistoriesBodySchema>;
 export const GetHistoriesResponseSchema = PaginationResponseSchema(

@@ -4,7 +4,11 @@ import { ObVectorCtrl } from './oceanbase';
 import { SeekVectorCtrl } from './seekdb';
 import { OpenGaussVectorCtrl } from './opengauss';
 import { getVectorsByText } from '../../core/ai/embedding';
-import type { VectorControllerType, InsertVectorControllerPropsType } from './type';
+import type {
+  VectorControllerType,
+  InsertVectorControllerPropsType,
+  UpdateCustomDataPropsType
+} from './type';
 import { type EmbeddingModelItemType } from '@fastgpt/global/core/ai/model.schema';
 import {
   MILVUS_ADDRESS,
@@ -125,3 +129,7 @@ export const getVectorCountByTeamId = async (teamId: string) => {
   return count;
 };
 export const getVectorCount = Vector.getVectorCount;
+
+export const updateDatasetDataCustomData = async (props: UpdateCustomDataPropsType) => {
+  return retryFn(() => Vector.updateCustomData(props));
+};

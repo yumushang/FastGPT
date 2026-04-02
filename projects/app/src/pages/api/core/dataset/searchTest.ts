@@ -21,6 +21,7 @@ import {
   type SearchDatasetTestBody,
   type SearchDatasetTestResponse
 } from '@fastgpt/global/openapi/core/dataset/api';
+import { convertSqlCondition } from '@fastgpt/service/common/util/convertSqlCondition';
 
 async function handler(
   req: ApiRequestProps<SearchDatasetTestBody>
@@ -28,6 +29,7 @@ async function handler(
   const {
     datasetId,
     text,
+    customDataFilterMatch,
     limit = 5000,
     similarity,
     searchMode,
@@ -46,6 +48,13 @@ async function handler(
     datasetDeepSearchMaxTimes,
     datasetDeepSearchBg
   } = SearchDatasetTestBodySchema.parse(req.body);
+
+  if (customDataFilterMatch) {
+    const result = convertSqlCondition(customDataFilterMatch);
+    if ('error' in result) {
+      throw new Error(`sql语法错误:${customDataFilterMatch}`);
+    }
+  }
 
   const start = Date.now();
 
@@ -75,7 +84,8 @@ async function handler(
     embeddingWeight,
     usingReRank,
     rerankModel: rerankModelData,
-    rerankWeight
+    rerankWeight,
+    customDataFilterMatch
   };
   const {
     searchRes,

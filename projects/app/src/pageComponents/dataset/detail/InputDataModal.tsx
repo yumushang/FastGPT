@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Flex, Button, Textarea, ModalFooter, HStack, VStack, Image } from '@chakra-ui/react';
+import {
+  Box,
+  Flex,
+  Button,
+  Textarea,
+  ModalFooter,
+  HStack,
+  VStack,
+  Image,
+  Input
+} from '@chakra-ui/react';
 import type { UseFormRegister } from 'react-hook-form';
 import { useFieldArray, useForm } from 'react-hook-form';
 import { getDatasetCollectionById } from '@/web/core/dataset/api/collection';
@@ -38,6 +48,7 @@ export type InputDataType = {
     dataId?: string; // pg data id
     fold: boolean;
   })[];
+  customData: { key: string; value: string }[];
 };
 
 enum TabEnum {
@@ -74,6 +85,15 @@ const InputDataModal = ({
     control,
     name: 'indexes'
   });
+  const {
+    fields: customDataFields,
+    append: appendCustomData,
+    remove: removeCustomData,
+    update: updateCustomData
+  } = useFieldArray({
+    control,
+    name: 'customData'
+  });
   const imagePreivewUrl = watch('imagePreivewUrl');
 
   const { data: collection = defaultCollectionDetail, loading: initLoading } = useRequest(
@@ -85,6 +105,13 @@ const InputDataModal = ({
 
       if (dataItem) {
         setCurrentTab(dataItem?.a ? TabEnum.qa : TabEnum.chunk);
+        // Convert customData object to array format
+        const customDataArray = dataItem.customData
+          ? Object.entries(dataItem.customData).map(([key, value]) => ({
+              key,
+              value: String(value)
+            }))
+          : [];
         reset({
           q: dataItem.q || '',
           a: dataItem.a || '',
@@ -92,17 +119,22 @@ const InputDataModal = ({
           indexes: dataItem.indexes.map((item) => ({
             ...item,
             fold: true
-          }))
+          })),
+          customData: customDataArray
         });
       } else if (defaultValue) {
         setCurrentTab(defaultValue?.a ? TabEnum.qa : TabEnum.chunk);
         reset({
           q: defaultValue.q || '',
           a: defaultValue.a || '',
-          imagePreivewUrl: defaultValue.imagePreivewUrl
+          imagePreivewUrl: defaultValue.imagePreivewUrl,
+          customData: []
         });
       } else {
         setCurrentTab(TabEnum.chunk);
+        reset({
+          customData: []
+        });
       }
 
       // Forcus reset to image tab
@@ -122,12 +154,27 @@ const InputDataModal = ({
     async (e: InputDataType) => {
       const data = { ...e };
 
+      // Convert customData array to object
+      const customDataObject = e.customData?.reduce(
+        (acc, item) => {
+          if (item.key.trim()) {
+            acc[item.key.trim()] = item.value;
+          }
+          return acc;
+        },
+        {} as Record<string, string>
+      );
+
       const postData: any = {
         collectionId: collection._id,
         q: e.q,
         a: currentTab === TabEnum.qa ? e.a : '',
         // Contains no default index
-        indexes: e.indexes?.filter((item) => !!item.text?.trim()) || []
+        indexes: e.indexes?.filter((item) => !!item.text?.trim()) || [],
+        customData:
+          customDataObject && Object.keys(customDataObject).length > 0
+            ? customDataObject
+            : undefined
       };
 
       const dataId = await postInsertData2Dataset(postData);
@@ -145,7 +192,8 @@ const InputDataModal = ({
           ...e,
           q: '',
           a: '',
-          indexes: []
+          indexes: [],
+          customData: []
         });
 
         onSuccess(e);
@@ -159,11 +207,26 @@ const InputDataModal = ({
     async (e: InputDataType) => {
       if (!dataId) return Promise.reject(t('common:error.unKnow'));
 
+      // Convert customData array to object
+      const customDataObject = e.customData?.reduce(
+        (acc, item) => {
+          if (item.key.trim()) {
+            acc[item.key.trim()] = item.value;
+          }
+          return acc;
+        },
+        {} as Record<string, string>
+      );
+
       const updateData: any = {
         dataId,
         q: e.q,
         a: currentTab === TabEnum.qa ? e.a : '',
-        indexes: e.indexes.filter((item) => !!item.text?.trim())
+        indexes: e.indexes.filter((item) => !!item.text?.trim()),
+        customData:
+          customDataObject && Object.keys(customDataObject).length > 0
+            ? customDataObject
+            : undefined
       };
 
       await putDatasetDataById(updateData);
@@ -347,6 +410,7 @@ const InputDataModal = ({
               </Flex>
             )}
           </Flex>
+
           {/* Index */}
           <Box
             pt={4}
@@ -435,6 +499,82 @@ const InputDataModal = ({
                   </Box>
                 );
               })}
+            </VStack>
+
+            {/* Custom Data */}
+            <Flex alignItems={'flex-start'} justifyContent={'space-between'} h={'30px'} mt={6}>
+              <FormLabel>{t('common:custom_field')}</FormLabel>
+              <Button
+                variant={'whiteBase'}
+                size={'sm'}
+                p={0}
+                transform={'translateY(-6px)'}
+                onClick={() =>
+                  appendCustomData({
+                    key: '',
+                    value: ''
+                  })
+                }
+              >
+                <Flex px={'0.62rem'} py={2}>
+                  <MyIcon name={'common/addLight'} w={'1rem'} mr={'0.38rem'} />
+                  {t('common:add_new')}
+                </Flex>
+              </Button>
+            </Flex>
+
+            <VStack mt={2}>
+              {customDataFields?.map((field, i) => (
+                <Box
+                  key={field.id}
+                  p={4}
+                  borderRadius={'md'}
+                  border={'base'}
+                  bg={'myGray.25'}
+                  w={'100%'}
+                  _hover={{
+                    '& .delete': {
+                      display: 'flex'
+                    }
+                  }}
+                >
+                  <Flex gap={2} alignItems={'center'} w="100%">
+                    <Input
+                      placeholder={t('common:key')}
+                      bg={'white'}
+                      size={'sm'}
+                      borderRadius={'md'}
+                      flex={1} // 让输入框占满剩余空间，避免挤压按钮
+                      {...register(`customData.${i}.key`)}
+                    />
+                    <Input
+                      placeholder={t('common:value')}
+                      bg={'white'}
+                      size={'sm'}
+                      borderRadius={'md'}
+                      flex={1} // 让输入框占满剩余空间
+                      {...register(`customData.${i}.value`)}
+                    />
+                    {/* 修改删除按钮：添加 delete 类 + 默认隐藏 + 优化点击区域 */}
+                    <Box
+                      className="delete"
+                      display="none" // 默认隐藏
+                      alignItems="center"
+                      justifyContent="center"
+                      p={1}
+                      borderRadius="md"
+                      cursor="pointer"
+                    >
+                      <DeleteIcon
+                        onClick={() => {
+                          removeCustomData(i);
+                        }}
+                        color="myGray.600"
+                      />
+                    </Box>
+                  </Flex>
+                </Box>
+              ))}
             </VStack>
           </Box>
         </Flex>

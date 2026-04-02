@@ -1,7 +1,7 @@
 /* pg vector crud */
 import { DatasetVectorTableName, VectorVQ } from '../constants';
 import { PgClient, connectPg } from './controller';
-import type { VectorControllerType } from '../type';
+import type { VectorControllerType, UpdateCustomDataPropsType } from '../type';
 import dayjs from 'dayjs';
 import { getLogger, LogCategories } from '../../logger';
 
@@ -22,7 +22,8 @@ export class PgVectorCtrl implements VectorControllerType {
             team_id VARCHAR(50) NOT NULL,
             dataset_id VARCHAR(50) NOT NULL,
             collection_id VARCHAR(50) NOT NULL,
-            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            custom_data JSONB
         );
       `);
 
@@ -63,7 +64,7 @@ export class PgVectorCtrl implements VectorControllerType {
     }
   };
   insert: VectorControllerType['insert'] = async (props) => {
-    const { teamId, datasetId, collectionId, vectors } = props;
+    const { teamId, datasetId, collectionId, vectors, customData } = props;
 
     const values = vectors.map((vector) => [
       { key: 'vector', value: `[${vector}]` },
@@ -71,6 +72,12 @@ export class PgVectorCtrl implements VectorControllerType {
       { key: 'dataset_id', value: String(datasetId) },
       { key: 'collection_id', value: String(collectionId) }
     ]);
+
+    if (customData) {
+      values.forEach((item) => {
+        item.push({ key: 'custom_data', value: JSON.stringify(customData) });
+      });
+    }
 
     const { rowCount, rows } = await PgClient.insert(DatasetVectorTableName, {
       values
@@ -119,6 +126,21 @@ export class PgVectorCtrl implements VectorControllerType {
       where: [where]
     });
   };
+  updateCustomData: VectorControllerType['updateCustomData'] = async (
+    props: UpdateCustomDataPropsType
+  ): Promise<void> => {
+    const { teamId, idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    const teamIdWhere = `team_id='${String(teamId)}' AND`;
+    const where = `${teamIdWhere} id IN (${idList.map((id) => String(id)).join(',')})`;
+
+    await PgClient.update(DatasetVectorTableName, {
+      values: [{ key: 'custom_data', value: JSON.stringify(customData) }],
+      where: [where]
+    });
+  };
   embRecall: VectorControllerType['embRecall'] = async (props) => {
     const { teamId, datasetIds, vector, limit, forbidCollectionIdList, filterCollectionIdList } =
       props;
@@ -152,8 +174,13 @@ export class PgVectorCtrl implements VectorControllerType {
       return { results: [] };
     }
 
-    const results: any = await PgClient.query(
-      `BEGIN;
+    let customDataFilterMatch = '';
+    if (props.customDataFilterMatch) {
+      customDataFilterMatch = 'and ' + props.customDataFilterMatch;
+      // console.log('PgClient.query customDataFilterMatch', customDataFilterMatch);
+    }
+
+    const sql = `BEGIN;
           SET LOCAL hnsw.ef_search = ${global.systemEnv?.hnswEfSearch || 100};
           SET LOCAL hnsw.max_scan_tuples = ${global.systemEnv?.hnswMaxScanTuples || 100000};
           SET LOCAL hnsw.iterative_scan = relaxed_order;
@@ -163,10 +190,13 @@ export class PgVectorCtrl implements VectorControllerType {
               where dataset_id IN (${datasetIds.map((id) => `'${String(id)}'`).join(',')})
                 ${filterCollectionIdSql}
                 ${forbidCollectionSql}
+                ${customDataFilterMatch}
               order by score limit ${limit}
           ) SELECT id, collection_id, score FROM relaxed_results ORDER BY score;
-        COMMIT;`
-    );
+        COMMIT;`;
+
+    // addLog.debug('Pg embRecall SQL:', { sql });
+    const results: any = await PgClient.query(sql);
     const rows = results?.[results.length - 2]?.rows as {
       id: string;
       collection_id: string;

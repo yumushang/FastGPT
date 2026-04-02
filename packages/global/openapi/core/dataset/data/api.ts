@@ -122,7 +122,8 @@ export const InsertDataBodySchema = PushDataChunkSchema.omit({ q: true }).extend
   collectionId: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a06',
     description: '集合 ID'
-  })
+  }),
+  customData: z.object().optional()
 });
 export type InsertDataBody = z.infer<typeof InsertDataBodySchema>;
 

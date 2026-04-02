@@ -174,7 +174,7 @@ const NodeTemplateListItem = ({
             fontSize={isPopover ? 'xs' : 'sm'}
             className="textEllipsis"
           >
-            {t(template.name as any)}
+            {t(template.intro || (template.name as any))}
           </Box>
         </Box>
         {/* Folder right arrow */}
