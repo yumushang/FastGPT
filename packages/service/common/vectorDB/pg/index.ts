@@ -23,7 +23,8 @@ export class PgVectorCtrl implements VectorControllerType {
             team_id VARCHAR(50) NOT NULL,
             dataset_id VARCHAR(50) NOT NULL,
             collection_id VARCHAR(50) NOT NULL,
-            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            custom_data JSONB
         );
       `);
 
