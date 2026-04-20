@@ -82,15 +82,15 @@ export class S3PrivateBucket extends S3BaseBucket {
 
     const client = createStorage({ bucket: privateBucket, ...config });
 
-    // let externalClient: ReturnType<typeof createStorage> | undefined = undefined;
-    // if (externalBaseUrl) {
-    //   externalClient = createStorage({
-    //     bucket: privateBucket,
-    //     ...externalConfig
-    //   } as IStorageOptions);
-    // }
+    let externalClient: ReturnType<typeof createStorage> | undefined = undefined;
+    if (externalBaseUrl) {
+      externalClient = createStorage({
+        bucket: privateBucket,
+        ...externalConfig
+      } as IStorageOptions);
+    }
 
-    super(client, client, externalBaseUrl);
+    super(client, externalClient);
 
     client
       .ensureBucket()
@@ -107,11 +107,11 @@ export class S3PrivateBucket extends S3BaseBucket {
         });
       });
 
-    // externalClient?.ensureBucket().catch((error) => {
-    //   logger.error('Failed to ensure external private bucket exists', {
-    //     bucketName: externalClient.bucketName,
-    //     error
-    //   });
-    // });
+    externalClient?.ensureBucket().catch((error) => {
+      logger.error('Failed to ensure external private bucket exists', {
+        bucketName: externalClient.bucketName,
+        error
+      });
+    });
   }
 }

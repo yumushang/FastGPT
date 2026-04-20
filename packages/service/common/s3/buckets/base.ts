@@ -13,7 +13,7 @@ import {
   type createPreviewUrlParams,
   CreateGetPresignedUrlParamsSchema
 } from '../type';
-import { getSystemMaxFileSize, Mimes, S3Buckets } from '../constants';
+import { getSystemMaxFileSize, Mimes } from '../constants';
 import path from 'node:path';
 import { MongoS3TTL } from '../schema';
 import { addHours, addMinutes, differenceInSeconds } from 'date-fns';
@@ -50,8 +50,7 @@ export const isFileNotFoundError = (error: any): boolean => {
 export class S3BaseBucket {
   constructor(
     private readonly _client: IStorage,
-    private readonly _externalClient: IStorage | undefined,
-    private readonly _externalBaseURL: string | undefined
+    private readonly _externalClient: IStorage | undefined
   ) {}
 
   get client(): IStorage {
@@ -64,10 +63,6 @@ export class S3BaseBucket {
 
   get bucketName(): string {
     return this.client.bucketName;
-  }
-
-  get externalBaseURL(): string | undefined {
-    return this._externalBaseURL;
   }
 
   async checkBucketHealth() {
@@ -165,14 +160,8 @@ export class S3BaseBucket {
         });
       }
 
-      let tempUrl = url;
-      if (this.externalBaseURL) {
-        tempUrl = this.externalBaseURL + '/' + url.substring(url.indexOf(this.bucketName));
-      }
-      logger.debug('tempUrl', { tempUrl });
-
       return {
-        url: tempUrl,
+        url: url,
         key: params.rawKey,
         headers: {
           ...metadata

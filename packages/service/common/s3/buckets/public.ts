@@ -83,15 +83,15 @@ export class S3PublicBucket extends S3BaseBucket {
 
     const client = createStorage({ bucket: publicBucket, ...config });
 
-    // let externalClient: ReturnType<typeof createStorage> | undefined = undefined;
-    // if (externalBaseUrl) {
-    //   externalClient = createStorage({
-    //     bucket: publicBucket,
-    //     ...externalConfig
-    //   } as IStorageOptions);
-    // }
+    let externalClient: ReturnType<typeof createStorage> | undefined = undefined;
+    if (externalBaseUrl) {
+      externalClient = createStorage({
+        bucket: publicBucket,
+        ...externalConfig
+      } as IStorageOptions);
+    }
 
-    super(client, client, externalBaseUrl);
+    super(client, externalClient);
 
     client
       .ensureBucket()
@@ -114,26 +114,26 @@ export class S3PublicBucket extends S3BaseBucket {
         });
       });
 
-    // externalClient
-    //   ?.ensureBucket()
-    //   .then(() => {
-    //     if (!(externalClient instanceof MinioStorageAdapter)) {
-    //       return;
-    //     }
-    //
-    //     externalClient.ensurePublicBucketPolicy().catch((error) => {
-    //       logger.warn('Failed to ensure external public bucket policy', {
-    //         bucketName: externalClient.bucketName,
-    //         error
-    //       });
-    //     });
-    //   })
-    //   .catch((error) => {
-    //     logger.error('Failed to ensure external public bucket exists', {
-    //       bucketName: externalClient.bucketName,
-    //       error
-    //     });
-    //   });
+    externalClient
+      ?.ensureBucket()
+      .then(() => {
+        if (!(externalClient instanceof MinioStorageAdapter)) {
+          return;
+        }
+
+        externalClient.ensurePublicBucketPolicy().catch((error) => {
+          logger.warn('Failed to ensure external public bucket policy', {
+            bucketName: externalClient.bucketName,
+            error
+          });
+        });
+      })
+      .catch((error) => {
+        logger.error('Failed to ensure external public bucket exists', {
+          bucketName: externalClient.bucketName,
+          error
+        });
+      });
   }
 
   createPublicUrl(objectKey: string): string {
