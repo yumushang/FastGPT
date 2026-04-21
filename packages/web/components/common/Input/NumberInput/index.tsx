@@ -43,6 +43,38 @@ const getSafeNumberValue = (value: unknown) => {
   return undefined;
 };
 
+const getDisplayNumberValue = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return value === undefined ? undefined : '';
+  }
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      return '';
+    }
+
+    if (trimmedValue.endsWith('.') || /^-?\d+\.0+$/.test(trimmedValue)) {
+      return trimmedValue;
+    }
+  }
+
+  return getSafeNumberValue(value) ?? '';
+};
+
+const getChangedValue = (value: string) => {
+  if (value === '') {
+    return undefined;
+  }
+
+  if (value.endsWith('.') || /^-?\d+\.0+$/.test(value)) {
+    return value;
+  }
+
+  return getSafeNumberValue(value);
+};
+
 const MyNumberInput = (props: Props) => {
   const {
     register,
@@ -72,8 +104,7 @@ const MyNumberInput = (props: Props) => {
       }
     : undefined;
 
-  const safeControlledValue =
-    value === '' ? '' : typeof value === 'undefined' ? undefined : getSafeNumberValue(value) ?? '';
+  const safeControlledValue = getDisplayNumberValue(value);
 
   const getRegisteredValue = (value: unknown) => {
     const safeValue = getSafeNumberValue(value);
@@ -89,6 +120,22 @@ const MyNumberInput = (props: Props) => {
     <NumberInput
       {...restProps}
       {...(typeof value !== 'undefined' ? { value: safeControlledValue } : {})}
+      onChange={(valueAsString) => {
+        const changedValue = getChangedValue(valueAsString);
+        onChange?.(changedValue as number | undefined);
+
+        if (registeredField && name) {
+          const registeredValue = getRegisteredValue(valueAsString);
+          const target = {
+            name,
+            value: registeredValue
+          };
+          registeredField.onChange({
+            target,
+            type: 'change'
+          });
+        }
+      }}
       onBlur={(e) => {
         const numE = getSafeNumberValue(e.target.value);
         onBlur?.(numE);
