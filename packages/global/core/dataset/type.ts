@@ -202,7 +202,8 @@ export const DatasetDataSchema = DatasetDataFieldSchema.extend({
   fullTextToken: z.string().meta({ description: '全文 token' }),
   indexes: z.array(DatasetDataIndexItemSchema).meta({ description: '向量索引' }),
   rebuilding: z.boolean().optional().meta({ description: '重建中' }),
-  imageDescMap: z.record(z.string(), z.string()).optional().meta({ description: '图片描述映射' })
+  imageDescMap: z.record(z.string(), z.string()).optional().meta({ description: '图片描述映射' }),
+  customData: z.string().optional()
 });
 export type DatasetDataSchemaType = z.infer<typeof DatasetDataSchema>;
 
@@ -212,7 +213,8 @@ export const DatasetDataTextSchema = z.object({
   datasetId: ObjectIdSchema.meta({ description: '数据集 ID' }),
   collectionId: ObjectIdSchema.meta({ description: '集合 ID' }),
   dataId: ObjectIdSchema.meta({ description: '数据 ID' }),
-  fullTextToken: z.string().meta({ description: '全文 token' })
+  fullTextToken: z.string().meta({ description: '全文 token' }),
+  customData: z.string().optional()
 });
 export type DatasetDataTextSchemaType = z.infer<typeof DatasetDataTextSchema>;
 
@@ -332,7 +334,8 @@ export const DatasetDataItemSchema = DatasetDataFieldSchema.extend({
   sourceId: z.string().optional().meta({ description: '来源 ID' }),
   chunkIndex: z.number().meta({ description: '块索引' }),
   indexes: z.array(DatasetDataIndexItemSchema).meta({ description: '向量索引' }),
-  isOwner: z.boolean().meta({ description: '是否为 owner' })
+  isOwner: z.boolean().meta({ description: '是否为 owner' }),
+  customData: z.string().optional()
 });
 export type DatasetDataItemType = z.infer<typeof DatasetDataItemSchema>;
 

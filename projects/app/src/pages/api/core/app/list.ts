@@ -19,6 +19,7 @@ import { getOrgIdSetWithParentByTmbId } from '@fastgpt/service/support/permissio
 import { addSourceMember } from '@fastgpt/service/support/user/utils';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { sumPer } from '@fastgpt/global/support/permission/utils';
+import { MongoOpenApi } from '@fastgpt/service/support/openapi/schema';
 
 export type ListAppBody = {
   parentId?: ParentIdType;
@@ -92,6 +93,19 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       myOrgSet.has(String(item.orgId))
   );
 
+  // Search: if searchKey matches apiKey, get corresponding appIds
+  const appIdsFromApiKey = searchKey
+    ? ((await MongoOpenApi.find(
+        {
+          teamId,
+          apiKey: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') }
+        },
+        'appId'
+      )
+        .lean()
+        .then((items) => items.map((item) => item.appId).filter(Boolean))) as string[])
+    : [];
+
   const findAppsQuery = (() => {
     // Filter apps by permission, if not owner, only get apps that I have permission to access
     const idList = { _id: { $in: myPerList.map((item) => item.resourceId) } };
@@ -109,7 +123,8 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       ? {
           $or: [
             { name: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } },
-            { intro: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } }
+            { intro: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } },
+            ...(appIdsFromApiKey.length > 0 ? [{ _id: { $in: appIdsFromApiKey } }] : [])
           ]
         }
       : {};

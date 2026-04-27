@@ -592,6 +592,8 @@
   "core.module.http.Url and params have been split": "路径参数已被自动加入 Params 中",
   "core.module.http.curl import": "cURL 导入",
   "core.module.http.curl import placeholder": "请输入 cURL 格式内容，将会提取第一个接口的请求信息。",
+  "core.module.http.openapi import": "OpenAPI 导入",
+  "core.module.http.openapi import placeholder": "请输入 OpenAPI JSON Schema 内容",
   "core.module.input.Add Branch": "添加分支",
   "core.module.input.add": "添加条件",
   "core.module.input.description.Background": "你可以添加一些特定内容的介绍，从而更好的识别用户的问题类型。这个内容通常是给模型介绍一个它不知道的内容。",
@@ -728,7 +730,7 @@
   "dataset.data.Input Success Tip": "导入数据成功",
   "dataset.data.Update Success Tip": "更新数据成功",
   "dataset.data.edit.Index": "数据索引({{amount}})",
-  "dataset.dataset_name": "知识库名称",
+  "dataset.dataset_name": "知识库名称/ID",
   "dataset.deleteFolderTips": "确认删除该文件夹及其包含的所有知识库？删除后数据无法恢复，请确认！",
   "dataset.test.noResult": "搜索结果为空",
   "dataset_data_input_a": "答案",
@@ -1168,5 +1170,10 @@
   "xx_search_result": "{{key}} 的搜索结果",
   "yes": "是",
   "yesterday": "昨天",
-  "yesterday_detail_time": "昨天 {{time}}"
+  "yesterday_detail_time": "昨天 {{time}}",
+  "zoomin_tip": "缩小  ctrl  -",
+  "zoomin_tip_mac": "缩小  ⌘  -",
+  "zoomout_tip": "放大  ctrl  +",
+  "zoomout_tip_mac": "放大  ⌘  +",
+  "custom_field": "自定义字段"
 }

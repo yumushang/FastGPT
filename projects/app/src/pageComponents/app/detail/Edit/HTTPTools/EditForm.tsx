@@ -166,7 +166,7 @@ const EditForm = ({
                           textOverflow={'ellipsis'}
                           maxW={'200px'}
                         >
-                          {tool.name}
+                          {tool.description || tool.name}
                         </Box>
                         <Box w={'1px'} h={'12px'} bg={'myGray.250'}></Box>
                         <Box
@@ -354,7 +354,7 @@ const ToolDetailModal = ({
           <Avatar src={appDetail.avatar} borderRadius={'md'} w={'40px'} />
           <Box ml={'14px'}>
             <Box fontSize={'16px'} color={'myGray.900'}>
-              {tool.name}
+              {tool.description || tool.name}
             </Box>
             <Box fontSize={'12px'} color={'myGray.500'}>
               {tool.description}

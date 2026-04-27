@@ -90,6 +90,6 @@ async function handler(
 
 const lockTime = Number(process.env.PASSWORD_LOGIN_LOCK_SECONDS || 120);
 export default NextAPI(
-  useIPFrequencyLimit({ id: 'login-by-password', seconds: lockTime, limit: 10, force: true }),
+  useIPFrequencyLimit({ id: 'login-by-password', seconds: lockTime, limit: 1000000, force: true }),
   handler
 );
