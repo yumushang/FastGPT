@@ -18,7 +18,7 @@ import {
   Flex,
   Input
 } from '@chakra-ui/react';
-import type { ButtonProps, MenuItemProps } from '@chakra-ui/react';
+import type { ButtonProps, MenuItemProps, MenuProps } from '@chakra-ui/react';
 import MyIcon from '../Icon';
 import { useRequest } from '../../../hooks/useRequest';
 import MyDivider from '../MyDivider';
@@ -54,6 +54,7 @@ export type SelectProps<T = any> = Omit<ButtonProps, 'onChange'> & {
   ScrollData?: ReturnType<typeof useScrollPagination>['ScrollData'];
   customOnOpen?: () => void;
   customOnClose?: () => void;
+  menuPlacement?: MenuProps['placement'];
 
   isInvalid?: boolean;
   isDisabled?: boolean;
@@ -86,6 +87,7 @@ const MySelect = <T = any,>(
     ScrollData,
     customOnOpen,
     customOnClose,
+    menuPlacement,
     isInvalid,
     isDisabled,
     ...props
@@ -205,6 +207,7 @@ const MySelect = <T = any,>(
         onOpen={onOpen}
         onClose={onClose}
         strategy={'fixed'}
+        placement={menuPlacement}
         // matchWidth
       >
         <MenuButton
@@ -290,7 +293,7 @@ const MySelect = <T = any,>(
         <MenuList
           ref={MenuListRef}
           className={props.className}
-          w={(() => {
+          minW={(() => {
             const w = ButtonRef.current?.clientWidth;
             if (w) {
               return `${w}px !important`;
@@ -299,6 +302,7 @@ const MySelect = <T = any,>(
               ? width.map((item) => `${item} !important`)
               : `${width} !important`;
           })()}
+          w={'max-content'}
           px={'6px'}
           py={'6px'}
           border={'1px solid #fff'}

@@ -683,15 +683,18 @@ describe('appData2FlowNodeIO', () => {
         canSelectCustomFileExtension: true
       }
     }
-  ])('should include file link input when fileSelectConfig allows $title', ({ fileSelectConfig }) => {
-    const result = appData2FlowNodeIO({
-      chatConfig: {
-        fileSelectConfig
-      }
-    });
-    const fileLinkInput = result.inputs.find((i) => i.key === NodeInputKeyEnum.fileUrlList);
-    expect(fileLinkInput).toBeDefined();
-  });
+  ])(
+    'should include file link input when fileSelectConfig allows $title',
+    ({ fileSelectConfig }) => {
+      const result = appData2FlowNodeIO({
+        chatConfig: {
+          fileSelectConfig
+        }
+      });
+      const fileLinkInput = result.inputs.find((i) => i.key === NodeInputKeyEnum.fileUrlList);
+      expect(fileLinkInput).toBeDefined();
+    }
+  );
 
   it('should not include file link input when fileSelectConfig disallows both', () => {
     const result = appData2FlowNodeIO({
@@ -748,6 +751,119 @@ describe('appData2FlowNodeIO', () => {
 
     const switchVar = result.inputs.find((i) => i.key === 'switchVar');
     expect(switchVar?.renderTypeList).toContain(FlowNodeInputTypeEnum.switch);
+  });
+
+  it('should map text input variable with non-string valueType to JSONEditor', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'objVar',
+            label: 'Object',
+            type: VariableInputEnum.input,
+            description: '',
+            valueType: WorkflowIOValueTypeEnum.object
+          },
+          {
+            key: 'arrVar',
+            label: 'Array',
+            type: VariableInputEnum.input,
+            description: '',
+            valueType: WorkflowIOValueTypeEnum.arrayString
+          },
+          {
+            key: 'strVar',
+            label: 'String',
+            type: VariableInputEnum.input,
+            description: '',
+            valueType: WorkflowIOValueTypeEnum.string
+          }
+        ]
+      }
+    });
+
+    const objVar = result.inputs.find((i) => i.key === 'objVar');
+    expect(objVar?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.JSONEditor,
+      FlowNodeInputTypeEnum.reference
+    ]);
+
+    const arrVar = result.inputs.find((i) => i.key === 'arrVar');
+    expect(arrVar?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.JSONEditor,
+      FlowNodeInputTypeEnum.reference
+    ]);
+
+    const strVar = result.inputs.find((i) => i.key === 'strVar');
+    expect(strVar?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.input,
+      FlowNodeInputTypeEnum.reference
+    ]);
+  });
+
+  it('should snap legacy any valueType to string and keep undefined as text input', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'anyVar',
+            label: 'Any',
+            type: VariableInputEnum.input,
+            description: '',
+            valueType: WorkflowIOValueTypeEnum.any
+          },
+          {
+            key: 'legacyVar',
+            label: 'Legacy',
+            type: VariableInputEnum.input,
+            description: ''
+          }
+        ]
+      }
+    });
+
+    const anyVar = result.inputs.find((i) => i.key === 'anyVar');
+    expect(anyVar?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.input,
+      FlowNodeInputTypeEnum.reference
+    ]);
+    expect(anyVar?.valueType).toBe(WorkflowIOValueTypeEnum.string);
+
+    const legacyVar = result.inputs.find((i) => i.key === 'legacyVar');
+    expect(legacyVar?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.input,
+      FlowNodeInputTypeEnum.reference
+    ]);
+  });
+
+  it('should preserve defaultValue on variable inputs', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'var1',
+            label: 'Variable 1',
+            type: VariableInputEnum.input,
+            description: '',
+            defaultValue: 'hello'
+          },
+          {
+            key: 'numVar',
+            label: 'Num',
+            type: VariableInputEnum.numberInput,
+            description: '',
+            defaultValue: 42
+          }
+        ]
+      }
+    });
+    const var1 = result.inputs.find((i) => i.key === 'var1');
+    expect(var1?.defaultValue).toBe('hello');
+    expect(var1?.value).toBe('hello');
+
+    const numVar = result.inputs.find((i) => i.key === 'numVar');
+    expect(numVar?.defaultValue).toBe(42);
+    expect(numVar?.value).toBe(42);
   });
 
   it('should handle variable with list/enums', () => {
