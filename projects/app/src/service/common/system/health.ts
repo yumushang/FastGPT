@@ -17,11 +17,14 @@ export const instrumentationCheck = async () => {
   // s3
   try {
     await global.s3BucketMap[S3Buckets.public].checkBucketHealth();
+    logger.info('instrumentation check S3Buckets.public');
   } catch (error) {
     return Promise.reject(`[${InitialErrorEnum.S3_ERROR}] public bucket: ${getErrText(error)}`);
   }
+
   try {
     await global.s3BucketMap[S3Buckets.private].checkBucketHealth();
+    logger.info('instrumentation check S3Buckets.private');
   } catch (error) {
     return Promise.reject(`[${InitialErrorEnum.S3_ERROR}] private bucket: ${getErrText(error)}`);
   }
@@ -30,6 +33,7 @@ export const instrumentationCheck = async () => {
   // plugin
   try {
     await loadModelProviders();
+    logger.info('instrumentation check loadModelProviders');
   } catch (error) {
     const message = `[${InitialErrorEnum.PLUGIN_ERROR}]: ${getErrText(error)}`;
     console.error(message);
@@ -40,6 +44,7 @@ export const instrumentationCheck = async () => {
   if (global.feConfigs?.isPlus) {
     try {
       const data = await POST<{ auth: boolean; data: string }>('/admin/common/health');
+      logger.info('instrumentation check isPlus');
       if (!data.auth) {
         throw new Error('Root key is invalid');
       }
@@ -59,6 +64,8 @@ export const instrumentationCheck = async () => {
     return {}`,
       variables: {}
     });
+
+    logger.info('instrumentation check codeSandbox');
   } catch (error) {
     logger.warn(`[${InitialErrorEnum.SANDBOX_ERROR}]: ${getErrText(error)}`);
   }
