@@ -361,7 +361,8 @@ export const UpdateDatasetDataPropsSchema = z.object({
   }),
   indexPrefix: z.string().optional().meta({
     description: '索引前缀标题'
-  })
+  }),
+  customData: z.string().optional()
 });
 export type UpdateDatasetDataPropsType = z.infer<typeof UpdateDatasetDataPropsSchema>;
 
@@ -379,7 +380,8 @@ export const CreateDatasetDataPropsSchema = z.object({
     .array(DatasetDataIndexItemSchema.omit({ dataId: true }))
     .optional()
     .meta({ description: '向量索引列表' }),
-  indexPrefix: z.string().optional().meta({ description: '索引前缀标题' })
+  indexPrefix: z.string().optional().meta({ description: '索引前缀标题' }),
+  customData: z.string().optional()
 });
 export type CreateDatasetDataPropsType = z.infer<typeof CreateDatasetDataPropsSchema>;
 
