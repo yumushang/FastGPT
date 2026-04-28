@@ -9,6 +9,7 @@ import {
   type IStorageOptions
 } from '@fastgpt-sdk/storage';
 import { getLogger, LogCategories } from '../../logger';
+import { env } from '../../../env';
 
 const logger = getLogger(LogCategories.INFRA.S3);
 
@@ -139,6 +140,13 @@ export class S3PublicBucket extends S3BaseBucket {
   }
 
   createPublicUrl(objectKey: string): string {
-    return this.externalClient.generatePublicGetUrl({ key: objectKey }).url;
+    let url = this.externalClient.generatePublicGetUrl({ key: objectKey }).url;
+    const chUrl = env.STORAGE_EXTERNAL_ENDPOINT_CH;
+    if (chUrl) {
+      url = chUrl + '/' + url.substring(url.indexOf(this.bucketName));
+      logger.debug('url', { url });
+      return url;
+    }
+    return url;
   }
 }

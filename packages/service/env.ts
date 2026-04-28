@@ -50,6 +50,7 @@ export const env = createEnv({
     STORAGE_PRIVATE_BUCKET: z.string().default('fastgpt-private'),
     STORAGE_REGION: z.string().default('us-east-1'),
     STORAGE_EXTERNAL_ENDPOINT: z.string().optional(),
+    STORAGE_EXTERNAL_ENDPOINT_CH: z.string().optional(),
     STORAGE_S3_ENDPOINT: z.string().default('http://localhost:9000'),
     STORAGE_PUBLIC_ACCESS_EXTRA_SUB_PATH: z.string().optional(),
     STORAGE_ACCESS_KEY_ID: z.string().default('minioadmin'),
