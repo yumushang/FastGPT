@@ -5,7 +5,7 @@ import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/i
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import type { VariableItemType } from '@fastgpt/global/core/app/type';
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
-import { clone, cloneDeep } from 'lodash';
+import { cloneDeep } from 'lodash';
 
 export const addPreviewUrlToChatItems = async (
   histories: ChatItemMiniType[],

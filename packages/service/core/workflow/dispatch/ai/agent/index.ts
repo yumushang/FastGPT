@@ -3,6 +3,7 @@ import {
   DispatchNodeResponseKeyEnum,
   SseResponseEventEnum
 } from '@fastgpt/global/core/workflow/runtime/constants';
+import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/utils';
 import type {
   DispatchNodeResultType,
   ModuleDispatchProps
@@ -45,6 +46,7 @@ import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type
 import { getLogger, LogCategories } from '../../../../../common/logger';
 import { env } from '../../../../../env';
 import { dispatchPiAgent } from './piAgent';
+import { i18nT } from '../../../../../../web/i18n/utils';
 
 export type DispatchAgentModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.history]?: ChatItemMiniType[];
@@ -477,7 +479,49 @@ export const dispatchRunAgent = async (props: DispatchAgentModuleProps): Promise
               filesMap,
               capabilityToolCallHandler
             });
+            const stepCallErrorText =
+              result.nodeResponse.errorText?.trim() ||
+              (result.nodeResponse.finishReason === 'error'
+                ? i18nT('chat:completion_finish_error')
+                : '');
+
             nodeResponses.push(result.nodeResponse);
+
+            if (stepCallErrorText) {
+              assistantResponses.push({
+                text: { content: stepCallErrorText },
+                planId: agentPlan.planId,
+                stepId: step.id
+              });
+              workflowStreamResponse?.({
+                stepId: step.id,
+                event: SseResponseEventEnum.answer,
+                data: textAdaptGptResponse({ text: stepCallErrorText })
+              });
+
+              const answerText = assistantResponses
+                .filter((item) => item.text?.content)
+                .map((item) => item.text!.content)
+                .join('');
+
+              return {
+                data: {
+                  [NodeOutputKeyEnum.answerText]: answerText
+                },
+                error: {
+                  [NodeOutputKeyEnum.errorText]: stepCallErrorText
+                },
+                [DispatchNodeResponseKeyEnum.memories]: {
+                  [masterMessagesKey]: undefined,
+                  [agentPlanKey]: undefined,
+                  [planMessagesKey]: undefined,
+                  [planBufferKey]: undefined
+                },
+                [DispatchNodeResponseKeyEnum.assistantResponses]: assistantResponses,
+                [DispatchNodeResponseKeyEnum.nodeResponses]: nodeResponses,
+                [DispatchNodeResponseKeyEnum.toolResponses]: stepCallErrorText
+              };
+            }
 
             // Merge response
             const assistantResponse = GPTMessages2Chats({

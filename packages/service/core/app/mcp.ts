@@ -10,8 +10,15 @@ import type { McpToolDataType } from '@fastgpt/global/core/app/tool/mcpTool/type
 import { UserError } from '@fastgpt/global/common/error/utils';
 import $RefParser from '@apidevtools/json-schema-ref-parser';
 import { getLogger, LogCategories } from '../../common/logger';
+import { isInternalAddress, PRIVATE_URL_TEXT } from '../../common/system/utils';
 
 const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+
+export const assertMCPUrlNotInternal = async (url: string) => {
+  if (await isInternalAddress(url)) {
+    return Promise.reject(PRIVATE_URL_TEXT);
+  }
+};
 
 export class MCPClient {
   private client: Client;
@@ -43,6 +50,8 @@ export class MCPClient {
   }
 
   private async doConnect(): Promise<Client> {
+    await assertMCPUrlNotInternal(this.url);
+
     // 避免连接重复，强制关闭一次
     await this.client.close().catch(() => {});
 

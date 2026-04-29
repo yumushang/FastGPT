@@ -45,19 +45,30 @@ ${list}
 };
 
 /* ===== Inject user query ===== */
-export const injectUserFilesPrompt = (files: { index: number; name: string }[] = []) => {
+export const getUserFilesPrompt = (
+  files: { id?: string; name: string; sandboxPath?: string; content?: string }[] = []
+) => {
   if (files.length === 0) return '';
   return `# Input Files
-本次用户上传的文件：
+用户本次上传的文件：
 
-${files.map((file) => `- 文件${file.index}: ${file.name}`).join('\n')}`;
+${files
+  .map((file) =>
+    `<file>
+${file.id ? `<id>${file.id}</id>` : ''}
+<name>${file.name}</name>
+${file.sandboxPath ? `<sandboxPath>${file.sandboxPath}</sandboxPath>` : ''}
+${file.content ? `<content>${file.content}</content>` : ''}
+</file>`.trim()
+  )
+  .join('\n')}`;
 };
 export const injectUserQueryTimePrompt = (time: string) => {
   return `# Current time
 ${time}`;
 };
 export const injectUserQueryPrompt = ({
-  query,
+  query = '',
   filePrompt,
   timePrompt
 }: {

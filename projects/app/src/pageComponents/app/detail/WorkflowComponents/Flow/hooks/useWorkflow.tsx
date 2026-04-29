@@ -450,12 +450,6 @@ export const useRAF = () => {
 
 export const popoverWidth = 400;
 export const popoverHeight = 600;
-// 嵌套父容器节点类型集合
-const PARENT_NODE_TYPES = new Set([
-  FlowNodeTypeEnum.loop,
-  FlowNodeTypeEnum.parallelRun,
-  FlowNodeTypeEnum.loopRun
-]);
 
 export const useWorkflow = () => {
   const { toast } = useToast();
@@ -464,8 +458,15 @@ export const useWorkflow = () => {
   const appDetail = useContextSelector(AppContext, (e) => e.appDetail);
 
   const { nodes, getRawNodeById } = useContextSelector(WorkflowInitContext, (state) => state);
-  const { onNodesChange, workflowStartNode, getNodeById, edges, setEdges, onEdgesChange } =
-    useContextSelector(WorkflowBufferDataContext, (state) => state);
+  const {
+    onNodesChange,
+    setNodes,
+    workflowStartNode,
+    getNodeById,
+    edges,
+    setEdges,
+    onEdgesChange
+  } = useContextSelector(WorkflowBufferDataContext, (state) => state);
   const selectedNodesMap = useContextSelector(WorkflowNodeDataContext, (v) => v.selectedNodesMap);
 
   const { setConnectingEdge, onChangeNode } = useContextSelector(WorkflowActionsContext, (v) => v);
@@ -660,6 +661,24 @@ export const useWorkflow = () => {
     if (change.selected === false && isDowningCtrl) {
       change.selected = true;
     }
+
+    // 父子互斥(后操作优先): 选父则取消其已选 children;选子则取消已选父。
+    if (!change.selected) return;
+    const node = getRawNodeById(change.id);
+    if (!node) return;
+
+    if (isNestedParentNodeType(node.data.flowNodeType)) {
+      setNodes((curr) =>
+        curr.map((n) =>
+          n.data.parentNodeId === node.id && n.selected ? { ...n, selected: false } : n
+        )
+      );
+    } else if (node.data.parentNodeId) {
+      const parent = getRawNodeById(node.data.parentNodeId);
+      if (parent?.selected) {
+        setNodes((curr) => curr.map((n) => (n.id === parent.id ? { ...n, selected: false } : n)));
+      }
+    }
   });
   const handlePositionNode = useMemoizedFn(
     (change: NodePositionChange, node: Node<FlowNodeItemType>) => {
@@ -675,7 +694,7 @@ export const useWorkflow = () => {
       }
 
       // 场景2: Loop 父节点拖拽 - 联动子节点
-      if (PARENT_NODE_TYPES.has(node.data.flowNodeType)) {
+      if (isNestedParentNodeType(node.data.flowNodeType)) {
         const parentId = node.id;
         const dragPos = change.position;
         const shouldSnap = !!change.dragging && !!dragPos;
