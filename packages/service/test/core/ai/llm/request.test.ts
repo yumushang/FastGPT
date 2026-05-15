@@ -423,6 +423,57 @@ describe('createLLMResponse', () => {
       expect(answerText).toBe('The answer is 4.');
     });
 
+    it('should handle non-stream response with reasoning alias field', async () => {
+      mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
+
+      const mockResponse = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'The answer is 4.',
+              reasoning: 'Let me think... 2 + 2 = 4'
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 20,
+          total_tokens: 30
+        }
+      };
+
+      const mockAI = {
+        chat: {
+          completions: {
+            create: vi.fn().mockResolvedValue(mockResponse)
+          }
+        }
+      };
+      mockGetAIApi.mockReturnValue(mockAI as any);
+
+      const messages: ChatCompletionMessageParam[] = [
+        { role: ChatCompletionRequestMessageRoleEnum.User, content: 'What is 2 + 2?' }
+      ];
+
+      let reasoningText = '';
+      const result = await createLLMResponse({
+        body: {
+          model: 'gpt-4',
+          messages,
+          stream: false
+        },
+        onReasoning: ({ text }) => {
+          reasoningText += text;
+        }
+      });
+
+      expect(result.answerText).toBe('The answer is 4.');
+      expect(result.reasoningText).toBe('Let me think... 2 + 2 = 4');
+      expect(reasoningText).toBe('Let me think... 2 + 2 = 4');
+    });
+
     it('should handle non-stream response with think tag in content', async () => {
       mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
       mockParseReasoningContent.mockReturnValue(['Thinking process here', 'Final answer']);

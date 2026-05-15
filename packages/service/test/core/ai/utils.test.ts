@@ -248,6 +248,37 @@ describe('parseLLMStreamResponse', () => {
         expect(reasoning).toBe(part.correct.reasoning);
       });
     });
+
+    it('should handle stream response with reasoning alias field', () => {
+      const { parsePart, getResponseData } = parseLLMStreamResponse();
+      const chunks = [
+        {
+          choices: [{ delta: { role: 'assistant', reasoning: ':' }, finish_reason: null }]
+        },
+        {
+          choices: [{ delta: { reasoning: 'thinking' }, finish_reason: null }]
+        },
+        {
+          choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }]
+        }
+      ];
+
+      let answer = '';
+      let reasoning = '';
+      chunks.forEach((part) => {
+        const { reasoningContent, content } = parsePart({
+          part,
+          parseThinkTag: true,
+          retainDatasetCite: false
+        });
+        answer += content;
+        reasoning += reasoningContent;
+      });
+
+      expect(answer).toBe('answer');
+      expect(reasoning).toBe(':thinking');
+      expect(getResponseData().reasoningContent).toBe(':thinking');
+    });
   });
 
   describe('Parse dataset cite content test', async () => {
