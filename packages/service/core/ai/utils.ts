@@ -122,6 +122,7 @@ export const parseLLMStreamResponse = () => {
         delta: {
           content?: string | null;
           reasoning_content?: string;
+          reasoning?: string;
         };
         finish_reason?: CompletionFinishReason;
       }[];
@@ -143,8 +144,8 @@ export const parseLLMStreamResponse = () => {
       buffer_finishReason = finishReason || buffer_finishReason;
 
       const content = part.choices?.[0]?.delta?.content || '';
-      // @ts-ignore
-      const reasoningContent = part.choices?.[0]?.delta?.reasoning_content || '';
+      const reasoningContent =
+        part.choices?.[0]?.delta?.reasoning_content || part.choices?.[0]?.delta?.reasoning || '';
       const isStreamEnd = !!buffer_finishReason;
 
       // Parse think
