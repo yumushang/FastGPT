@@ -21,7 +21,10 @@ export function useIPFrequencyLimit({
 }) {
   return async (req: ApiRequestProps, res: NextApiResponse) => {
     const ip = requestIp.getClientIp(req);
-    if (!ip || (process.env.USE_IP_LIMIT !== 'true' && !force)) {
+    // if (!ip || (process.env.USE_IP_LIMIT !== 'true' && !force)) {
+    //   return;
+    // }
+    if (!ip || process.env.USE_IP_LIMIT !== 'true') {
       return;
     }
     try {
