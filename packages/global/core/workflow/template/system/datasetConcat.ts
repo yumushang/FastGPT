@@ -13,7 +13,7 @@ import {
 } from '../../constants';
 import { getNanoid } from '../../../../common/string/tools';
 import { type FlowNodeInputItemType } from '../../type/io';
-import { i18nT } from '../../../../../web/i18n/utils';
+import { i18nT } from '../../../../common/i18n/utils';
 
 export const getOneQuoteInputTemplate = ({
   key = getNanoid(),
@@ -43,7 +43,7 @@ export const DatasetConcatModule: FlowNodeTemplateType = {
   intro: i18nT('workflow:intro_knowledge_base_search_merge'),
 
   showStatus: false,
-  courseUrl: '/introduction/guide/dashboard/workflow/knowledge_base_search_merge/',
+  courseUrl: '/guide/build/workflow/nodes/knowledge_base_search_merge',
   inputs: [
     {
       key: NodeInputKeyEnum.datasetMaxTokens,

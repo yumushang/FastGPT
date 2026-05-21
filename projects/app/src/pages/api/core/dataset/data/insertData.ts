@@ -4,7 +4,7 @@
 */
 import { getEmbeddingModel } from '@fastgpt/service/core/ai/model';
 import { hasSameValue } from '@/service/core/dataset/data/utils';
-import { insertData2Dataset } from '@/service/core/dataset/data/controller';
+import { createDatasetData } from '@/service/core/dataset/data/data';
 import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
 import { getCollectionWithDataset } from '@fastgpt/service/core/dataset/controller';
 import { pushGenerateVectorUsage } from '@/service/support/wallet/usage/push';
@@ -16,6 +16,7 @@ import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
 import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   InsertDataBodySchema,
   InsertDataResponseSchema,
@@ -23,7 +24,10 @@ import {
 } from '@fastgpt/global/openapi/core/dataset/data/api';
 
 async function handler(req: ApiRequestProps): Promise<InsertDataResponse> {
-  const { collectionId, q, a, indexes } = InsertDataBodySchema.parse(req.body);
+  const { collectionId, q, a, indexes } = parseApiInput({
+    req,
+    bodySchema: InsertDataBodySchema
+  }).body;
 
   // 凭证校验
   const { teamId, tmbId, collection } = await authDatasetCollection({
@@ -41,8 +45,10 @@ async function handler(req: ApiRequestProps): Promise<InsertDataResponse> {
 
   const [
     {
-      dataset: { _id: datasetId, vectorModel, agentModel },
+      dataset: { _id: datasetId, vectorModel },
       indexPrefixTitle,
+      imageIndex,
+      indexSize,
       name
     }
   ] = await Promise.all([getCollectionWithDataset(collectionId)]);
@@ -64,7 +70,7 @@ async function handler(req: ApiRequestProps): Promise<InsertDataResponse> {
     a: formatA
   });
 
-  const { insertId, tokens } = await insertData2Dataset({
+  const { insertId, tokens } = await createDatasetData({
     teamId,
     tmbId,
     datasetId,
@@ -72,8 +78,10 @@ async function handler(req: ApiRequestProps): Promise<InsertDataResponse> {
     q: formatQ,
     a: formatA,
     chunkIndex: 0,
+    indexSize,
     indexPrefix: indexPrefixTitle ? `# ${name}` : undefined,
     embeddingModel: vectorModelData.model,
+    imageIndex: !!imageIndex,
     indexes: formatIndexes
   });
 

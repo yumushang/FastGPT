@@ -10,6 +10,7 @@ import {
 } from '@fastgpt/global/core/app/type';
 import { type AppFileSelectConfigType } from '@fastgpt/global/core/app/type/config.schema';
 import { type ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
+import { ChatStatusEnum } from '@fastgpt/global/core/chat/constants';
 import {
   defaultAppSelectFileConfig,
   defaultChatInputGuideConfig,
@@ -23,7 +24,6 @@ import { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
 import { ChatRecordContext } from '@/web/core/chat/context/chatRecordContext';
 import { useCreation } from 'ahooks';
 import type { ChatTypeEnum } from './constants';
-import { ChatTypeEnum as ChatTypeEnumValue } from './constants';
 import type { ChatQuickAppType } from '@fastgpt/global/core/chat/setting/type';
 import { WorkflowRuntimeContextProvider } from '@/components/core/chat/ChatContainer/context/workflowRuntimeContext';
 
@@ -213,20 +213,23 @@ const Provider = ({
   const getHistoryResponseData = useCallback(
     async ({ dataId }: { dataId: string }) => {
       const aimItem = chatRecords.find((item) => item.dataId === dataId)!;
-      if (!!aimItem?.responseData || !chatId) {
+      if (!chatId || (aimItem?.status !== ChatStatusEnum.finish && !!aimItem?.responseData)) {
         return aimItem.responseData || [];
-      } else {
-        let resData = await getChatResData({
-          appId: appId,
-          chatId: chatId,
-          dataId,
-          ...formatOutLinkAuth
-        });
-        setChatRecords((state) =>
-          state.map((item) => (item.dataId === dataId ? { ...item, responseData: resData } : item))
-        );
-        return resData;
       }
+
+      const resData = await getChatResData({
+        appId: appId,
+        chatId: chatId,
+        dataId,
+        ...formatOutLinkAuth
+      });
+      const nextResponseData = resData.length ? resData : aimItem?.responseData || [];
+      setChatRecords((state) =>
+        state.map((item) =>
+          item.dataId === dataId ? { ...item, responseData: nextResponseData } : item
+        )
+      );
+      return nextResponseData;
     },
     [chatRecords, chatId, appId, formatOutLinkAuth, setChatRecords]
   );
@@ -254,22 +257,11 @@ const Provider = ({
     getHistoryResponseData,
     chatType
   };
-  const runtimeFileSelectConfig = useMemo(() => {
-    if (chatType === ChatTypeEnumValue.test) {
-      return fileSelectConfig;
-    }
-    if (chatType === ChatTypeEnumValue.home && !props.currentQuickAppId) {
-      return fileSelectConfig;
-    }
-    return undefined;
-  }, [chatType, fileSelectConfig, props.currentQuickAppId]);
-
   return (
     <WorkflowRuntimeContextProvider
       appId={appId}
       chatId={chatId}
       outLinkAuthData={formatOutLinkAuth}
-      runtimeFileSelectConfig={runtimeFileSelectConfig}
     >
       <ChatBoxContext.Provider value={value}>{children}</ChatBoxContext.Provider>
     </WorkflowRuntimeContextProvider>

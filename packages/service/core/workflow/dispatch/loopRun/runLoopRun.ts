@@ -18,8 +18,8 @@ import {
 } from '@fastgpt/global/core/workflow/runtime/utils';
 import { LoopRunModeEnum } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRun';
 
-import { env } from '../../../../env';
-import { i18nT } from '../../../../../web/i18n/utils';
+import { serviceEnv } from '../../../../env';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { runWorkflow } from '..';
 import { collectResponseFeedbacks, getNodeErrResponse, pushSubWorkflowUsage } from '../utils';
 import {
@@ -47,7 +47,7 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
   const childrenNodeIdList = params[NodeInputKeyEnum.childrenNodeIdList] ?? [];
   const inputArray = params[NodeInputKeyEnum.loopRunInputArray] ?? [];
 
-  const maxLength = env.WORKFLOW_MAX_LOOP_TIMES;
+  const maxLength = serviceEnv.WORKFLOW_MAX_LOOP_TIMES;
   const maxIterationsMessage = i18nT('workflow:loop_run_max_iterations_exceeded');
 
   // Surface precheck failures through `errorText` to match the max-iterations
@@ -98,13 +98,12 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
   }
 
   const loopHistory: LoopRunHistoryItem[] = interactiveData
-    ? (interactiveData.loopHistory as LoopRunHistoryItem[]) ?? []
+    ? ((interactiveData.loopHistory as LoopRunHistoryItem[]) ?? [])
     : [];
   const loopResponseDetail: ChatHistoryItemResType[] = [];
   const assistantResponses: AIChatItemValueItemType[] = [];
   const customFeedbacks: string[] = [];
   let totalPoints = 0;
-  let newVariables: Record<string, any> = props.variables;
   let interactiveResponse: WorkflowInteractiveResponseType | undefined;
   // Pre-interrupt children of the in-flight iteration survive across resume here,
   // so pushIterationDetail can stitch them back with the resumed iteration's
@@ -163,7 +162,6 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
     const response = await runWorkflow({
       ...props,
       lastInteractive: interactiveData?.childrenResponse,
-      variables: newVariables,
       runtimeNodes: isolatedNodes,
       runtimeEdges: cloneDeep(
         storeEdges2RuntimeEdges(isolatedEdges, interactiveData?.childrenResponse)
@@ -190,7 +188,6 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
     });
     totalPoints += iterationTotalPoints;
     collectResponseFeedbacks(response, customFeedbacks);
-    newVariables = { ...newVariables, ...response.newVariables };
 
     // Pause: stash accumulated children so the next resume still sees pre-interrupt
     // nodes (supports multiple interrupts in the same iteration).
@@ -206,7 +203,7 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
     const customOutputs = readCustomOutputSnapshot({
       customOutputInputs,
       runtimeNodes: isolatedNodes,
-      variables: newVariables,
+      variableState: props.variableState,
       finishedNodeIds,
       childrenNodeIdList
     });
@@ -275,7 +272,7 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
   const errorText = maxIterationsExceeded
     ? maxIterationsMessage
     : lastFailed
-      ? lastEntry?.error ?? i18nT('workflow:loop_run_iteration_failed')
+      ? (lastEntry?.error ?? i18nT('workflow:loop_run_iteration_failed'))
       : undefined;
 
   return {
@@ -292,7 +289,6 @@ export const dispatchLoopRun = async (props: Props): Promise<Response> => {
           }
         }
       : undefined,
-    [DispatchNodeResponseKeyEnum.newVariables]: newVariables,
     [DispatchNodeResponseKeyEnum.nodeResponse]: {
       totalPoints,
       loopRunInput: mode === LoopRunModeEnum.array ? inputArray : undefined,

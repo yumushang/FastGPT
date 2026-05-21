@@ -4,15 +4,25 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { app, poolReady } from '../../src/index';
-import { config } from '../../src/config';
+import { env } from '../../src/env';
 
 /** 构造请求 headers，自动带上 auth（如果配置了 token） */
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   const h: Record<string, string> = { ...extra };
-  if (config.token) {
-    h['Authorization'] = `Bearer ${config.token}`;
+  if (env.SANDBOX_TOKEN) {
+    h['Authorization'] = `Bearer ${env.SANDBOX_TOKEN}`;
   }
   return h;
+}
+
+async function executeJs(code: string, variables: Record<string, any> = {}) {
+  const res = await app.request('/sandbox/js', {
+    method: 'POST',
+    headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ code, variables })
+  });
+
+  return res.json();
 }
 
 describe('API Routes', () => {
@@ -70,6 +80,130 @@ describe('API Routes', () => {
     expect(data.message).toContain('not allowed');
   });
 
+  it('POST /sandbox/js 拦截动态 import 语法变体', async () => {
+    const payloads = [
+      'async function main() { await import("child_process"); return {} }',
+      'async function main() { await import/**/("child_process"); return {} }',
+      'async function main() { await import/* comment */("child_process"); return {} }',
+      'async function main() { await import/* comment */\n("child_process"); return {} }',
+      'async function main() { await import// comment\n("child_process"); return {} }'
+    ];
+
+    for (const code of payloads) {
+      const data = await executeJs(code);
+      expect(data.success).toBe(false);
+      expect(data.message).toContain('Dynamic import() is not allowed');
+    }
+  });
+
+  it('POST /sandbox/js 允许字符串和注释中出现 import 文本', async () => {
+    const data = await executeJs(`
+      async function main() {
+        const text = "import/**/('child_process')";
+        /* import("child_process") */
+        return { text };
+      }
+    `);
+
+    expect(data.success).toBe(true);
+    expect(data.data.codeReturn.text).toBe("import/**/('child_process')");
+  });
+
+  it('POST /sandbox/js 禁止 eval 生成代码', async () => {
+    const data = await executeJs('async function main() { return eval("1 + 1"); }');
+
+    expect(data.success).toBe(false);
+    expect(data.message).toContain('eval() is not allowed');
+  });
+
+  it('POST /sandbox/js 禁止通过 constructor 链恢复代码生成能力', async () => {
+    const payloads = [
+      `async function main() {
+        try { Object.constructor.constructor('return process')(); return { escaped: true }; }
+        catch (e) { return { escaped: false }; }
+      }`,
+      `async function main() {
+        try { require.__proto__.constructor('return process')(); return { escaped: true }; }
+        catch (e) { return { escaped: false }; }
+      }`,
+      `async function main() {
+        try { await (async function(){}).constructor('return import("child_process")')(); return { escaped: true }; }
+        catch (e) { return { escaped: false }; }
+      }`,
+      `async function main() {
+        try { (function*(){}).constructor('yield 1')(); return { escaped: true }; }
+        catch (e) { return { escaped: false }; }
+      }`
+    ];
+
+    for (const code of payloads) {
+      const data = await executeJs(code);
+      expect(data.success).toBe(true);
+      expect(data.data.codeReturn.escaped).toBe(false);
+    }
+  });
+
+  it('POST /sandbox/js 禁止 setTimeout 字符串代码执行', async () => {
+    const data = await executeJs(`async function main() {
+      setTimeout('return process', 0);
+      return {};
+    }`);
+
+    expect(data.success).toBe(false);
+    expect(data.message).toContain('setTimeout expects a function');
+  });
+
+  it('POST /sandbox/js 禁止通过 require.cache 拿到原始 require', async () => {
+    const data = await executeJs(`
+      async function main() {
+        const moduleWithRequire = Object.values(require.cache ?? {}).find(
+          (item) => item && typeof item.require === 'function'
+        );
+        if (!moduleWithRequire) {
+          return {
+            escaped: false,
+            cacheType: typeof require.cache,
+            extensionsType: typeof require.extensions,
+            mainType: typeof require.main
+          };
+        }
+        const cp = moduleWithRequire.require('child_process');
+        return { escaped: true, out: cp.execSync('id').toString() };
+      }
+    `);
+
+    expect(data.success).toBe(true);
+    expect(data.data.codeReturn).toEqual({
+      escaped: false,
+      cacheType: 'undefined',
+      extensionsType: 'undefined',
+      mainType: 'undefined'
+    });
+  });
+
+  it('POST /sandbox/js require.resolve 同样遵循模块白名单', async () => {
+    const data = await executeJs(
+      'async function main() { return require.resolve("child_process"); }'
+    );
+
+    expect(data.success).toBe(false);
+    expect(data.message).toContain("Module 'child_process' is not allowed");
+  });
+
+  it('POST /sandbox/js 禁止篡改 SystemHelper', async () => {
+    const data = await executeJs(`
+      async function main() {
+        try {
+          SystemHelper.httpRequest = async () => ({ status: 200, data: 'polluted' });
+        } catch {}
+        return { same: SystemHelper.httpRequest === httpRequest };
+      }
+    `);
+
+    expect(data.success).toBe(true);
+    expect(data.data.codeReturn.same).toBe(true);
+  });
+
   // ===== Python =====
   it('POST /sandbox/python 正常执行', async () => {
     const res = await app.request('/sandbox/python', {
@@ -107,9 +241,9 @@ describe('API Routes', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.success).toBe(true);
-    expect(data.data.js).toEqual(config.jsAllowedModules);
+    expect(data.data.js).toEqual(env.SANDBOX_JS_ALLOWED_MODULES);
     expect(data.data.builtinGlobals).toContain('SystemHelper.httpRequest');
-    expect(data.data.python).toEqual(config.pythonAllowedModules);
+    expect(data.data.python).toEqual(env.SANDBOX_PYTHON_ALLOWED_MODULES);
   });
 });
 
@@ -240,7 +374,7 @@ describe('API Zod 校验失败', () => {
  * 默认 SANDBOX_TOKEN 为空，auth 中间件不启用。
  * 设置 SANDBOX_TOKEN=xxx 运行可测试鉴权逻辑。
  */
-describe.skipIf(!config.token)('API Auth (requires SANDBOX_TOKEN)', () => {
+describe.skipIf(!env.SANDBOX_TOKEN)('API Auth (requires SANDBOX_TOKEN)', () => {
   it('无 Token 返回 401', async () => {
     const res = await app.request('/sandbox/js', {
       method: 'POST',
@@ -273,7 +407,7 @@ describe.skipIf(!config.token)('API Auth (requires SANDBOX_TOKEN)', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.token}`
+        Authorization: `Bearer ${env.SANDBOX_TOKEN}`
       },
       body: JSON.stringify({
         code: 'async function main() { return { ok: true } }',

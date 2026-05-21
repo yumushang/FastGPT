@@ -10,7 +10,7 @@ import {
   NodeOutputKeyEnum,
   WorkflowIOValueTypeEnum
 } from '../../../../constants';
-import { i18nT } from '../../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../../common/i18n/utils';
 import {
   Input_Template_Children_Node_List,
   Input_Template_NESTED_NODE_OFFSET,
@@ -32,7 +32,7 @@ export const LoopNode: FlowNodeTemplateType = {
   name: i18nT('workflow:loop'),
   intro: i18nT('workflow:intro_loop'),
   showStatus: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/loop/',
+  courseUrl: '/guide/build/workflow/nodes/loop',
   inputs: [
     {
       key: NodeInputKeyEnum.nestedInputArray,

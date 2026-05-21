@@ -178,19 +178,14 @@ export const getLastInteractiveValue = (
 
     // Check is user select
     if (
-      (lastValue.interactive.type === 'userSelect' ||
-        lastValue.interactive.type === 'agentPlanAskUserSelect') &&
+      lastValue.interactive.type === 'userSelect' &&
       !lastValue.interactive?.params?.userSelectedVal
     ) {
       return lastValue.interactive;
     }
 
     // Check is user input
-    if (
-      (lastValue.interactive.type === 'userInput' ||
-        lastValue.interactive.type === 'agentPlanAskUserForm') &&
-      !lastValue.interactive?.params?.submitted
-    ) {
+    if (lastValue.interactive.type === 'userInput' && !lastValue.interactive?.params?.submitted) {
       return lastValue.interactive;
     }
 
@@ -198,16 +193,11 @@ export const getLastInteractiveValue = (
       return lastValue.interactive;
     }
 
-    // Agent plan check
-    if (
-      lastValue.interactive.type === 'agentPlanCheck' &&
-      !lastValue.interactive?.params?.confirmed
-    ) {
-      return lastValue.interactive;
-    }
-
     // Agent plan ask query
-    if (lastValue.interactive.type === 'agentPlanAskQuery') {
+    if (
+      lastValue.interactive.type === 'agentPlanAskQuery' &&
+      !lastValue.interactive.params.answer
+    ) {
       return lastValue.interactive;
     }
   }
@@ -301,7 +291,7 @@ export const getReferenceVariableValue = ({
 }: {
   value?: ReferenceValueType;
   nodesMap: Record<string, RuntimeNodeItemType> | Map<string, RuntimeNodeItemType>;
-  variables: Record<string, any>;
+  variables: Record<string, unknown>;
 }) => {
   if (!value) return value;
 
@@ -394,7 +384,7 @@ export function replaceEditorVariable({
 }: {
   text: any;
   nodesMap: Record<string, RuntimeNodeItemType> | Map<string, RuntimeNodeItemType>;
-  variables: Record<string, any>; // global variables
+  variables: Record<string, unknown>; // runtime global variables
   depth?: number;
 }) {
   const getNode = (nodeId: string) => {
@@ -520,7 +510,7 @@ export const textAdaptGptResponse = ({
   text?: string | null;
   reasoning_content?: string | null;
   finish_reason?: null | 'stop';
-  extraData?: Object;
+  extraData?: object;
 }) => {
   return {
     ...extraData,

@@ -30,6 +30,8 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
+    "lint": "eslint .",
+    "test": "vitest run --config vitest.config.ts",
     "prepublishOnly": "pnpm build"
   },
   "keywords": [
@@ -53,7 +55,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=20.19.0",
     "pnpm": "10.x"
   },
   "license": "Apache-2.0",

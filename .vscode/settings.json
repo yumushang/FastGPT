@@ -2,9 +2,22 @@
     "editor.formatOnSave": true,
     "editor.mouseWheelZoom": true,
     "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "explicit"
+    },
     "prettier.prettierPath": "node_modules/prettier",
-    "js/ts.preferences.includePackageJsonAutoImports": "on",
-    "js/ts.tsdk.path": "node_modules/typescript/lib",
+    "eslint.useFlatConfig": true,
+    "eslint.workingDirectories": [
+        {
+            "mode": "auto"
+        }
+    ],
+    "eslint.validate": [
+        "javascript",
+        "javascriptreact",
+        "typescript",
+        "typescriptreact"
+    ],
     "i18n-ally.localesPaths": [
         "packages/web/i18n",
     ],
@@ -26,6 +39,9 @@
     "[typescript]": {
         "editor.defaultFormatter": "esbenp.prettier-vscode"
     },
+    "[typescriptreact]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
     "mdx.server.enable": true,
     "markdown.copyFiles.overwriteBehavior": "nameIncrementally",
     "markdown.copyFiles.destination": {
@@ -33,5 +49,6 @@
     },
     "files.associations": {
         "*.mdx": "markdown"
-    }
+    },
+    "js/ts.tsdk.path": "node_modules/typescript/lib"
 }

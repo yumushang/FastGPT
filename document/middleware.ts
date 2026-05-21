@@ -1,41 +1,96 @@
 import { createI18nMiddleware } from 'fumadocs-core/i18n';
-import { i18n } from '@/lib/i18n';
+import { defaultHomePath, i18n } from '@/lib/i18n';
 import { type NextRequest, NextResponse } from 'next/server';
 
 // Old path redirects mapping. Keys/values are POST-strip (no /docs prefix).
 // Old links like /docs/foo are first stripped to /foo, then matched here.
 const exactMap: Record<string, string> = {
-  '': '/introduction',
-  '/intro': '/introduction',
-  '/guide/dashboard/workflow/coreferenceresolution':
-    '/introduction/guide/dashboard/workflow/coreferenceResolution',
-  '/guide/admin/sso_dingtalk':
-    '/introduction/guide/admin/sso#/introduction/guide/admin/sso#钉钉',
-  '/guide/knowledge_base/rag': '/introduction/guide/knowledge_base/RAG',
-  '/commercial/intro': '/introduction/commercial',
+  '': defaultHomePath,
+  '/intro': defaultHomePath,
+
+  // Version / home.
+  '/commercial/intro': '/guide/version/commercial',
+  '/introduction': defaultHomePath,
+  '/introduction/shopping_cart/intro': '/guide/version/commercial',
+  '/introduction/cloud': '/guide/version/cloud/intro',
+  '/protocol/terms': '/guide/version/cloud/terms',
+  '/protocol/privacy': '/guide/version/cloud/privacy',
+
+  // Self-host.
   '/upgrading/intro': '/self-host/upgrading/upgrade-intruction',
   '/upgrading': '/self-host/upgrading/upgrade-intruction',
-  '/introduction/shopping_cart/intro/': '/introduction/commercial',
-  '/introduction/cloud': '/introduction/cloud/intro',
-  '/protocol/terms': '/introduction/cloud/terms',
-  '/protocol/privacy': '/introduction/cloud/privacy',
   '/introduction/development/docker': '/self-host/deploy/docker',
   '/introduction/development/sealos': '/self-host/deploy/sealos',
   '/introduction/development/intro': '/self-host/dev',
-  '/introduction/development/object-storage': '/self-host/config/object-storage'
+  '/introduction/development/object-storage': '/self-host/config/object-storage',
+
+  // General config / getting started.
+  '/introduction/guide/course/quick-start': '/guide/getting-started/quick-start',
+  '/introduction/guide/course/ai_settings': '/guide/build/general/ai_settings',
+  '/introduction/guide/course/chat_input_guide': '/guide/build/general/chat_input_guide',
+  '/introduction/guide/course/fileinput': '/guide/build/general/fileInput',
+  '/introduction/guide/course/fileInput': '/guide/build/general/fileInput',
+
+  // Knowledge base third-party pages moved under dataset/third-party.
+  '/introduction/guide/knowledge_base/api_dataset': '/guide/dataset/third-party/api_dataset',
+  '/introduction/guide/knowledge_base/lark_dataset': '/guide/dataset/third-party/lark_dataset',
+  '/introduction/guide/knowledge_base/feishu_dataset': '/guide/dataset/third-party/lark_dataset',
+  '/introduction/guide/knowledge_base/yuque_dataset':
+    '/guide/dataset/third-party/yuque_dataset',
+  '/introduction/guide/knowledge_base/dingtalk_dataset':
+    '/guide/dataset/third-party/dingtalk_dataset',
+  '/introduction/guide/knowledge_base/third_dataset':
+    '/guide/dataset/third-party/third_dataset',
+  '/introduction/guide/knowledge_base/RAG': '/guide/dataset/rag',
+
+  // Dashboard pages that moved to different build sub-sections.
+  '/introduction/guide/dashboard/evaluation': '/guide/build/evaluation',
+  '/introduction/guide/dashboard/intro': '/guide/build/workflow/intro',
+  '/introduction/guide/dashboard/mcp_server': '/guide/build/publish/mcp_server',
+  '/introduction/guide/dashboard/mcp_tools': '/guide/build/tools/mcp_tools',
+
+  // Workspace.
+  '/introduction/commercial': '/guide/version/commercial',
+
+  // Navbar redirects.
+  '/guide': defaultHomePath,
+  '/use-cases': defaultHomePath,
+  '/self-host': '/self-host/deploy/docker',
+  '/openapi': '/openapi/intro',
+  '/faq': '/faq/app'
 };
 
+// Prefix redirects for groups that kept the same slug after moving.
 const prefixMap: Record<string, string> = {
   '/FAQ': '/faq',
-  '/guide': '/introduction/guide',
-  '/shopping_cart': '/introduction/shopping_cart',
+  '/shopping_cart': '/guide/version/commercial',
   '/upgrading': '/self-host/upgrading',
   '/development': '/self-host',
+
+  // Project code in PR 6880 changed these three old groups.
+  '/use-cases/external-integration': '/guide/build/publish',
+  '/introduction/guide/dashboard/workflow': '/guide/build/workflow/nodes',
+  '/introduction/guide/knowledge_base': '/guide/dataset',
+
+  // Other moved documentation groups.
+  '/introduction/guide/plugins': '/guide/build/tools/system-plugins',
+  '/introduction/guide/team_permissions': '/guide/workspace/team',
+  '/introduction/guide/DialogBoxes': '/guide/chat',
+  '/introduction/guide/admin': '/guide/admin',
+
   '/introduction/development/openapi': '/openapi',
-  '/introduction/development': '/self-host'
+  '/introduction/development': '/self-host',
+  '/introduction/version': '/guide/version',
+  '/introduction/cloud': '/guide/version/cloud',
+  '/introduction/opensource': '/guide/version/opensource',
+  '/introduction': '/guide'
 };
 
 const i18nMiddleware = createI18nMiddleware(i18n);
+
+function normalizePath(path: string) {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
 
 function applyRedirectMaps(path: string): string | null {
   if (path in exactMap) return exactMap[path];
@@ -45,6 +100,14 @@ function applyRedirectMaps(path: string): string | null {
     }
   }
   return null;
+}
+
+function createRedirectUrl(target: string, request: NextRequest, lang: string) {
+  if (/^https?:\/\//i.test(target)) {
+    return new URL(target);
+  }
+
+  return new URL(`/${lang}${target || '/'}`, request.url);
 }
 
 export default function middleware(request: NextRequest) {
@@ -65,20 +128,18 @@ export default function middleware(request: NextRequest) {
   // Legacy /docs/* URLs: strip the /docs prefix and run redirect-match.
   // Always 301 to the canonical (no-/docs) path, even if no map entry matches.
   if (pathWithoutLang === '/docs' || pathWithoutLang.startsWith('/docs/')) {
-    const stripped = pathWithoutLang.slice('/docs'.length); // '' for /docs, /foo for /docs/foo
+    const stripped = normalizePath(pathWithoutLang).slice('/docs'.length); // '' for /docs, /foo for /docs/foo
     const mapped = applyRedirectMaps(stripped);
     const finalPath = mapped ?? stripped;
-    return NextResponse.redirect(
-      new URL(`/${lang}${finalPath || '/'}`, request.url),
-      301
-    );
+    return NextResponse.redirect(createRedirectUrl(finalPath, request, lang), 301);
   }
 
   // Non-/docs paths still consult the same maps so that direct hits on old
   // canonical paths (e.g. /upgrading) get redirected to their new home.
-  const mapped = applyRedirectMaps(pathWithoutLang);
+  const normalizedPath = normalizePath(pathWithoutLang);
+  const mapped = applyRedirectMaps(normalizedPath);
   if (mapped !== null && mapped !== pathWithoutLang) {
-    return NextResponse.redirect(new URL(`/${lang}${mapped || '/'}`, request.url), 301);
+    return NextResponse.redirect(createRedirectUrl(mapped, request, lang), 301);
   }
 
   // Build enhanced request headers so server components (e.g. (docs)/layout)

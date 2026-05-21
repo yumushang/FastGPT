@@ -5,7 +5,7 @@ import {
   NodeInputKeyEnum,
   FlowNodeTemplateTypeEnum
 } from '../../constants';
-import { i18nT } from '../../../../../web/i18n/utils';
+import { i18nT } from '../../../../common/i18n/utils';
 
 export const CustomFeedbackNode: FlowNodeTemplateType = {
   id: FlowNodeTypeEnum.customFeedback,
@@ -18,7 +18,7 @@ export const CustomFeedbackNode: FlowNodeTemplateType = {
   colorSchema: 'yellowGreen',
   name: i18nT('workflow:custom_feedback'),
   intro: i18nT('workflow:intro_custom_feedback'),
-  courseUrl: '/introduction/guide/dashboard/workflow/custom_feedback/',
+  courseUrl: '/guide/build/workflow/nodes/custom_feedback',
   inputs: [
     {
       key: NodeInputKeyEnum.textareaInput,

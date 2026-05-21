@@ -1,4 +1,3 @@
-import { initHttpAgent } from '@fastgpt/service/common/middle/httpAgent';
 import fs, { existsSync } from 'fs';
 import type { FastGPTFeConfigsType } from '@fastgpt/global/common/system/types/index';
 import type { FastGPTConfigFileType } from '@fastgpt/global/common/system/types/index';
@@ -13,7 +12,7 @@ import { POST } from '@fastgpt/service/common/api/plusRequest';
 import {
   type DeepRagSearchProps,
   type SearchDatasetDataResponse
-} from '@fastgpt/service/core/dataset/search/controller';
+} from '@fastgpt/service/core/dataset/search';
 import { type AuthOpenApiLimitProps } from '@fastgpt/service/support/openapi/auth';
 import type {
   PushUsageItemsProps,
@@ -23,7 +22,9 @@ import type {
 import { getSystemToolTags } from '@fastgpt/service/core/app/tool/api';
 import { isProVersion } from '@fastgpt/service/common/system/constants';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
-import { env } from '@fastgpt/service/env';
+import { serviceEnv } from '@fastgpt/service/env';
+import { hasAIProxyApiEndpoint } from '@fastgpt/service/thirdProvider/aiproxy/config';
+import { appEnv } from '@/env';
 
 const logger = getLogger(LogCategories.SYSTEM);
 
@@ -41,7 +42,7 @@ export const readConfigData = async (name: string) => {
       return `data/${name}`;
     }
     // Fallback to default production path
-    const envPath = process.env.CONFIG_JSON_PATH || '/app/data';
+    const envPath = appEnv.CONFIG_JSON_PATH || '/app/data';
     return `${envPath}/${name}`;
   })();
 
@@ -84,7 +85,6 @@ export function initGlobalVariables() {
   global.datasetParseQueueLen = global.datasetParseQueueLen ?? 0;
   global.qaQueueLen = global.qaQueueLen ?? 0;
   global.vectorQueueLen = global.vectorQueueLen ?? 0;
-  initHttpAgent();
   initPlusRequest();
 }
 
@@ -125,13 +125,13 @@ const defaultFeConfigs: FastGPTFeConfigsType = {
   limit: {
     exportDatasetLimitMinutes: 0,
     websiteSyncLimitMinuted: 0,
-    workflowParallelRunMaxConcurrency: env.WORKFLOW_PARALLEL_MAX_CONCURRENCY
+    workflowParallelRunMaxConcurrency: serviceEnv.WORKFLOW_PARALLEL_MAX_CONCURRENCY
   },
   scripts: [],
   favicon: '/favicon.ico',
-  chineseRedirectUrl: process.env.CHINESE_IP_REDIRECT_URL || '',
-  uploadFileMaxSize: Number(process.env.UPLOAD_FILE_MAX_SIZE || 1000),
-  uploadFileMaxAmount: Number(process.env.UPLOAD_FILE_MAX_AMOUNT || 1000)
+  chineseRedirectUrl: appEnv.CHINESE_IP_REDIRECT_URL,
+  uploadFileMaxSize: serviceEnv.UPLOAD_FILE_MAX_SIZE,
+  uploadFileMaxAmount: serviceEnv.UPLOAD_FILE_MAX_AMOUNT
 };
 
 export async function initSystemConfig() {
@@ -156,17 +156,17 @@ export async function initSystemConfig() {
         ...(fastgptConfig.feConfigs?.limit || {})
       },
       isPlus: !!licenseData,
-      hideChatCopyrightSetting: process.env.HIDE_CHAT_COPYRIGHT_SETTING === 'true',
-      show_aiproxy: !!process.env.AIPROXY_API_ENDPOINT,
-      show_coupon: process.env.SHOW_COUPON === 'true',
-      show_discount_coupon: process.env.SHOW_DISCOUNT_COUPON === 'true',
+      hideChatCopyrightSetting: appEnv.HIDE_CHAT_COPYRIGHT_SETTING,
+      show_aiproxy: hasAIProxyApiEndpoint(),
+      show_coupon: appEnv.SHOW_COUPON,
+      show_discount_coupon: appEnv.SHOW_DISCOUNT_COUPON,
       show_dataset_enhance: licenseData?.functions?.datasetEnhance,
       show_batch_eval: licenseData?.functions?.batchEval,
-      show_agent_sandbox: !!env.AGENT_SANDBOX_PROVIDER,
-      show_skill: env.SHOW_SKILL,
-      payFormUrl: process.env.PAY_FORM_URL || '',
+      show_agent_sandbox: !!serviceEnv.AGENT_SANDBOX_PROVIDER,
+      show_skill: serviceEnv.SHOW_SKILL,
+      payFormUrl: appEnv.PAY_FORM_URL,
 
-      agentSandboxFree: process.env.AGENT_SANDBOX_FREE_TIP === 'true'
+      agentSandboxFree: appEnv.AGENT_SANDBOX_FREE_TIP
     },
     systemEnv: {
       ...fileRes.systemEnv,
@@ -219,14 +219,15 @@ export async function initAppTemplateTypes() {
   try {
     await Promise.all(
       defaultTemplateTypes.map((templateType) => {
-        const { typeOrder, ...rest } = templateType;
-
         return MongoTemplateTypes.updateOne(
           {
             typeId: templateType.typeId
           },
           {
-            $set: rest
+            $set: {
+              typeId: templateType.typeId,
+              typeName: templateType.typeName
+            }
           },
           {
             upsert: true

@@ -5,11 +5,10 @@ import {
   mockVectorEmbRecall,
   mockVectorInit,
   mockGetVectorDataByTime,
-  mockGetVectorCountByTeamId,
   mockGetVectorCount,
   resetVectorMocks
 } from '@test/mocks/common/vector';
-import { mockGetVectorsByText } from '@test/mocks/core/ai/embedding';
+import { mockGetVectors } from '@test/mocks/core/ai/embedding';
 
 // Import controller functions after mocks are set up
 import {
@@ -26,13 +25,12 @@ import {
 const mockGetRedisCache = vi.fn();
 const mockSetRedisCache = vi.fn();
 const mockDelRedisCache = vi.fn();
-const mockIncrValueToCache = vi.fn();
+const mockLoggerWarn = vi.fn();
 
 vi.mock('@fastgpt/service/common/redis/cache', () => ({
   setRedisCache: (...args: any[]) => mockSetRedisCache(...args),
   getRedisCache: (...args: any[]) => mockGetRedisCache(...args),
   delRedisCache: (...args: any[]) => mockDelRedisCache(...args),
-  incrValueToCache: (...args: any[]) => mockIncrValueToCache(...args),
   CacheKeyEnum: {
     team_vector_count: 'team_vector_count',
     team_point_surplus: 'team_point_surplus',
@@ -45,14 +43,32 @@ vi.mock('@fastgpt/service/common/redis/cache', () => ({
   }
 }));
 
+vi.mock('@fastgpt/service/common/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@fastgpt/service/common/logger')>();
+
+  return {
+    ...actual,
+    getLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: (...args: any[]) => mockLoggerWarn(...args),
+      error: vi.fn()
+    })
+  };
+});
+
 describe('VectorDB Controller', () => {
   beforeEach(() => {
     resetVectorMocks();
     mockGetRedisCache.mockReset();
     mockSetRedisCache.mockReset();
     mockDelRedisCache.mockReset();
-    mockIncrValueToCache.mockReset();
-    mockGetVectorsByText.mockClear();
+    mockLoggerWarn.mockReset();
+    mockGetVectors.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('initVectorStore', () => {
@@ -143,10 +159,67 @@ describe('VectorDB Controller', () => {
       expect(result).toBe(50);
       expect(mockGetVectorCount).toHaveBeenCalledWith({ teamId: 'team_789' });
     });
+
+    it('should fallback to Vector count when cache read fails', async () => {
+      mockGetRedisCache.mockRejectedValueOnce(new Error('redis down'));
+      mockGetVectorCount.mockResolvedValue(200);
+
+      const result = await getVectorCountByTeamId('team_456');
+
+      expect(result).toBe(200);
+      expect(mockGetVectorCount).toHaveBeenCalledWith({ teamId: 'team_456' });
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to get team vector count cache', {
+        teamId: 'team_456',
+        error: expect.any(Error)
+      });
+    });
+
+    it('should fallback to Vector count when cache read times out', async () => {
+      vi.useFakeTimers();
+      mockGetRedisCache.mockReturnValueOnce(new Promise(() => {}));
+      mockGetVectorCount.mockResolvedValue(120);
+
+      const resultPromise = getVectorCountByTeamId('team_timeout');
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await expect(resultPromise).resolves.toBe(120);
+      expect(mockGetVectorCount).toHaveBeenCalledWith({ teamId: 'team_timeout' });
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to get team vector count cache', {
+        teamId: 'team_timeout',
+        error: expect.any(Error)
+      });
+    });
+
+    it('should not block count result when cache write times out', async () => {
+      vi.useFakeTimers();
+      mockGetRedisCache.mockResolvedValue(null);
+      mockGetVectorCount.mockResolvedValue(300);
+      mockSetRedisCache.mockReturnValueOnce(new Promise(() => {}));
+
+      const result = await getVectorCountByTeamId('team_set_timeout');
+
+      expect(result).toBe(300);
+      expect(mockGetVectorCount).toHaveBeenCalledWith({ teamId: 'team_set_timeout' });
+      expect(mockSetRedisCache).toHaveBeenCalledWith(
+        'team_vector_count:team_set_timeout',
+        300,
+        1800
+      );
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to set team vector count cache', {
+        teamId: 'team_set_timeout',
+        error: expect.any(Error)
+      });
+    });
   });
 
   describe('getVectorCount', () => {
     it('should call Vector.getVectorCount', async () => {
+      mockGetVectorCount.mockResolvedValue(50);
+
       const result = await getVectorCount({ teamId: 'team_1', datasetId: 'dataset_1' });
 
       expect(mockGetVectorCount).toHaveBeenCalledWith({
@@ -174,7 +247,7 @@ describe('VectorDB Controller', () => {
         [0.1, 0.2],
         [0.3, 0.4]
       ];
-      mockGetVectorsByText.mockResolvedValue({
+      mockGetVectors.mockResolvedValue({
         tokens: 100,
         vectors: mockVectors
       });
@@ -190,9 +263,18 @@ describe('VectorDB Controller', () => {
         model: mockModel as any
       });
 
-      expect(mockGetVectorsByText).toHaveBeenCalledWith({
+      expect(mockGetVectors).toHaveBeenCalledWith({
         model: mockModel,
-        input: ['hello world', 'test text'],
+        inputs: [
+          {
+            type: 'text',
+            input: 'hello world'
+          },
+          {
+            type: 'text',
+            input: 'test text'
+          }
+        ],
         type: 'db'
       });
       expect(mockVectorInsert).toHaveBeenCalledWith({
@@ -207,8 +289,53 @@ describe('VectorDB Controller', () => {
       });
     });
 
-    it('should increment team vector cache', async () => {
-      mockGetVectorsByText.mockResolvedValue({
+    it('should pass explicit image inputs to embedding generation', async () => {
+      const mockVectors = [[0.1, 0.2]];
+      mockGetVectors.mockResolvedValue({
+        tokens: 1,
+        vectors: mockVectors
+      });
+      mockVectorInsert.mockResolvedValue({
+        insertIds: ['image_id']
+      });
+
+      const result = await insertDatasetDataVector({
+        teamId: 'team_123',
+        datasetId: 'dataset_456',
+        collectionId: 'col_789',
+        inputs: [
+          {
+            type: 'image',
+            input: 'data:image/png;base64,image'
+          }
+        ],
+        model: mockModel as any
+      });
+
+      expect(mockGetVectors).toHaveBeenCalledWith({
+        model: mockModel,
+        inputs: [
+          {
+            type: 'image',
+            input: 'data:image/png;base64,image'
+          }
+        ],
+        type: 'db'
+      });
+      expect(mockVectorInsert).toHaveBeenCalledWith({
+        teamId: 'team_123',
+        datasetId: 'dataset_456',
+        collectionId: 'col_789',
+        vectors: mockVectors
+      });
+      expect(result).toEqual({
+        tokens: 1,
+        insertIds: ['image_id']
+      });
+    });
+
+    it('should invalidate team vector cache after insert', async () => {
+      mockGetVectors.mockResolvedValue({
         tokens: 50,
         vectors: [[0.1]]
       });
@@ -224,20 +351,71 @@ describe('VectorDB Controller', () => {
         model: mockModel as any
       });
 
-      // Cache increment is called asynchronously
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(mockIncrValueToCache).toHaveBeenCalled();
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_abc');
+    });
+
+    it('should return insert result when team vector cache invalidation fails', async () => {
+      mockGetVectors.mockResolvedValue({
+        tokens: 50,
+        vectors: [[0.1]]
+      });
+      mockVectorInsert.mockResolvedValue({
+        insertIds: ['id_1']
+      });
+      mockDelRedisCache.mockRejectedValueOnce(new Error('redis down'));
+
+      const result = await insertDatasetDataVector({
+        teamId: 'team_abc',
+        datasetId: 'dataset_def',
+        collectionId: 'col_ghi',
+        inputs: ['single input'],
+        model: mockModel as any
+      });
+
+      expect(result).toEqual({
+        tokens: 50,
+        insertIds: ['id_1']
+      });
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_abc');
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to invalidate team vector count cache', {
+        teamId: 'team_abc',
+        error: expect.any(Error)
+      });
+    });
+
+    it('should return insert result when team vector cache invalidation times out', async () => {
+      vi.useFakeTimers();
+      mockGetVectors.mockResolvedValue({
+        tokens: 50,
+        vectors: [[0.1]]
+      });
+      mockVectorInsert.mockResolvedValue({
+        insertIds: ['id_1']
+      });
+      mockDelRedisCache.mockReturnValueOnce(new Promise(() => {}));
+
+      const resultPromise = insertDatasetDataVector({
+        teamId: 'team_abc',
+        datasetId: 'dataset_def',
+        collectionId: 'col_ghi',
+        inputs: ['single input'],
+        model: mockModel as any
+      });
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await expect(resultPromise).resolves.toEqual({
+        tokens: 50,
+        insertIds: ['id_1']
+      });
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_abc');
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to invalidate team vector count cache', {
+        teamId: 'team_abc',
+        error: expect.any(Error)
+      });
     });
 
     it('should handle empty inputs', async () => {
-      mockGetVectorsByText.mockResolvedValue({
-        tokens: 0,
-        vectors: []
-      });
-      mockVectorInsert.mockResolvedValue({
-        insertIds: []
-      });
-
       const result = await insertDatasetDataVector({
         teamId: 'team_123',
         datasetId: 'dataset_456',
@@ -250,6 +428,9 @@ describe('VectorDB Controller', () => {
         tokens: 0,
         insertIds: []
       });
+      expect(mockGetVectors).not.toHaveBeenCalled();
+      expect(mockVectorInsert).not.toHaveBeenCalled();
+      expect(mockDelRedisCache).not.toHaveBeenCalled();
     });
   });
 
@@ -311,6 +492,50 @@ describe('VectorDB Controller', () => {
 
       expect(mockVectorDelete).toHaveBeenCalledWith(props);
       expect(result).toEqual({ deletedCount: 5 });
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_cache_test');
+    });
+
+    it('should return delete result when team vector cache invalidation fails', async () => {
+      mockVectorDelete.mockResolvedValue({ deletedCount: 5 });
+      mockDelRedisCache.mockRejectedValueOnce(new Error('redis down'));
+
+      const props = {
+        teamId: 'team_cache_test',
+        id: 'some_id'
+      };
+
+      const result = await deleteDatasetDataVector(props);
+
+      expect(mockVectorDelete).toHaveBeenCalledWith(props);
+      expect(result).toEqual({ deletedCount: 5 });
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_cache_test');
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to invalidate team vector count cache', {
+        teamId: 'team_cache_test',
+        error: expect.any(Error)
+      });
+    });
+
+    it('should return delete result when team vector cache invalidation times out', async () => {
+      vi.useFakeTimers();
+      mockVectorDelete.mockResolvedValue({ deletedCount: 5 });
+      mockDelRedisCache.mockReturnValueOnce(new Promise(() => {}));
+
+      const props = {
+        teamId: 'team_cache_test',
+        id: 'some_id'
+      };
+
+      const resultPromise = deleteDatasetDataVector(props);
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await expect(resultPromise).resolves.toEqual({ deletedCount: 5 });
+      expect(mockVectorDelete).toHaveBeenCalledWith(props);
+      expect(mockDelRedisCache).toHaveBeenCalledWith('team_vector_count:team_cache_test');
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Failed to invalidate team vector count cache', {
+        teamId: 'team_cache_test',
+        error: expect.any(Error)
+      });
     });
   });
 });

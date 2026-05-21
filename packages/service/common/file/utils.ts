@@ -20,17 +20,14 @@ export const removeFilesByPaths = (paths: string[]) => {
   });
 };
 
-export const getContentTypeFromHeader = (header: string): string | undefined => {
-  return header?.toLowerCase()?.split(';')?.[0]?.trim();
-};
-
 export const clearDirFiles = (dirPath: string) => {
   if (!fs.existsSync(dirPath)) {
     return;
   }
 
-  fs.rmdirSync(dirPath, {
-    recursive: true
+  fs.rmSync(dirPath, {
+    recursive: true,
+    force: true
   });
 };
 

@@ -41,7 +41,8 @@ import { ChatRoleEnum, ChatStatusEnum } from '@fastgpt/global/core/chat/constant
 import {
   getInteractiveByHistories,
   formatChatValue2InputType,
-  rewriteHistoriesByInteractiveResponse
+  rewriteHistoriesByInteractiveResponse,
+  stripChatValueFileUrls
 } from './utils';
 import { ChatTypeEnum, textareaMinH } from './constants';
 import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
@@ -72,6 +73,11 @@ import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import { cloneDeep } from 'lodash';
 import { ChatGenerateStatusEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  getChatScrollTargetKey,
+  shouldFollowGeneratingScroll,
+  shouldForceScrollAfterRecordsLoaded
+} from './scrollUtils';
 
 const FeedbackModal = dynamic(() => import('./components/FeedbackModal'));
 const SelectMarkCollection = dynamic(() => import('./components/SelectMarkCollection'));
@@ -106,7 +112,7 @@ const shouldCreateResumeAiPlaceholder = (event: SseResponseEventEnum) => {
     SseResponseEventEnum.toolResponse,
     SseResponseEventEnum.interactive,
     SseResponseEventEnum.plan,
-    SseResponseEventEnum.stepTitle,
+    SseResponseEventEnum.planStatus,
     SseResponseEventEnum.workflowDuration
   ].includes(event);
 };
@@ -127,7 +133,7 @@ type Props = OutLinkChatAuthProps &
       }
     >;
     onTriggerRefresh?: () => void;
-    // TODO: 待优化。 自定义删除消息的实现，不传则使用默认的 delChatRecordById
+    // 支持外部自定义删除消息；不传则使用默认的 delChatRecordById。
     onDeleteChatItem?: (contentId: string, delFile?: boolean) => Promise<void>;
   };
 
@@ -154,7 +160,8 @@ const ChatBox = ({
   const questionGuideController = useRef(new AbortController());
   const pluginController = useRef(new AbortController());
   const resumeController = useRef<AbortController>();
-  const resumedChatIdRef = useRef<string>();
+  const resumedChatTargetRef = useRef<string>();
+  const lastRecordsLoadedScrollTargetRef = useRef<string>();
 
   const [isLoading, setIsLoading] = useState(false);
   const [feedbackId, setFeedbackId] = useState<string>();
@@ -180,8 +187,14 @@ const ChatBox = ({
 
   const appId = useContextSelector(WorkflowRuntimeContext, (v) => v.appId);
   const chatId = useContextSelector(WorkflowRuntimeContext, (v) => v.chatId);
+  const activeAppIdRef = useRef<string | undefined>(appId);
+  activeAppIdRef.current = appId;
   const activeChatIdRef = useRef<string | undefined>(chatId);
   activeChatIdRef.current = chatId;
+  const chatScrollTargetKey = useMemo(
+    () => getChatScrollTargetKey({ appId, chatId }),
+    [appId, chatId]
+  );
   const outLinkAuthData = useContextSelector(WorkflowRuntimeContext, (v) => v.outLinkAuthData);
   const welcomeText = useContextSelector(ChatBoxContext, (v) => v.welcomeText);
   const variableList = useContextSelector(ChatBoxContext, (v) => v.variableList);
@@ -198,18 +211,21 @@ const ChatBox = ({
   const syncSidebarChatGenerateStatus = useMemoizedFn(
     (
       status: ChatGenerateStatusEnum,
-      options?: { hasBeenRead?: boolean; targetChatId?: string }
+      options?: { hasBeenRead?: boolean; targetAppId?: string; targetChatId?: string }
     ) => {
+      const targetAppId = options?.targetAppId ?? appId;
+      if (targetAppId !== appId) return;
+
       const targetChatId = options?.targetChatId ?? chatId;
       if (!targetChatId) return;
       setHistories((prev) => {
-        const idx = prev.findIndex((h) => h.chatId === targetChatId);
+        const idx = prev.findIndex((h) => h.chatId === targetChatId && h.appId === targetAppId);
         if (idx === -1) {
           queueMicrotask(loadHistories);
           return [
             {
               chatId: targetChatId,
-              appId,
+              appId: targetAppId,
               title: chatBoxData.title || t('common:core.chat.New Chat'),
               customTitle: '',
               top: false,
@@ -221,7 +237,7 @@ const ChatBox = ({
           ];
         }
         return prev.map((h) =>
-          h.chatId === targetChatId
+          h.chatId === targetChatId && h.appId === targetAppId
             ? {
                 ...h,
                 chatGenerateStatus: status,
@@ -319,11 +335,14 @@ const ChatBox = ({
   const { run: generatingScroll } = useThrottleFn(
     (force?: boolean) => {
       if (!ScrollContainerRef.current) return;
-      const isBottom =
-        ScrollContainerRef.current.scrollTop + ScrollContainerRef.current.clientHeight + 150 >=
-        ScrollContainerRef.current.scrollHeight;
+      const isBottom = shouldFollowGeneratingScroll({
+        scrollTop: ScrollContainerRef.current.scrollTop,
+        clientHeight: ScrollContainerRef.current.clientHeight,
+        scrollHeight: ScrollContainerRef.current.scrollHeight,
+        force
+      });
 
-      if (isBottom || force) {
+      if (isBottom) {
         scrollToBottom('auto');
       }
     },
@@ -343,8 +362,7 @@ const ChatBox = ({
       tool,
       interactive,
       plan,
-      stepId,
-      stepTitle,
+      planStatus,
       sandboxStatus,
       skill,
       variables,
@@ -368,9 +386,6 @@ const ChatBox = ({
             return item.value.length - 1;
           })();
           const updateValue: AIChatItemValueItemType = cloneDeep(item.value[updateIndex]);
-          if (stepId) {
-            updateValue.stepId = stepId;
-          }
 
           if (event === SseResponseEventEnum.flowNodeResponse && nodeResponse) {
             return {
@@ -414,17 +429,17 @@ const ChatBox = ({
             };
           }
           if (event === SseResponseEventEnum.skillCall && skill) {
-            // 去重检查：避免同一个 skill 在同一步骤中重复展示
+            // 去重检查：避免同一个 skill 在同一响应中重复展示
             const alreadyExists = item.value.some(
               (v) =>
-                v.stepId === stepId && v.skills?.some((s) => s.skillMdPath === skill.skillMdPath)
+                v.id === responseValueId &&
+                v.skills?.some((s) => s.skillMdPath === skill.skillMdPath)
             );
             if (alreadyExists) return item;
 
             const skillId = skill.id || responseValueId || getNanoid(10);
             const val: AIChatItemValueItemType = {
               id: responseValueId,
-              stepId,
               skills: [
                 {
                   id: skillId,
@@ -442,7 +457,7 @@ const ChatBox = ({
           }
           if (event === SseResponseEventEnum.answer || event === SseResponseEventEnum.fastAnswer) {
             if (reasoningText) {
-              if (updateValue?.reasoning && updateValue.stepId === stepId) {
+              if (updateValue?.reasoning) {
                 updateValue.reasoning.content += reasoningText;
                 return {
                   ...item,
@@ -466,7 +481,7 @@ const ChatBox = ({
               }
             }
             if (text) {
-              if (updateValue?.text && updateValue.stepId === stepId) {
+              if (updateValue?.text) {
                 updateValue.text.content += text;
                 return {
                   ...item,
@@ -494,17 +509,21 @@ const ChatBox = ({
           // Tool call
           if (event === SseResponseEventEnum.toolCall && tool) {
             const val: AIChatItemValueItemType = {
-              id: responseValueId,
-              tool
+              id: responseValueId || tool.id,
+              tools: [tool]
             };
             return {
               ...item,
               value: [...item.value, val]
             };
           }
-          if (event === SseResponseEventEnum.toolParams && tool && updateValue.tool) {
+          if (event === SseResponseEventEnum.toolParams && tool && updateValue.tools) {
             if (tool.params) {
-              updateValue.tool.params += tool.params;
+              updateValue.tools = updateValue.tools.map((item) =>
+                item.id === tool.id
+                  ? { ...item, params: `${item.params || ''}${tool.params}` }
+                  : item
+              );
               return {
                 ...item,
                 value: [
@@ -516,13 +535,13 @@ const ChatBox = ({
             }
             return item;
           }
-          if (event === SseResponseEventEnum.toolResponse && tool && updateValue.tool) {
+          if (event === SseResponseEventEnum.toolResponse && tool && updateValue.tools) {
             if (tool.response) {
-              // replace tool response
-              if (typeof updateValue.tool.response !== 'string') {
-                updateValue.tool.response = '';
-              }
-              updateValue.tool.response += tool.response;
+              updateValue.tools = updateValue.tools.map((item) =>
+                item.id === tool.id
+                  ? { ...item, response: `${item.response || ''}${tool.response}` }
+                  : item
+              );
 
               return {
                 ...item,
@@ -537,36 +556,66 @@ const ChatBox = ({
           }
 
           // Agent
-          if (event === SseResponseEventEnum.plan && plan) {
-            return {
-              ...item,
-              value: [
-                ...item.value,
-                {
-                  id: responseValueId,
-                  stepId,
-                  plan
-                }
-              ]
+          if (event === SseResponseEventEnum.planStatus && planStatus) {
+            const planStatusIndex = item.value.findIndex(
+              (value) => !!value.planStatus || (!!responseValueId && value.id === responseValueId)
+            );
+            const nextPlanStatusValue: AIChatItemValueItemType = {
+              id: responseValueId,
+              planStatus
             };
-          }
-          if (event === SseResponseEventEnum.stepTitle && stepTitle) {
-            return {
-              ...item,
-              value: [
-                ...item.value,
-                {
-                  id: responseValueId,
-                  stepId,
-                  stepTitle: {
-                    ...stepTitle,
-                    folded: false
-                  }
-                }
-              ]
-            };
-          }
 
+            if (planStatusIndex >= 0) {
+              return {
+                ...item,
+                value: [
+                  ...item.value.slice(0, planStatusIndex),
+                  {
+                    ...item.value[planStatusIndex],
+                    ...nextPlanStatusValue
+                  },
+                  ...item.value.slice(planStatusIndex + 1)
+                ]
+              };
+            }
+
+            return {
+              ...item,
+              value: [...item.value, nextPlanStatusValue]
+            };
+          }
+          if (event === SseResponseEventEnum.plan && plan) {
+            const planIndex = item.value.findIndex(
+              (value) =>
+                (!!responseValueId && value.id === responseValueId) ||
+                !!value.planStatus ||
+                (value.plan?.planId && value.plan.planId === plan.planId)
+            );
+            const nextPlanValue = {
+              id: responseValueId || plan.planId,
+              plan,
+              planStatus: undefined
+            };
+
+            if (planIndex >= 0) {
+              return {
+                ...item,
+                value: [
+                  ...item.value.slice(0, planIndex),
+                  {
+                    ...item.value[planIndex],
+                    ...nextPlanValue
+                  },
+                  ...item.value.slice(planIndex + 1)
+                ]
+              };
+            }
+
+            return {
+              ...item,
+              value: [...item.value, nextPlanValue]
+            };
+          }
           if (event === SseResponseEventEnum.updateVariables && variables) {
             resetVariables({ variables });
           }
@@ -657,21 +706,33 @@ const ChatBox = ({
       if (item.text?.content) return true;
       if (item.reasoning?.content) return true;
       if (item.tool?.params || item.tool?.response) return true;
-      if (item.plan || item.stepTitle || item.interactive) return true;
+      if (item.tools?.some((tool) => tool.params || tool.response)) return true;
+      if (item.skills?.length) return true;
+      if (item.plan || item.interactive) return true;
       return false;
     });
   });
+
+  const isActiveResumeTarget = useMemoizedFn(
+    ({ appId, chatId }: { appId: string; chatId: string }) =>
+      activeAppIdRef.current === appId && activeChatIdRef.current === chatId
+  );
 
   const getResumeUnavailablePlaceholderText = useMemoizedFn(() =>
     t('chat:resume_placeholder_generating')
   );
 
   const upsertResumeAiPlaceholder = useMemoizedFn(
-    (responseChatId: string, text = '', status: `${ChatStatusEnum}` = ChatStatusEnum.loading) => {
+    (
+      responseChatId: string,
+      text = '',
+      status: `${ChatStatusEnum}` = ChatStatusEnum.loading,
+      options?: { resetExistingValue?: boolean }
+    ) => {
       setChatRecords((state) => {
         const lastItem = state[state.length - 1];
         if (lastItem?.dataId === responseChatId && lastItem.obj === ChatRoleEnum.AI) {
-          if (!text) {
+          if (!text && !options?.resetExistingValue) {
             return state;
           }
 
@@ -687,6 +748,7 @@ const ChatBox = ({
                       }
                     }
                   ],
+                  responseData: options?.resetExistingValue ? [] : item.responseData,
                   status,
                   ...(status === ChatStatusEnum.finish ? { time: new Date() } : {})
                 }
@@ -765,14 +827,6 @@ const ChatBox = ({
               val = formatTime2YMDHMS(new Date(val));
             } else if (item.type === VariableInputEnum.timeRangeSelect && val) {
               val = val.map((item: string) => (item ? formatTime2YMDHMS(new Date(item)) : ''));
-            } else if (item.type === VariableInputEnum.file && Array.isArray(val)) {
-              val = val.map((item) => ({
-                id: item.id,
-                key: item.key,
-                url: item.key ? undefined : item.url,
-                name: item.name,
-                type: item.type
-              }));
             }
             requestVariables[item.key] = valueTypeFormat(val, item.valueType);
           });
@@ -798,7 +852,6 @@ const ChatBox = ({
                   type: file.type,
                   name: file.name,
                   url: file.url,
-                  icon: file.icon || '',
                   key: file.key || ''
                 }
               })),
@@ -833,7 +886,7 @@ const ChatBox = ({
             }
           ];
 
-          resumedChatIdRef.current = chatId;
+          resumedChatTargetRef.current = `${appId}:${chatId}`;
 
           setChatBoxData((state) =>
             state.chatId === chatId
@@ -873,9 +926,10 @@ const ChatBox = ({
             const messages = chats2GPTMessages({
               messages: newChatList.slice(0, -1).map((item) => {
                 if (item.obj === ChatRoleEnum.Human) {
-                  item.files?.forEach((file) => {
-                    file.url = '';
-                  });
+                  return {
+                    ...item,
+                    value: stripChatValueFileUrls(item.value)
+                  };
                 }
                 return item;
               }),
@@ -971,7 +1025,6 @@ const ChatBox = ({
               return;
             }
 
-            console.log('Chat error', err);
             toast({
               title: t(getErrText(err, t('common:core.chat.error.Chat error') as any)),
               status: 'error',
@@ -1027,9 +1080,7 @@ const ChatBox = ({
 
           autoTTSResponse && finishSegmentedAudio();
         },
-        (err) => {
-          console.log(err);
-        }
+        () => {}
       )();
     }
   );
@@ -1255,9 +1306,28 @@ const ChatBox = ({
   useEffect(() => {
     setQuestionGuide([]);
     setValue('chatStarted', false);
-    resumedChatIdRef.current = undefined;
-    abortRequest('leave');
+    resumedChatTargetRef.current = undefined;
+    // abortRequest('leave');
+
+    return () => {
+      abortRequest('leave');
+    };
   }, [chatId, appId, abortRequest, setValue]);
+
+  useEffect(() => {
+    if (
+      !shouldForceScrollAfterRecordsLoaded({
+        isChatRecordsLoaded,
+        targetKey: chatScrollTargetKey,
+        lastScrolledTargetKey: lastRecordsLoadedScrollTargetRef.current
+      })
+    ) {
+      return;
+    }
+
+    lastRecordsLoadedScrollTargetRef.current = chatScrollTargetKey;
+    scrollToBottom('auto');
+  }, [chatScrollTargetKey, isChatRecordsLoaded, scrollToBottom]);
 
   useEffect(() => {
     if (
@@ -1267,20 +1337,25 @@ const ChatBox = ({
       !appId ||
       !chatId ||
       isChatting ||
+      chatBoxData.appId !== appId ||
+      chatBoxData.chatId !== chatId ||
       chatBoxData.chatGenerateStatus !== ChatGenerateStatusEnum.generating ||
-      resumedChatIdRef.current === chatId
+      resumedChatTargetRef.current === `${appId}:${chatId}`
     ) {
       return;
     }
 
-    resumedChatIdRef.current = chatId;
+    resumedChatTargetRef.current = `${appId}:${chatId}`;
 
+    const resumeForAppId = appId;
     const resumeForChatId = chatId;
     const responseChatId = resumeTargetAiDataId ?? getNanoid(24);
     const controller = new AbortController();
     resumeController.current = controller;
     scrollToBottom('auto');
+    scrollToBottom('auto', 100);
     let resumeFinalStatus = ChatGenerateStatusEnum.done;
+    let hasPreparedResumeAiRecord = false;
 
     (async () => {
       try {
@@ -1290,7 +1365,7 @@ const ChatBox = ({
           outLinkAuthData,
           controller,
           onResumeUnavailable: () => {
-            if (resumeForChatId !== activeChatIdRef.current) return;
+            if (!isActiveResumeTarget({ appId: resumeForAppId, chatId: resumeForChatId })) return;
             resumeFinalStatus = ChatGenerateStatusEnum.generating;
             upsertResumeAiPlaceholder(
               responseChatId,
@@ -1299,15 +1374,18 @@ const ChatBox = ({
             );
           },
           onmessage: (message) => {
-            if (resumeForChatId !== activeChatIdRef.current) return;
+            if (!isActiveResumeTarget({ appId: resumeForAppId, chatId: resumeForChatId })) return;
             if (shouldCreateResumeAiPlaceholder(message.event)) {
-              upsertResumeAiPlaceholder(responseChatId);
+              upsertResumeAiPlaceholder(responseChatId, '', ChatStatusEnum.loading, {
+                resetExistingValue: !hasPreparedResumeAiRecord
+              });
+              hasPreparedResumeAiRecord = true;
             }
             generatingMessage(message);
           }
         });
 
-        if (resumeForChatId !== activeChatIdRef.current) return;
+        if (!isActiveResumeTarget({ appId: resumeForAppId, chatId: resumeForChatId })) return;
 
         if (completedChat) {
           resumeFinalStatus = completedChat.chatGenerateStatus;
@@ -1317,6 +1395,8 @@ const ChatBox = ({
               status: ChatStatusEnum.finish
             }))
           );
+          scrollToBottom('auto');
+          scrollToBottom('auto', 100);
           return;
         }
 
@@ -1360,9 +1440,10 @@ const ChatBox = ({
 
           return next;
         });
+        scrollToBottom('auto');
       } catch (error) {
         if (controller.signal.aborted) return;
-        if (resumeForChatId !== activeChatIdRef.current) return;
+        if (!isActiveResumeTarget({ appId: resumeForAppId, chatId: resumeForChatId })) return;
 
         const isStreamError = (error as ResumeStreamErrorType | undefined)?.isStreamError === true;
         resumeFinalStatus = isStreamError
@@ -1397,6 +1478,7 @@ const ChatBox = ({
 
           return next;
         });
+        scrollToBottom('auto');
 
         if (isStreamError) {
           toast({
@@ -1407,8 +1489,13 @@ const ChatBox = ({
           });
         }
       } finally {
-        resumeController.current = undefined;
-        const finishedInActiveChat = activeChatIdRef.current === resumeForChatId;
+        if (resumeController.current === controller) {
+          resumeController.current = undefined;
+        }
+        const finishedInActiveChat = isActiveResumeTarget({
+          appId: resumeForAppId,
+          chatId: resumeForChatId
+        });
         const leftWhileResuming =
           controller.signal.aborted && isAbortByLeave(controller.signal.reason);
 
@@ -1417,7 +1504,7 @@ const ChatBox = ({
         }
 
         setChatBoxData((state) =>
-          state.chatId === resumeForChatId
+          state.appId === resumeForAppId && state.chatId === resumeForChatId
             ? {
                 ...state,
                 chatGenerateStatus: resumeFinalStatus,
@@ -1427,20 +1514,23 @@ const ChatBox = ({
         );
 
         if (finishedInActiveChat) {
+          scrollToBottom('auto', 100);
           void postMarkChatRead({
-            appId,
+            appId: resumeForAppId,
             chatId: resumeForChatId,
             ...outLinkAuthData
           })
             .catch(() => {})
             .finally(() => {
               syncSidebarChatGenerateStatus(resumeFinalStatus, {
+                targetAppId: resumeForAppId,
                 hasBeenRead: true,
                 targetChatId: resumeForChatId
               });
             });
         } else {
           syncSidebarChatGenerateStatus(resumeFinalStatus, {
+            targetAppId: resumeForAppId,
             hasBeenRead: false,
             targetChatId: resumeForChatId
           });
@@ -1454,9 +1544,12 @@ const ChatBox = ({
     appId,
     chatId,
     isChatting,
+    chatBoxData.appId,
+    chatBoxData.chatId,
     chatBoxData.chatGenerateStatus,
     generatingMessage,
     hasMeaningfulAiOutput,
+    isActiveResumeTarget,
     getResumeUnavailablePlaceholderText,
     outLinkAuthData,
     resumeTargetAiDataId,
@@ -1672,8 +1765,6 @@ const ChatBox = ({
     return result;
   }, [chatType, chatRecords, expandedDeletedGroups]);
   //chat history
-  const hasPlanCheck =
-    lastInteractive?.type === 'agentPlanCheck' && !lastInteractive.params.confirmed;
   const RecordsBox = useMemo(() => {
     return (
       <Box id={'history'}>

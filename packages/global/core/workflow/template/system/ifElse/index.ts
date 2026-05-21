@@ -1,4 +1,4 @@
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 import {
   FlowNodeTemplateTypeEnum,
   NodeInputKeyEnum,
@@ -24,7 +24,7 @@ export const IfElseNode: FlowNodeTemplateType = {
   name: i18nT('workflow:condition_checker'),
   intro: i18nT('workflow:execute_different_branches_based_on_conditions'),
   showStatus: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/tfswitch/',
+  courseUrl: '/guide/build/workflow/nodes/tfswitch',
   inputs: [
     {
       key: NodeInputKeyEnum.ifElseList,

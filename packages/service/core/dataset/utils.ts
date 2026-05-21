@@ -1,11 +1,11 @@
 import { authDatasetByTmbId } from '../../support/permission/dataset/auth';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { S3Sources } from '../../common/s3/contracts/type';
-import { getS3DatasetSource, S3DatasetSource } from '../../common/s3/sources/dataset';
-import { getS3ChatSource } from '../../common/s3/sources/chat';
 import { jwtSignS3DownloadToken, isS3ObjectKey } from '../../common/s3/utils';
 import { getLogger, LogCategories } from '../../common/logger';
 import { S3Buckets } from '../../common/s3/config/constants';
+import { getVlmModelList, isImageEmbeddingModel } from '../ai/model';
+import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.FILE);
 
@@ -67,7 +67,10 @@ export function replaceS3KeyToPreviewUrl(documentQuoteText: string, expiredTime:
   for (const match of matches.slice().reverse()) {
     const [full, bang, alt, objectKey] = match;
 
-    if (isS3ObjectKey(objectKey, 'dataset') || isS3ObjectKey(objectKey, 'chat')) {
+    const allowedKeys: (keyof typeof S3Sources)[] = ['dataset', 'chat', 'temp'];
+    const allowedKeysGuard = allowedKeys.some((key) => isS3ObjectKey(objectKey, key));
+
+    if (allowedKeysGuard) {
       const url = jwtSignS3DownloadToken({
         objectKey,
         bucketName: S3Buckets.private,
@@ -81,3 +84,46 @@ export function replaceS3KeyToPreviewUrl(documentQuoteText: string, expiredTime:
 
   return content;
 }
+
+const getAvailableDatasetVlmModel = (vlmModel?: string) => {
+  if (!vlmModel) return;
+
+  const vlmModelList = getVlmModelList();
+
+  return vlmModelList.find((item) => item.model === vlmModel || item.name === vlmModel);
+};
+
+export const getDatasetImageIndexCapability = ({
+  vectorModel,
+  vlmModel
+}: {
+  vectorModel?: string;
+  vlmModel?: string;
+}) => {
+  const availableVlmModel = getAvailableDatasetVlmModel(vlmModel);
+  const supportVlm = !!availableVlmModel;
+  const supportImageEmbedding = isImageEmbeddingModel(vectorModel);
+
+  return {
+    availableVlmModel,
+    supportVlm,
+    supportImageEmbedding,
+    supportImageIndex: supportVlm || supportImageEmbedding
+  };
+};
+
+export const getDatasetImageTrainingMode = ({
+  supportVlm,
+  supportImageIndex,
+  imageId,
+  hasMarkdownImages
+}: {
+  supportVlm: boolean;
+  supportImageIndex: boolean;
+  imageId?: string;
+  hasMarkdownImages: boolean;
+}) => {
+  if (supportVlm && imageId) return TrainingModeEnum.imageParse;
+  if (supportImageIndex && hasMarkdownImages) return TrainingModeEnum.image;
+  return TrainingModeEnum.chunk;
+};

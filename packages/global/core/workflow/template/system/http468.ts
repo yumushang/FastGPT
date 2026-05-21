@@ -13,7 +13,7 @@ import {
 } from '../../constants';
 import { Input_Template_DynamicInput } from '../input';
 import { Output_Template_AddOutput } from '../output';
-import { i18nT } from '../../../../../web/i18n/utils';
+import { i18nT } from '../../../../common/i18n/utils';
 
 export const HttpNode468: FlowNodeTemplateType = {
   id: FlowNodeTypeEnum.httpRequest468,
@@ -29,7 +29,7 @@ export const HttpNode468: FlowNodeTemplateType = {
   showStatus: true,
   isTool: true,
   catchError: false,
-  courseUrl: '/introduction/guide/dashboard/workflow/http/',
+  courseUrl: '/guide/build/workflow/nodes/http',
   inputs: [
     {
       ...Input_Template_DynamicInput,

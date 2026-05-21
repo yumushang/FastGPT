@@ -108,6 +108,31 @@ FastGPT 是一个 AI Agent 构建平台,通过 Flow 提供开箱即用的数据�
 
 [FastGPT 代码规范](./.codex/code/syntax.md)
 
+### API 入参校验
+
+- 编写或修改 NextJS API 路由时，如果需要校验接口入参（`req.body`、`req.query`、`req.params`），必须使用 `parseApiInput`，不要直接写 `SomeSchema.parse(req.body)`、`SomeSchema.parse(req.query)` 或 `SomeSchema.parse(req.params)`。
+- `parseApiInput` 从 `@fastgpt/service/common/zod/requestParseError` 导入，用法示例：
+
+```ts
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+
+const { body, query } = parseApiInput({
+  req,
+  bodySchema: CreateSomethingBodySchema,
+  querySchema: GetSomethingQuerySchema
+});
+```
+
+- 这个 helper 只用于 API 边界的请求入参校验。内部业务数据、数据库记录、模型返回、工具调用参数等 schema 校验仍使用普通 `Schema.parse(...)`，因为这些错误应按内部 bug 上报。
+- 相关设计见 [Zod 请求入参错误降噪设计](./.codex/design/api/zod-request-parse-error-handling.md)。
+
+### 函数注释
+
+- 编写或拆分函数时，必须关注函数注释。对导出函数、核心业务函数、hook、复杂工具函数、跨模块复用函数，优先使用 `/** ... */` 形式补充函数级注释。
+- 函数注释应说明函数职责、输入输出约定、关键分支、边界行为和设计原因，尤其是容易误解的计费、权限、requestId、错误处理、流式响应、缓存、并发、兼容逻辑。
+- 避免写无意义注释，例如只复述“设置变量”“返回结果”。如果函数逻辑简单且语义已经完全由命名表达，可以不写冗余注释。
+- 对复杂函数内部的关键判断，也应补充简短中文注释，说明为什么这样处理，而不是逐行解释代码。
+
 ## 运行要求
 
 ### 性格

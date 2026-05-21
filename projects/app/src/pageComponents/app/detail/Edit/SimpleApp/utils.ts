@@ -30,7 +30,7 @@ import {
   AiChatQuoteTemplate
 } from '@fastgpt/global/core/workflow/template/system/aiChat/index';
 import { DatasetSearchModule } from '@fastgpt/global/core/workflow/template/system/datasetSearch';
-import { i18nT } from '@fastgpt/web/i18n/utils';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import {
   Input_Template_File_Link,
   Input_Template_UserChatInput
@@ -80,6 +80,10 @@ export const appWorkflow2Form = ({
       defaultAppForm.aiSettings.aiChatReasoning = findInputValueByKey(
         node.inputs,
         NodeInputKeyEnum.aiChatReasoning
+      );
+      defaultAppForm.aiSettings.aiChatReasoningEffort = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.aiChatReasoningEffort
       );
       defaultAppForm.aiSettings.aiChatTopP = findInputValueByKey(
         node.inputs,
@@ -339,6 +343,13 @@ export function form2AppWorkflow(
           value: formData.aiSettings.aiChatReasoning
         },
         {
+          key: NodeInputKeyEnum.aiChatReasoningEffort,
+          renderTypeList: [FlowNodeInputTypeEnum.hidden],
+          label: '',
+          valueType: WorkflowIOValueTypeEnum.string,
+          value: formData.aiSettings.aiChatReasoningEffort
+        },
+        {
           key: NodeInputKeyEnum.aiChatTopP,
           renderTypeList: [FlowNodeInputTypeEnum.hidden],
           label: '',
@@ -374,7 +385,7 @@ export function form2AppWorkflow(
     return {
       nodeId: datasetNodeId,
       name: t(DatasetSearchModule.name),
-      intro: t('app:dataset_search_tool_description'),
+      intro: DatasetSearchModule.intro,
       avatar: DatasetSearchModule.avatar,
       flowNodeType: DatasetSearchModule.flowNodeType,
       showStatus: true,
@@ -465,6 +476,8 @@ export function form2AppWorkflow(
         },
         {
           ...Input_Template_UserChatInput,
+          key: NodeInputKeyEnum.datasetSearchInput,
+          valueType: WorkflowIOValueTypeEnum.arrayString,
           toolDescription: i18nT('workflow:content_to_search'),
           value: question
         }
@@ -492,7 +505,10 @@ export function form2AppWorkflow(
     return {
       nodes: [
         aiChatTemplate(formData),
-        datasetNodeTemplate(formData, [workflowStartNodeId, 'userChatInput'])
+        datasetNodeTemplate(formData, [
+          [workflowStartNodeId, NodeOutputKeyEnum.userChatInput],
+          [workflowStartNodeId, NodeOutputKeyEnum.userFiles]
+        ])
       ],
       edges: [
         {
@@ -688,6 +704,13 @@ export function form2AppWorkflow(
               label: '',
               valueType: WorkflowIOValueTypeEnum.boolean,
               value: formData.aiSettings.aiChatReasoning
+            },
+            {
+              key: NodeInputKeyEnum.aiChatReasoningEffort,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.string,
+              value: formData.aiSettings.aiChatReasoningEffort
             }
           ],
           outputs: ToolCallNode.outputs

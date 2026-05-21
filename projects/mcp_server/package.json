@@ -14,17 +14,19 @@
     "mcp_test": "npx @modelcontextprotocol/inspector"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=20.19.0",
     "pnpm": "10.x"
   },
   "dependencies": {
     "@fastgpt/global": "workspace:*",
-    "@fastgpt-sdk/logger": "workspace:*",
+    "@fastgpt-sdk/otel": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@t3-oss/env-core": "catalog:",
     "chalk": "catalog:",
     "dayjs": "catalog:",
     "dotenv": "^16.5.0",
-    "express": "catalog:"
+    "express": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/express": "^5.0.1"

@@ -1,10 +1,9 @@
 import { UsageItemTypeEnum, UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
 import { createUsage, concatUsage } from '@fastgpt/service/support/wallet/usage/controller';
 import { formatModelChars2Points } from '@fastgpt/service/support/wallet/usage/utils';
-import { i18nT } from '@fastgpt/web/i18n/utils';
-import { getDefaultTTSModel } from '@fastgpt/service/core/ai/model';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
+import { getDefaultSTTModel } from '@fastgpt/service/core/ai/model';
 import type { UsageItemType } from '@fastgpt/global/support/wallet/usage/type';
-import type { HelperBotTypeEnumType } from '@fastgpt/global/core/chat/helperBot/type';
 
 export const pushHelperBotUsage = ({
   teamId,
@@ -246,7 +245,7 @@ export const pushWhisperUsage = ({
   tmbId: string;
   duration: number;
 }) => {
-  const whisperModel = getDefaultTTSModel();
+  const whisperModel = getDefaultSTTModel();
 
   if (!whisperModel) return;
 
@@ -281,7 +280,8 @@ export const pushDatasetTestUsage = ({
   source = UsageSourceEnum.fastgpt,
   embUsage,
   rerankUsage,
-  extensionUsage
+  extensionUsage,
+  imageCaptionUsage
 }: {
   teamId: string;
   tmbId: string;
@@ -300,6 +300,11 @@ export const pushDatasetTestUsage = ({
     outputTokens: number;
     embeddingTokens: number;
     embeddingModel: string;
+  };
+  imageCaptionUsage?: {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
   };
 }) => {
   const list: UsageItemType[] = [];
@@ -358,6 +363,21 @@ export const pushDatasetTestUsage = ({
       amount: totalPoints,
       model: modelName,
       inputTokens: rerankUsage.inputTokens
+    });
+  }
+  if (imageCaptionUsage) {
+    const { totalPoints, modelName } = formatModelChars2Points({
+      model: imageCaptionUsage.model,
+      inputTokens: imageCaptionUsage.inputTokens,
+      outputTokens: imageCaptionUsage.outputTokens
+    });
+    points += totalPoints;
+    list.push({
+      moduleName: i18nT('account_usage:image_parse'),
+      amount: totalPoints,
+      model: modelName,
+      inputTokens: imageCaptionUsage.inputTokens,
+      outputTokens: imageCaptionUsage.outputTokens
     });
   }
 

@@ -5,7 +5,7 @@ import {
   NodeInputKeyEnum,
   WorkflowIOValueTypeEnum
 } from '../../../constants';
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 
 export const VariableUpdateNode: FlowNodeTemplateType = {
   id: FlowNodeTypeEnum.variableUpdate,
@@ -20,7 +20,7 @@ export const VariableUpdateNode: FlowNodeTemplateType = {
   intro: i18nT('workflow:update_specified_node_output_or_global_variable'),
   showStatus: false,
   isTool: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/variable_update/',
+  courseUrl: '/guide/build/workflow/nodes/variable_update',
   inputs: [
     {
       key: NodeInputKeyEnum.updateList,

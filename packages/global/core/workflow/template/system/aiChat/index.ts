@@ -19,7 +19,7 @@ import {
   Input_Template_UserChatInput,
   Input_Template_File_Link
 } from '../../input';
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 import { Output_Template_Error_Message } from '../../output';
 
 export const AiChatQuoteRole = {
@@ -55,7 +55,7 @@ export const AiChatModule: FlowNodeTemplateType = {
   intro: i18nT('workflow:template.ai_chat_intro'),
   showStatus: true,
   isTool: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/ai_chat/',
+  courseUrl: '/guide/build/workflow/nodes/ai_chat',
   version: '4.9.7',
   catchError: false,
   inputs: [
@@ -97,6 +97,12 @@ export const AiChatModule: FlowNodeTemplateType = {
       label: '',
       valueType: WorkflowIOValueTypeEnum.boolean,
       value: true
+    },
+    {
+      key: NodeInputKeyEnum.aiChatReasoningEffort,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.string
     },
     {
       key: NodeInputKeyEnum.aiChatTopP,

@@ -10,7 +10,7 @@ import {
   NodeOutputKeyEnum,
   WorkflowIOValueTypeEnum
 } from '../../../constants';
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 import {
   Input_Template_Children_Node_List,
   Input_Template_NESTED_NODE_OFFSET,
@@ -30,7 +30,7 @@ export const ParallelRunNode: FlowNodeTemplateType = {
   name: i18nT('workflow:parallel_run'),
   intro: i18nT('workflow:intro_parallel_run'),
   showStatus: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/parallel_run/',
+  courseUrl: '/guide/build/workflow/nodes/parallel_run',
   inputs: [
     {
       key: NodeInputKeyEnum.nestedInputArray,

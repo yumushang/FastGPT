@@ -1,7 +1,8 @@
 import type { NextConfig } from 'next';
 import path from 'path';
 
-const basePath = process.env.NEXT_PUBLIC_BASE_URL || undefined;
+import { webEnv } from '@fastgpt/web/env';
+import { appEnv } from './src/env';
 
 const securityHeaders = [
   {
@@ -36,7 +37,12 @@ const optimizedPackageImports = [
 ];
 
 const nextConfig: NextConfig = {
-  basePath,
+  basePath: webEnv.NEXT_PUBLIC_BASE_URL || undefined,
+  env: {
+    SYSTEM_NAME: appEnv.SYSTEM_NAME,
+    SYSTEM_DESCRIPTION: appEnv.SYSTEM_DESCRIPTION,
+    SYSTEM_FAVICON: appEnv.SYSTEM_FAVICON
+  },
   i18n: {
     defaultLocale: 'en',
     locales: ['en', 'zh-CN', 'zh-Hant'],
@@ -81,16 +87,15 @@ const nextConfig: NextConfig = {
     // 按页面拆分 CSS chunk，减少首屏 CSS 体积
     cssChunking: 'strict',
     // 减少内存占用
-    memoryBasedWorkersCount: true
+    memoryBasedWorkersCount: true,
+
+    turbopackFileSystemCacheForBuild: false,
+    turbopackFileSystemCacheForDev: false
   },
   outputFileTracingRoot: path.join(__dirname, '../../'),
   // Exclude build-time-only packages from standalone output file tracing
   outputFileTracingExcludes: {
     '*': [
-      // Rspack bindings - only used in dev, not needed at runtime
-      'node_modules/@next/rspack-binding-*/**',
-      'node_modules/@rspack/binding-*/**',
-      'node_modules/next-rspack/**',
       // GNU platform binaries - Alpine uses musl only
       'node_modules/**/*-linux-x64-gnu*/**',
       // typescript - build-time only

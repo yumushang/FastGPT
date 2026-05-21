@@ -458,7 +458,7 @@ const ToolkitMarketplace = ({ marketplaceUrl }: { marketplaceUrl: string }) => {
               {feConfigs?.docUrl && (
                 <Button
                   onClick={() => {
-                    const url = getDocPath('/introduction/guide/plugins/dev_system_tool');
+                    const url = getDocPath('/guide/build/tools/system-plugins/dev_system_tool');
                     if (url) {
                       window.open(url, '_blank');
                     }
@@ -749,10 +749,12 @@ const ToolkitMarketplace = ({ marketplaceUrl }: { marketplaceUrl: string }) => {
 };
 
 export async function getServerSideProps(content: any) {
+  const { appEnv } = await import('@/env');
+
   return {
     props: {
       ...(await serviceSideProps(content, ['app'])),
-      marketplaceUrl: process.env.MARKETPLACE_URL || 'https://marketplace.fastgpt.cn'
+      marketplaceUrl: appEnv.MARKETPLACE_URL
     }
   };
 }

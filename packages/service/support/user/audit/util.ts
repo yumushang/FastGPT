@@ -1,7 +1,7 @@
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { DatasetTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { AgentSkillTypeEnum } from '@fastgpt/global/core/agentSkills/constants';
-import { i18nT } from '../../../../web/i18n/utils';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { MongoTeamAudit } from './schema';
 import type {
   AdminAuditEventEnum,
@@ -43,6 +43,7 @@ export function getI18nDatasetType(type: DatasetTypeEnum | string): string {
   if (type === DatasetTypeEnum.apiDataset) return i18nT('account_team:dataset.api_file');
   if (type === DatasetTypeEnum.feishu) return i18nT('account_team:dataset.feishu_dataset');
   if (type === DatasetTypeEnum.yuque) return i18nT('account_team:dataset.yuque_dataset');
+  if (type === DatasetTypeEnum.dingtalk) return i18nT('account_team:dataset.dingtalk_dataset');
   return i18nT('common:UnKnow');
 }
 

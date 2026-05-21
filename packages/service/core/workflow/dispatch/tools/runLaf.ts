@@ -3,7 +3,6 @@ import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workfl
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { axios } from '../../../../common/api/axios';
 import { valueTypeFormat } from '@fastgpt/global/core/workflow/runtime/utils';
-import { SERVICE_LOCAL_HOST } from '../../../../common/system/tools';
 import { type DispatchNodeResultType } from '@fastgpt/global/core/workflow/runtime/type';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { getLogger, LogCategories } from '../../../../common/logger';
@@ -30,7 +29,7 @@ export const dispatchLafRequest = async (props: LafRequestProps): Promise<LafRes
     runningAppInfo: { id: appId },
     chatId,
     responseChatItemId,
-    variables,
+    variableState,
     node: { outputs },
     histories,
     params: {
@@ -39,6 +38,7 @@ export const dispatchLafRequest = async (props: LafRequestProps): Promise<LafRes
       ...body
     }
   } = props;
+  const variables = variableState.toRuntimeRecord();
 
   if (!httpReqUrl) {
     return Promise.reject('Http url is empty');
@@ -122,7 +122,6 @@ async function fetchData({
 }): Promise<Record<string, any>> {
   const { data: response } = await axios({
     method,
-    baseURL: `http://${SERVICE_LOCAL_HOST}`,
     url,
     headers: {
       'Content-Type': 'application/json'

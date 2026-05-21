@@ -14,6 +14,7 @@ import {
 import {
   ApiDatasetServerSchema,
   APIFileServerSchema,
+  DingtalkServerSchema,
   FeishuServerSchema,
   YuqueServerSchema
 } from './apiDataset/type';
@@ -93,7 +94,7 @@ export const DatasetSchema = z
 
     deleteTime: z.coerce.date().nullish().meta({ description: '删除时间' }),
 
-    autoSync: z.boolean().optional().meta({ description: '自动同步', deprecated: true }),
+    autoSync: z.boolean().optional().meta({ description: '自动同步' }),
     externalReadUrl: z.string().optional().meta({ description: '外部读取 URL', deprecated: true }),
     defaultPermission: z.number().optional().meta({ description: '默认权限', deprecated: true }),
     apiServer: APIFileServerSchema.optional().meta({
@@ -106,6 +107,10 @@ export const DatasetSchema = z
     }),
     yuqueServer: YuqueServerSchema.optional().meta({
       description: '语雀服务器配置',
+      deprecated: true
+    }),
+    dingtalkServer: DingtalkServerSchema.optional().meta({
+      description: '钉钉知识库配置',
       deprecated: true
     })
   })
@@ -166,7 +171,10 @@ export const DatasetDataIndexItemSchema = z.object({
     .default(DatasetDataIndexTypeEnum.custom)
     .meta({ description: '索引类型' }),
   dataId: z.string().meta({ description: 'vectorDB ID' }),
-  text: z.string().meta({ description: '索引文本' })
+  text: z.string().meta({
+    description: `默认就是索引的文本内容，特殊的：
+imageEmbedding - 图片的 objectKey/url`
+  })
 });
 const DatasetDataIndexOptionalSchema = DatasetDataIndexItemSchema.omit({ dataId: true }).extend({
   dataId: z.string().optional().meta({
@@ -332,6 +340,7 @@ export const DatasetDataItemSchema = DatasetDataFieldSchema.extend({
   sourceId: z.string().optional().meta({ description: '来源 ID' }),
   chunkIndex: z.number().meta({ description: '块索引' }),
   indexes: z.array(DatasetDataIndexItemSchema).meta({ description: '向量索引' }),
+  imageDescMap: z.record(z.string(), z.string()).optional().meta({ description: '图片描述映射' }),
   isOwner: z.boolean().meta({ description: '是否为 owner' })
 });
 export type DatasetDataItemType = z.infer<typeof DatasetDataItemSchema>;

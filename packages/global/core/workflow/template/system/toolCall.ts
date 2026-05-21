@@ -17,7 +17,7 @@ import {
   Input_Template_UserChatInput
 } from '../input';
 import { chatNodeSystemPromptTip, systemPromptTip } from '../tip';
-import { i18nT } from '../../../../../web/i18n/utils';
+import { i18nT } from '../../../../common/i18n/utils';
 import { Input_Template_File_Link } from '../input';
 import { Output_Template_Error_Message } from '../output';
 
@@ -34,7 +34,7 @@ export const ToolCallNode: FlowNodeTemplateType = {
   intro: i18nT('workflow:template.agent_intro'),
   showStatus: true,
   catchError: false,
-  courseUrl: '/introduction/guide/dashboard/workflow/tool/',
+  courseUrl: '/guide/build/workflow/nodes/tool',
   version: '4.9.2',
   inputs: [
     Input_Template_SettingAiModel,
@@ -70,6 +70,12 @@ export const ToolCallNode: FlowNodeTemplateType = {
       label: '',
       valueType: WorkflowIOValueTypeEnum.boolean,
       value: true
+    },
+    {
+      key: NodeInputKeyEnum.aiChatReasoningEffort,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.string
     },
     {
       key: NodeInputKeyEnum.aiChatTopP,

@@ -1,21 +1,51 @@
+import type { ReasoningEffort } from '@fastgpt/global/core/ai/llm/type';
+import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
+import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
 import { getLLMModel } from '../../../../../ai/model';
+import { defaultUserOpenAIBaseUrl, openaiBaseUrl, openaiBaseKey } from '../../../../../ai/config';
 
 type Model = import('@mariozechner/pi-ai').Model<'openai-completions'>;
 
-const aiProxyBaseUrl = process.env.AIPROXY_API_ENDPOINT
-  ? `${process.env.AIPROXY_API_ENDPOINT}/v1`
-  : undefined;
-const defaultBaseUrl = aiProxyBaseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const defaultApiKey = process.env.AIPROXY_API_TOKEN || process.env.CHAT_API_KEY || '';
+const normalizeBaseUrl = (url?: string) => (url ? url.replace(/\/chat\/completions$/, '') : '');
+const supportedThinkingLevels = new Set<ThinkingLevel>([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh'
+]);
 
-export function buildPiModel(modelNameOrId?: string, useVision?: boolean): Model {
+export function getPiThinkingLevel(
+  modelNameOrId?: string,
+  reasoningEffort?: ReasoningEffort
+): ThinkingLevel {
+  const cfg = getLLMModel(modelNameOrId);
+  if (!cfg?.reasoning || !cfg.reasoningEffort || reasoningEffort === 'none') {
+    return 'off';
+  }
+
+  if (reasoningEffort && supportedThinkingLevels.has(reasoningEffort as ThinkingLevel)) {
+    return reasoningEffort as ThinkingLevel;
+  }
+
+  return 'medium';
+}
+
+export function buildPiModel(
+  modelNameOrId?: string,
+  useVision?: boolean,
+  userKey?: OpenaiAccountType
+): Model {
   const cfg = getLLMModel(modelNameOrId);
   // requestUrl is the full endpoint (e.g. https://api.deepseek.com/chat/completions).
   // pi-ai's openai-completions provider appends /chat/completions automatically,
   // so we strip it to get baseUrl.
-  const rawUrl = cfg?.requestUrl ?? '';
-  const baseUrl = rawUrl ? rawUrl.replace(/\/chat\/completions$/, '') : defaultBaseUrl;
-  const apiKey = cfg?.requestAuth || defaultApiKey;
+  const hasUserOpenAIKey = !!userKey?.key;
+  const baseUrl =
+    normalizeBaseUrl(
+      hasUserOpenAIKey ? userKey?.baseUrl || defaultUserOpenAIBaseUrl : cfg?.requestUrl
+    ) || openaiBaseUrl;
+  const apiKey = hasUserOpenAIKey ? userKey.key : cfg?.requestAuth || openaiBaseKey;
 
   return {
     id: cfg?.model ?? 'gpt-4o',
@@ -35,12 +65,13 @@ export function buildPiModel(modelNameOrId?: string, useVision?: boolean): Model
     compat: {
       supportsDeveloperRole: false,
       supportsStore: false,
+      supportsReasoningEffort: cfg?.reasoningEffort ?? false,
       maxTokensField: 'max_tokens'
     }
   };
 }
 
-export function getModelApiKey(modelNameOrId?: string): string {
+export function getModelApiKey(modelNameOrId?: string, userKey?: OpenaiAccountType): string {
   const cfg = getLLMModel(modelNameOrId);
-  return cfg?.requestAuth || defaultApiKey;
+  return userKey?.key || cfg?.requestAuth || openaiBaseKey || '';
 }

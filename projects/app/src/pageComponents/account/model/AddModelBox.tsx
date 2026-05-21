@@ -687,11 +687,11 @@ const DefaultConfigField = React.memo(function DefaultConfigField({
         resize
         onChange={(e) => {
           if (!e) {
-            setValue('defaultConfig', undefined);
+            setValue('defaultConfig', {}, { shouldDirty: true });
             return;
           }
           try {
-            setValue('defaultConfig', JSON.parse(e.trim()));
+            setValue('defaultConfig', JSON.parse(e.trim()), { shouldDirty: true });
           } catch (error) {
             console.error(error);
           }
@@ -769,6 +769,14 @@ export const ModelEditModal = ({
       }
     });
 
+  const reasoningEnabled = useWatch({ control, name: 'reasoning' });
+  useEffect(() => {
+    // 仅在 reasoning 关闭且 reasoningEffort 实际为 true 时才清，避免挂载即把表单标 dirty
+    if (!reasoningEnabled && getValues('reasoningEffort')) {
+      setValue('reasoningEffort', false, { shouldDirty: false });
+    }
+  }, [reasoningEnabled, getValues, setValue]);
+
   const isCustom = !!modelData.isCustom;
   const isLLMModel = modelData?.type === ModelTypeEnum.llm;
   const isEmbeddingModel = modelData?.type === ModelTypeEnum.embedding;
@@ -830,12 +838,11 @@ export const ModelEditModal = ({
         data.priceTiers = priceTiers as any;
       }
 
-      for (const key in data) {
-        // @ts-ignore
-        const val = data[key];
+      const modelData = data as Record<string, unknown>;
+      for (const key of Object.keys(modelData)) {
+        const val = modelData[key];
         if (val === null || val === undefined || Number.isNaN(val)) {
-          // @ts-ignore
-          data[key] = '';
+          modelData[key] = '';
         }
       }
 
@@ -907,7 +914,7 @@ export const ModelEditModal = ({
       headerPx={'32px'}
     >
       <ModalBody px={'32px'} py={0}>
-        <Section title={t('account:model.basic_config_section')}>
+        <Section key={key} title={t('account:model.basic_config_section')}>
           <Flex direction={['column', 'row']} gap={[6, 8]} alignItems={['stretch', 'flex-start']}>
             <Grid flex={'1 0 0'} templateColumns={['1fr', 'repeat(2, minmax(0, 1fr))']} gap={4}>
               <Field label={t('account:model.model_id')} tip={t('account:model.model_id_tip')}>
@@ -1074,6 +1081,13 @@ export const ModelEditModal = ({
                 field={'reasoning'}
                 register={register}
               />
+              {reasoningEnabled && (
+                <SwitchField
+                  label={t('account:model.reasoning_effort')}
+                  field={'reasoningEffort'}
+                  register={register}
+                />
+              )}
               {feConfigs?.isPlus && (
                 <SwitchField
                   label={t('account:model.censor')}
@@ -1082,6 +1096,19 @@ export const ModelEditModal = ({
                   register={register}
                 />
               )}
+            </Grid>
+          </Section>
+        )}
+
+        {isEmbeddingModel && (
+          <Section title={t('account:model.feature_config_section')}>
+            <Grid templateColumns={['1fr', 'repeat(2, minmax(0, 1fr))']} gap={4}>
+              <SwitchField
+                label={t('account:model.vision')}
+                tip={t('account:model.embedding_vision_tip')}
+                field={'vision'}
+                register={register}
+              />
             </Grid>
           </Section>
         )}
@@ -1134,17 +1161,21 @@ export const ModelEditModal = ({
                 />
               </Field>
             )}
-            {(isLLMModel || isEmbeddingModel) && (
+            {(isLLMModel || isEmbeddingModel || isRerankModel) && (
               <DefaultConfigField
                 control={control}
                 setValue={setValue}
                 label={
-                  isLLMModel ? t('account:model.default_config') : t('account:model.defaultConfig')
+                  isEmbeddingModel
+                    ? t('account:model.defaultConfig')
+                    : t('account:model.default_config')
                 }
                 tip={
-                  isLLMModel
-                    ? t('account:model.default_config_tip')
-                    : t('account:model.defaultConfig_tip')
+                  isEmbeddingModel
+                    ? t('account:model.defaultConfig_tip')
+                    : isRerankModel
+                      ? t('account:model.rerank_default_config_tip')
+                      : t('account:model.default_config_tip')
                 }
               />
             )}

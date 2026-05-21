@@ -42,7 +42,7 @@ export function SwitcherDropdown({
   keepSidebarOpenOnSelect = false
 }: SwitcherDropdownProps) {
   const [open, setOpen] = useState(false);
-  const { closeOnRedirect } = useSidebar();
+  const closeOnRedirect = useSidebar().closeOnRedirect as { current: boolean };
   const selected = options.find((item) => item.active) ?? options[0];
 
   const selectItem = (item: SwitcherDropdownOption) => {
@@ -79,6 +79,23 @@ export function SwitcherDropdown({
     );
 
     if (item.href) {
+      if (/^https?:\/\//i.test(item.href)) {
+        return (
+          <a
+            key={item.key}
+            href={item.href}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={() => selectItem(item)}
+            className={className}
+            role="option"
+            aria-selected={active}
+          >
+            {content}
+          </a>
+        );
+      }
+
       return (
         <Link
           key={item.key}

@@ -11,14 +11,14 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { ProcessPool } from '../../src/pool/process-pool';
 import { PythonProcessPool } from '../../src/pool/python-process-pool';
-import { config } from '../../src/config';
+import { env, RUNTIME_MEMORY_OVERHEAD_MB } from '../../src/env';
 
 beforeAll(async () => {
   console.log(`\n=== Memory Limit Test Status ===`);
   console.log(`Method: RSS polling (cross-platform)`);
-  console.log(`User configured memory: ${config.maxMemoryMB}MB`);
+  console.log(`User configured memory: ${env.SANDBOX_MAX_MEMORY_MB}MB`);
   console.log(
-    `Actual process limit: ${config.maxMemoryMB + config.RUNTIME_MEMORY_OVERHEAD_MB}MB (${config.maxMemoryMB}MB user + ${config.RUNTIME_MEMORY_OVERHEAD_MB}MB runtime)`
+    `Actual process limit: ${env.SANDBOX_MAX_MEMORY_MB + RUNTIME_MEMORY_OVERHEAD_MB}MB (${env.SANDBOX_MAX_MEMORY_MB}MB user + ${RUNTIME_MEMORY_OVERHEAD_MB}MB runtime)`
   );
   console.log(`=============================\n`);
 });
@@ -41,7 +41,7 @@ describe('内存限制', () => {
     expect(pool.stats.total).toBe(1);
 
     // 实际限制 = 用户配置 + 运行时开销(50MB)
-    const actualLimitMB = config.maxMemoryMB + config.RUNTIME_MEMORY_OVERHEAD_MB;
+    const actualLimitMB = env.SANDBOX_MAX_MEMORY_MB + RUNTIME_MEMORY_OVERHEAD_MB;
 
     const result = await pool.execute({
       code: `async function main() {
@@ -272,7 +272,7 @@ describe('JS 运行时长限制', () => {
     const start = Date.now();
     const result = await pool.execute({
       code: `async function main() {
-        await new Promise(r => setTimeout(r, ${config.maxTimeoutMs + 30000}));
+        await new Promise(r => setTimeout(r, ${env.SANDBOX_MAX_TIMEOUT + 30000}));
         return { done: true };
       }`,
       variables: {}
@@ -282,7 +282,7 @@ describe('JS 运行时长限制', () => {
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/timed out|timeout/i);
     // 实际耗时应在 maxTimeoutMs 附近（加上 2s 余量），不会等到 sleep 结束
-    expect(elapsed).toBeLessThan(config.maxTimeoutMs + 10000);
+    expect(elapsed).toBeLessThan(env.SANDBOX_MAX_TIMEOUT + 10000);
   });
 
   it('在超时范围内完成的代码正常返回', async () => {
@@ -331,14 +331,14 @@ describe('Python 运行时长限制', () => {
 
     const start = Date.now();
     const result = await pool.execute({
-      code: `import time\ndef main():\n    time.sleep(${Math.ceil(config.maxTimeoutMs / 1000) + 30})\n    return {'done': True}`,
+      code: `import time\ndef main():\n    time.sleep(${Math.ceil(env.SANDBOX_MAX_TIMEOUT / 1000) + 30})\n    return {'done': True}`,
       variables: {}
     });
     const elapsed = Date.now() - start;
 
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/timed out|timeout/i);
-    expect(elapsed).toBeLessThan(config.maxTimeoutMs + 10000);
+    expect(elapsed).toBeLessThan(env.SANDBOX_MAX_TIMEOUT + 10000);
   });
 
   it('在超时范围内完成的代码正常返回', async () => {
@@ -387,7 +387,7 @@ describe('JS 网络请求次数限制', () => {
     const result = await pool.execute({
       code: `async function main() {
         let limitError = null;
-        for (let i = 0; i < ${config.maxRequests + 1}; i++) {
+        for (let i = 0; i < ${env.SANDBOX_REQUEST_MAX_COUNT + 1}; i++) {
           try {
             await httpRequest('http://0.0.0.0:1');
           } catch(e) {
@@ -404,7 +404,7 @@ describe('JS 网络请求次数限制', () => {
     expect(result.success).toBe(true);
     const le = result.data?.codeReturn.limitError;
     expect(le).not.toBeNull();
-    expect(le.idx).toBe(config.maxRequests);
+    expect(le.idx).toBe(env.SANDBOX_REQUEST_MAX_COUNT);
     expect(le.msg).toMatch(/limit/i);
   });
 
@@ -453,13 +453,13 @@ describe('Python 网络请求次数限制', () => {
     await pool.init();
 
     const result = await pool.execute({
-      code: `def main():\n    limit_error = None\n    for i in range(${config.maxRequests + 1}):\n        try:\n            http_request('http://0.0.0.0:1')\n        except Exception as e:\n            if 'limit' in str(e).lower():\n                limit_error = {'idx': i, 'msg': str(e)}\n                break\n    return {'limit_error': limit_error}`,
+      code: `def main():\n    limit_error = None\n    for i in range(${env.SANDBOX_REQUEST_MAX_COUNT + 1}):\n        try:\n            http_request('http://0.0.0.0:1')\n        except Exception as e:\n            if 'limit' in str(e).lower():\n                limit_error = {'idx': i, 'msg': str(e)}\n                break\n    return {'limit_error': limit_error}`,
       variables: {}
     });
     expect(result.success).toBe(true);
     const le = result.data?.codeReturn.limit_error;
     expect(le).not.toBeNull();
-    expect(le.idx).toBe(config.maxRequests);
+    expect(le.idx).toBe(env.SANDBOX_REQUEST_MAX_COUNT);
     expect(le.msg.toLowerCase()).toContain('limit');
   });
 
@@ -498,12 +498,12 @@ describe('JS 请求体大小限制', () => {
     await pool.init();
 
     // maxRequestBodySize 单位是 MB，生成超过限制的 body
-    const sizeMB = config.maxRequestBodySize;
+    const sizeMB = env.SANDBOX_REQUEST_MAX_BODY_MB;
     const result = await pool.execute({
       code: `async function main() {
         const bigBody = 'x'.repeat(${sizeMB} * 1024 * 1024 + 1);
         try {
-          await httpRequest('https://example.com', { method: 'POST', body: bigBody });
+          await httpRequest('https://1.1.1.1/cdn-cgi/trace', { method: 'POST', body: bigBody });
           return { blocked: false };
         } catch(e) {
           return { blocked: true, msg: e.message };
@@ -524,7 +524,7 @@ describe('JS 请求体大小限制', () => {
       code: `async function main() {
         const smallBody = JSON.stringify({ data: 'hello' });
         try {
-          await httpRequest('https://example.com', { method: 'POST', body: smallBody });
+          await httpRequest('https://1.1.1.1/cdn-cgi/trace', { method: 'POST', body: smallBody });
           return { sizeOk: true };
         } catch(e) {
           // 网络错误可以接受，但不应该是 body too large
@@ -551,9 +551,9 @@ describe('Python 请求体大小限制', () => {
     pool = new PythonProcessPool(1);
     await pool.init();
 
-    const sizeMB = config.maxRequestBodySize;
+    const sizeMB = env.SANDBOX_REQUEST_MAX_BODY_MB;
     const result = await pool.execute({
-      code: `def main():\n    big_body = 'x' * (${sizeMB} * 1024 * 1024 + 1)\n    try:\n        http_request('https://example.com', method='POST', body=big_body)\n        return {'blocked': False}\n    except Exception as e:\n        return {'blocked': True, 'msg': str(e)}`,
+      code: `def main():\n    big_body = 'x' * (${sizeMB} * 1024 * 1024 + 1)\n    try:\n        http_request('https://1.1.1.1/cdn-cgi/trace', method='POST', body=big_body)\n        return {'blocked': False}\n    except Exception as e:\n        return {'blocked': True, 'msg': str(e)}`,
       variables: {}
     });
     expect(result.success).toBe(true);
@@ -566,7 +566,7 @@ describe('Python 请求体大小限制', () => {
     await pool.init();
 
     const result = await pool.execute({
-      code: `def main():\n    try:\n        http_request('https://example.com', method='POST', body='hello')\n        return {'size_ok': True}\n    except Exception as e:\n        return {'size_ok': 'too large' not in str(e).lower(), 'msg': str(e)}`,
+      code: `def main():\n    try:\n        http_request('https://1.1.1.1/cdn-cgi/trace', method='POST', body='hello')\n        return {'size_ok': True}\n    except Exception as e:\n        return {'size_ok': 'too large' not in str(e).lower(), 'msg': str(e)}`,
       variables: {}
     });
     expect(result.success).toBe(true);

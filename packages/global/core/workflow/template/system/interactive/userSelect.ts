@@ -1,4 +1,4 @@
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 import {
   FlowNodeTemplateTypeEnum,
   NodeInputKeyEnum,
@@ -25,7 +25,7 @@ export const UserSelectNode: FlowNodeTemplateType = {
   name: i18nT('app:workflow.user_select'),
   intro: i18nT(`app:workflow.user_select_tip`),
   isTool: true,
-  courseUrl: '/introduction/guide/dashboard/workflow/user-selection/',
+  courseUrl: '/guide/build/workflow/nodes/user-selection',
   inputs: [
     {
       key: NodeInputKeyEnum.description,

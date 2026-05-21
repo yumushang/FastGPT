@@ -1,4 +1,4 @@
-import { POST } from '../../../common/api/serverRequest';
+import { axiosWithoutSSRF } from '../../../common/api/axios';
 import { getDefaultRerankModel } from '../model';
 import { getAxiosConfig } from '../config';
 import { type RerankModelItemType } from '@fastgpt/global/core/ai/model.schema';
@@ -93,21 +93,24 @@ export async function reRankRecall({
   const { baseUrl, authorization } = getAxiosConfig();
   const start = Date.now();
 
-  const apiResult = await POST<PostReRankResponse>(
-    model.requestUrl ? model.requestUrl : `${baseUrl}/rerank`,
-    {
-      model: model.model,
-      query,
-      documents: documentsTextArray
-    },
-    {
+  // 模型的请求 url，允许是内网
+  const requestUrl = model.requestUrl ? model.requestUrl : `${baseUrl}/rerank`;
+  const requestBody = {
+    model: model.model,
+    query,
+    documents: documentsTextArray,
+    ...model.defaultConfig
+  };
+
+  const apiResult = await axiosWithoutSSRF
+    .post<PostReRankResponse>(requestUrl, requestBody, {
       headers: {
         Authorization: model.requestAuth ? `Bearer ${model.requestAuth}` : authorization,
         ...headers
       },
       timeout: 30000
-    }
-  )
+    })
+    .then((res) => res.data)
     .then(async (data) => {
       if (!data?.results || data?.results?.length === 0) {
         logger.error('Rerank returned empty results', { data });
@@ -122,13 +125,15 @@ export async function reRankRecall({
         logger.info('Rerank completed', { durationMs: time });
       }
 
+      const providerResults = data.results ?? [];
+
       const existsId = new Set<string>();
       const results: {
         id: string;
         score: number;
       }[] = [];
 
-      data.results.forEach((item) => {
+      providerResults.forEach((item) => {
         const chunkId = expandedDocuments[item.index].id;
         const docId = chunkIdToDocIdMap.get(chunkId);
         // 因为 data.results 是从高到低的，如果高分的同一个docId，则低分的不用处理

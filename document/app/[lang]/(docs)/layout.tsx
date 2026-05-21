@@ -11,7 +11,8 @@ import { SidebarKeepOpen } from '@/components/sidebarKeepOpen';
 import { SidebarScrollFix } from '@/components/sidebarScrollFix';
 import { CategorySwitcher } from '@/components/docs/categorySwitcher';
 import { LanguageSwitcher } from '@/components/docs/languageSwitcher';
-import { BookOpen, Code, Lightbulb, CircleHelp, Server } from 'lucide-react';
+import { normalizePageTreeSections } from '@/lib/page-tree';
+import { BookOpen, Code, CircleHelp, Handshake, Server } from 'lucide-react';
 
 export default async function Layout({
   params,
@@ -26,13 +27,8 @@ export default async function Layout({
   const tab = [
     {
       icon: <BookOpen className={iconClass} />,
-      title: t('common:introduction', lang),
-      url: getLocalizedPath('/introduction', lang)
-    },
-    {
-      icon: <Lightbulb className={iconClass} />,
-      title: t('common:use-cases', lang),
-      url: getLocalizedPath('/use-cases', lang)
+      title: t('common:guide', lang),
+      url: getLocalizedPath('/guide', lang)
     },
     {
       icon: <Server className={iconClass} />,
@@ -48,17 +44,25 @@ export default async function Layout({
       icon: <CircleHelp className={iconClass} />,
       title: t('common:faq', lang),
       url: getLocalizedPath('/faq', lang)
+    },
+    {
+      icon: <Handshake className={iconClass} />,
+      title: t('common:businessConsultation', lang),
+      url: 'https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc'
     }
   ];
 
   const tabUrls = tab.map((t) => t.url);
 
   const base = baseOptions(lang);
+  const tree = normalizePageTreeSections(
+    source.pageTree[lang] || source.pageTree[i18n.defaultLanguage]
+  );
 
   return (
     <DocsLayout
       {...base}
-      tree={source.pageTree[lang] || source.pageTree[i18n.defaultLanguage]}
+      tree={tree}
       i18n={false}
       searchToggle={{
         enabled: true,

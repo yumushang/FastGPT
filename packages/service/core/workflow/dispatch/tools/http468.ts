@@ -8,7 +8,6 @@ import {
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import { valueTypeFormat } from '@fastgpt/global/core/workflow/runtime/utils';
 import { type DispatchNodeResultType } from '@fastgpt/global/core/workflow/runtime/type';
 import type {
   ModuleDispatchProps,
@@ -17,14 +16,14 @@ import type {
 import {
   formatVariableValByType,
   getReferenceVariableValue,
-  replaceEditorVariable
+  replaceEditorVariable,
+  valueTypeFormat
 } from '@fastgpt/global/core/workflow/runtime/utils';
 import json5 from 'json5';
 import { JSONPath } from 'jsonpath-plus';
 import { getSecretValue } from '../../../../common/secret/utils';
 import type { StoreSecretValueType } from '@fastgpt/global/common/secret/type';
 import { getLogger, LogCategories } from '../../../../common/logger';
-import { SERVICE_LOCAL_HOST } from '../../../../common/system/tools';
 import { formatHttpError } from '../utils';
 import { isInternalAddress, PRIVATE_URL_TEXT } from '../../../../common/system/utils';
 import { serviceRequestMaxContentLength } from '../../../../common/system/constants';
@@ -67,7 +66,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
     runningAppInfo: { id: appId },
     chatId,
     responseChatItemId,
-    variables,
+    variableState,
     node,
     runtimeNodesMap,
     histories,
@@ -97,7 +96,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
     histories: histories?.slice(-10) || []
   };
   const concatVariables = {
-    ...variables,
+    ...variableState.toRuntimeRecord(),
     ...body,
     ...systemVariables
   };
@@ -178,7 +177,10 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
       if (httpContentType === ContentTypes.json) {
         httpJsonBody = replaceJsonBodyString(
           { text: httpJsonBody },
-          { variables, allVariables, runtimeNodesMap }
+          {
+            allVariables,
+            runtimeNodesMap
+          }
         );
         return json5.parse(httpJsonBody);
       }
@@ -266,7 +268,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
         Object.keys(results).length > 0 ? results : rawResponse
     };
   } catch (error) {
-    logger.warn('HTTP tool request failed', { error });
+    logger.warn('HTTP tool request failed', { error, httpReqUrl });
 
     // @adapt
     if (node.catchError === undefined) {
@@ -304,12 +306,11 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
 export const replaceJsonBodyString = (
   { text, depth = 0 }: { text: string; depth?: number },
   props: {
-    variables: Record<string, any>;
     allVariables: Record<string, any>;
     runtimeNodesMap: Map<string, RuntimeNodeItemType>;
   }
 ) => {
-  const { variables, allVariables, runtimeNodesMap } = props;
+  const { allVariables, runtimeNodesMap } = props;
 
   const MAX_REPLACEMENT_DEPTH = 10;
   const processedVariables = new Set<string>();
@@ -402,7 +403,7 @@ export const replaceJsonBodyString = (
 
     const variableVal = (() => {
       if (nodeId === VARIABLE_NODE_ID) {
-        return variables[id];
+        return allVariables[id];
       }
       // Find upstream node input/output
       const node = runtimeNodesMap.get(nodeId);
@@ -416,7 +417,7 @@ export const replaceJsonBodyString = (
         return getReferenceVariableValue({
           value: input.value,
           nodesMap: runtimeNodesMap,
-          variables
+          variables: allVariables
         });
       }
     })();
@@ -504,10 +505,10 @@ async function fetchData({
     return Promise.reject(PRIVATE_URL_TEXT);
   }
 
+  // 都认为是用户的请求，强制 SSRF 检查
   const { data: response } = await axios({
     method,
     maxContentLength: serviceRequestMaxContentLength,
-    baseURL: `http://${SERVICE_LOCAL_HOST}`,
     url,
     headers: {
       ...headers

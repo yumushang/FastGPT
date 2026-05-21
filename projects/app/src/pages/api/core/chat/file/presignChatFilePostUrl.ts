@@ -3,20 +3,20 @@ import { NextAPI } from '@/service/middleware/entry';
 import type { CreatePostPresignedUrlResponseType } from '@fastgpt/global/common/file/s3/type';
 import { getS3ChatSource } from '@fastgpt/service/common/s3/sources/chat';
 import { getAllowedExtensionsFromFileSelectConfig } from '@fastgpt/service/common/s3/utils/uploadConstraints';
-import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { authChatCrud } from '@/service/support/permission/auth/chat';
 import { authFrequencyLimit } from '@fastgpt/service/common/system/frequencyLimit/utils';
 import { addSeconds } from 'date-fns';
 import { PresignChatFilePostUrlSchema } from '@fastgpt/global/openapi/core/chat/file/api';
 import { getTeamPlanStatus } from '@fastgpt/service/support/wallet/sub/utils';
-import { authApp } from '@fastgpt/service/support/permission/app/auth';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 import { S3ErrEnum } from '@fastgpt/global/common/error/code/s3';
-import { MongoChatSetting } from '@fastgpt/service/core/chat/setting/schema';
+import { serviceEnv } from '@fastgpt/service/env';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 async function handler(req: ApiRequestProps): Promise<CreatePostPresignedUrlResponseType> {
-  const { filename, appId, chatId, outLinkAuthData, fileSelectConfig } =
-    PresignChatFilePostUrlSchema.parse(req.body);
+  const { filename, appId, chatId, outLinkAuthData, fileSelectConfig } = parseApiInput({
+    req,
+    bodySchema: PresignChatFilePostUrlSchema
+  }).body;
 
   const { teamId, uid } = await authChatCrud({
     req,
@@ -26,28 +26,10 @@ async function handler(req: ApiRequestProps): Promise<CreatePostPresignedUrlResp
     ...outLinkAuthData
   });
 
-  const [planStatus, app] = await Promise.all([
-    getTeamPlanStatus({ teamId }),
-    MongoApp.findById(appId, 'chatConfig.fileSelectConfig').lean()
-  ]);
-  const effectiveFileSelectConfig = fileSelectConfig
-    ? await (async () => {
-        const isHomeApp = await MongoChatSetting.exists({ teamId, appId });
+  const planStatus = await getTeamPlanStatus({ teamId });
+  const allowedExtensions = getAllowedExtensionsFromFileSelectConfig(fileSelectConfig);
 
-        if (!isHomeApp) {
-          await authApp({
-            req,
-            authToken: true,
-            appId,
-            per: WritePermissionVal
-          });
-        }
-        return fileSelectConfig;
-      })()
-    : app?.chatConfig?.fileSelectConfig;
-  const allowedExtensions = getAllowedExtensionsFromFileSelectConfig(effectiveFileSelectConfig);
-
-  if (allowedExtensions.length === 0) {
+  if (!serviceEnv.SKIP_FILE_TYPE_CHECK && allowedExtensions.length === 0) {
     return Promise.reject(S3ErrEnum.fileUploadDisabled);
   }
 

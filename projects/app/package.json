@@ -1,7 +1,14 @@
 {
   "name": "@fastgpt/app",
-  "version": "4.14.16",
+  "version": "4.15.0-2",
   "private": false,
+  "browserslist": [
+    "Chrome >= 80",
+    "Edge >= 80",
+    "Firefox >= 74",
+    "Safari >= 13",
+    "ios_saf >= 13"
+  ],
   "scripts": {
     "dev": "pnpm run build:workers && next dev",
     "dev:pro": "pnpm run dev",
@@ -13,10 +20,11 @@
     "test:watch": "vitest -c vitest.config.ts",
     "build:workers": "tsx scripts/build-workers.ts",
     "typecheck": "tsc --noEmit --pretty",
+    "lint": "eslint ./src",
     "build:workers:watch": "tsx scripts/build-workers.ts --watch"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=20.19.0",
     "pnpm": "10.x"
   },
   "dependencies": {
@@ -39,6 +47,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@node-rs/jieba": "catalog:",
     "@scalar/api-reference-react": "^0.8.1",
+    "@t3-oss/env-core": "catalog:",
     "@tanstack/react-query": "catalog:",
     "ahooks": "catalog:",
     "archiver": "^7.0.1",
@@ -61,7 +70,7 @@
     "jszip": "^3.10.1",
     "katex": "0.16.22",
     "lodash": "catalog:",
-    "mermaid": "^10.9.4",
+    "mermaid": "^10.9.6",
     "mime": "catalog:",
     "minio": "catalog:",
     "mongoose": "catalog:",
@@ -85,7 +94,6 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "catalog:",
     "remark-math": "^6.0.0",
-    "request-ip": "catalog:",
     "sass": "^1.58.3",
     "undici": "^7.18.2",
     "use-context-selector": "^1.4.4",
@@ -105,13 +113,11 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@types/react-syntax-highlighter": "^15.5.6",
-    "@types/request-ip": "catalog:",
-    "@typescript-eslint/eslint-plugin": "catalog:",
-    "@typescript-eslint/parser": "catalog:",
-    "eslint": "catalog:",
-    "eslint-config-next": "catalog:",
+    "eslint": "catalog:lint",
+    "eslint-config-next": "catalog:lint",
     "tailwindcss": "^3",
     "tsx": "catalog:",
+    "typescript-eslint": "catalog:lint",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

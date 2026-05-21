@@ -76,7 +76,7 @@ export const ChatCompletionContentPartFileSchema = z.object({
 // FastGPT 自定义扩展：外链文件
 export const ChatCompletionContentPartFileTypeSchema = z.object({
   type: z.literal('file_url'),
-  name: z.string(),
+  name: z.string().optional(),
   url: z.string(),
   key: z.string().optional()
 });
@@ -231,7 +231,16 @@ export type UnStreamResponseType = openai.Chat.Completions.ChatCompletion & {
 
 export const CompletionFinishReasonSchema = z
   .union([
-    z.enum(['error', 'close', 'stop', 'length', 'tool_calls', 'content_filter', 'function_call']),
+    z.enum([
+      'error',
+      'close',
+      'abnormal_close',
+      'stop',
+      'length',
+      'tool_calls',
+      'content_filter',
+      'function_call'
+    ]),
     z.literal(null),
     z.undefined()
   ])
@@ -241,6 +250,14 @@ export type CompletionFinishReason = z.infer<typeof CompletionFinishReasonSchema
 // export type { Stream };
 export * from 'openai';
 export * from 'openai/resources';
+
+// openai v6 把 ChatCompletionTool 拆成 function | custom 联合，FastGPT 内部仅产/消费 function
+import type {
+  ChatCompletionFunctionTool,
+  ChatCompletionReasoningEffort
+} from 'openai/resources/chat/completions';
+export type ChatCompletionTool = ChatCompletionFunctionTool;
+export type ReasoningEffort = ChatCompletionReasoningEffort;
 
 export type PromptTemplateItem = {
   title: string;

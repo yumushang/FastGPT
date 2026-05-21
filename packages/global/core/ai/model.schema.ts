@@ -67,6 +67,7 @@ export const LLMModelItemSchema = PriceTypeSchema.extend(BaseModelItemSchema.sha
   censor: z.boolean().optional(),
   vision: z.boolean().optional(),
   reasoning: z.boolean().optional(),
+  reasoningEffort: z.boolean().optional(),
 
   functionCall: z.boolean(),
   toolChoice: z.boolean(),
@@ -99,6 +100,7 @@ export const EmbeddingModelItemSchema = PriceTypeSchema.extend(BaseModelItemSche
   maxToken: z.number(), // model max token
   weight: z.number(), // training weight
   hidden: z.boolean().optional(), // Disallow creation
+  vision: z.boolean().optional(), // Support image embedding
   normalization: z.boolean().optional(), // normalization processing
   batchSize: z.number().optional(), // batch request size
   defaultConfig: z.record(z.string(), z.any()).optional(), // post request config
@@ -109,7 +111,8 @@ export type EmbeddingModelItemType = z.infer<typeof EmbeddingModelItemSchema>;
 
 export const RerankModelItemSchema = PriceTypeSchema.extend(BaseModelItemSchema.shape).extend({
   type: z.literal(ModelTypeEnum.rerank),
-  maxToken: z.number().optional() // max input token for rerank query + one document
+  maxToken: z.number().optional(), // max input token for rerank query + one document
+  defaultConfig: z.record(z.string(), z.any()).optional() // post request config
 });
 export type RerankModelItemType = z.infer<typeof RerankModelItemSchema>;
 

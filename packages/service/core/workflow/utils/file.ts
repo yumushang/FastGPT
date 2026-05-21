@@ -3,8 +3,7 @@ import type { UserChatItemValueItemType } from '@fastgpt/global/core/chat/type';
 import { parseUrlToFileType } from './context';
 import { getS3RawTextSource } from '../../../common/s3/sources/rawText';
 import { isInternalAddress, PRIVATE_URL_TEXT } from '../../../common/system/utils';
-import { axios } from '../../../common/api/axios';
-import { serverRequestBaseUrl } from '../../../common/api/serverRequest';
+import { pickOutboundAxios } from '../../../common/api/axios';
 import { S3Buckets } from '../../../common/s3/config/constants';
 import { S3Sources } from '../../../common/s3/contracts/type';
 import {
@@ -18,7 +17,8 @@ import { readFileContentByBuffer } from '../../../common/file/read/utils';
 import { addDays } from 'date-fns';
 import { replaceS3KeyToPreviewUrl } from '../../dataset/utils';
 import { getErrText } from '@fastgpt/global/common/error/utils';
-import { getUserFilesPrompt, injectUserQueryPrompt } from '../../ai/llm/agentLoop/prompt';
+import { getUserFilesPrompt, injectUserQueryPrompt } from '../../ai/llm/prompt';
+import { getAxiosHeaderValue } from '@fastgpt/global/common/axios/utils';
 
 type GetFileProps = {
   requestOrigin?: string;
@@ -112,9 +112,7 @@ export const normalizeReadableFileUrl = ({
 };
 
 export const getFileInfoFromUrl = async ({ teamId, url }: { teamId: string; url: string }) => {
-  // Get file buffer data
-  const response = await axios.get(url, {
-    baseURL: serverRequestBaseUrl,
+  const response = await pickOutboundAxios(url).get(url, {
     responseType: 'arraybuffer'
   });
 
@@ -124,7 +122,7 @@ export const getFileInfoFromUrl = async ({ teamId, url }: { teamId: string; url:
   // Get file name
   const { filename, extension, imageParsePrefix } = (() => {
     if (isChatExternalUrl) {
-      const contentDisposition = response.headers['content-disposition'] || '';
+      const contentDisposition = getAxiosHeaderValue(response.headers['content-disposition']) || '';
       const matchFilename = parseContentDispositionFilename(contentDisposition);
       const filename = matchFilename || urlObj.pathname.split('/').pop() || 'file';
       const extension = path.extname(filename).replace('.', '');
@@ -144,7 +142,7 @@ export const getFileInfoFromUrl = async ({ teamId, url }: { teamId: string; url:
     filename,
     extension,
     imageParsePrefix,
-    contentType: response.headers['content-type'],
+    contentType: getAxiosHeaderValue(response.headers['content-type']),
     stream: response.data
   };
 };

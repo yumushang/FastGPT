@@ -11,94 +11,11 @@ import { sliceStrStartEnd } from '../../common/string/tools';
 import { PublishChannelEnum } from '../../support/outLink/constant';
 import { removeDatasetCiteText } from '../ai/llm/utils';
 import type { WorkflowInteractiveResponseType } from '../workflow/template/system/interactive/type';
-import { ConfirmPlanAgentText } from '../workflow/runtime/constants';
-import type { AgentPlanType } from '../ai/agent/type';
-
-export type PlanAskInfo = {
-  question: string;
-  answer: string;
-};
-
-export const getPlanCallResponseText = ({
-  plan,
-  assistantResponses
-}: {
-  plan: AgentPlanType;
-  assistantResponses: AIChatItemValueItemType[];
-}): string => {
-  // 1. 获取 ask 信息
-  const askText = (() => {
-    const asks = assistantResponses
-      .map((item) => {
-        const interactive = item.interactive;
-        if (!interactive) return;
-        if (interactive.type === 'agentPlanAskQuery') {
-          const question = interactive.params?.content?.trim();
-          if (!question) return;
-          const answer = interactive.params?.answer?.trim() || undefined;
-          return JSON.stringify({ question, answer });
-        }
-
-        if (interactive.type === 'agentPlanAskUserForm') {
-          const question = interactive.params?.description?.trim();
-          const answer =
-            interactive.params?.inputForm
-              ?.map((item) => {
-                if (!item?.label) return '';
-                const val =
-                  typeof item.value === 'object' ? JSON.stringify(item.value) : String(item.value);
-                return `${item.label}: ${val}`;
-              })
-              .filter(Boolean)
-              .join('; ') || undefined;
-
-          if (!question && !answer) return;
-          return JSON.stringify({ question, answer });
-        }
-        return undefined;
-      })
-      .filter(Boolean) as string[];
-
-    return asks.join('\n');
-  })();
-
-  // 2. 获取 step 信息; 如果是中途暂停，则需要提示用户暂停
-  const { stepText, isPause } = (() => {
-    const stepValues = assistantResponses.filter((item) => item.stepId);
-    let isPause = false;
-    const stepResults = plan.steps.map((step, index) => {
-      const result = stepValues
-        .filter((item) => item.stepId === step.id)
-        .map((item) => item.text?.content?.trim() || '')
-        .filter(Boolean)
-        .join('\n');
-
-      const executed = !!result;
-
-      if (!executed) {
-        isPause = true;
-      }
-
-      return `(${index + 1}) [${executed ? `executed` : `pending`}] id=${step.id}; title=${step.title || ''}; description=${step.description || ''}${result ? `; result: ${result}` : ''}`;
-    });
-
-    return {
-      stepText: stepResults.join('\n'),
-      isPause
-    };
-  })();
-
-  return `${isPause ? 'PLAN_PAUSE_HANDOFF' : ''}
-COLLECTED INFO:
-${askText}
-STEPS: 
-${stepText}`;
-};
 
 // Concat 2 -> 1, and sort by role
 export const concatHistories = (histories1: ChatItemMiniType[], histories2: ChatItemMiniType[]) => {
   const newHistories = [...histories1, ...histories2];
-  return newHistories.sort((a, b) => {
+  return newHistories.sort((a) => {
     if (a.obj === ChatRoleEnum.System) {
       return -1;
     }
@@ -106,11 +23,14 @@ export const concatHistories = (histories1: ChatItemMiniType[], histories2: Chat
   });
 };
 
+export const hasContextCheckpoint = (history: ChatItemMiniType) =>
+  history.obj === ChatRoleEnum.AI &&
+  history.value.some((value) => Boolean(value.contextCheckpoint));
+
 export const getChatTitleFromChatMessage = (
   message?: ChatItemMiniType,
   defaultValue = '新对话'
 ) => {
-  // @ts-ignore
   const textMsg = message?.value.find((item) => 'text' in item && item.text);
 
   if (textMsg?.text?.content) {
@@ -153,7 +73,10 @@ export const getHistoryPreview = (
           item.value
             ?.map((item) => {
               return (
-                item.text?.content || item?.tools?.map((item) => item.toolName).join(',') || ''
+                item.text?.content ||
+                item.tool?.toolName ||
+                item?.tools?.map((item) => item.toolName).join(',') ||
+                ''
               );
             })
             .join('')
@@ -185,32 +108,32 @@ export const filterPublicNodeResponseData = ({
     [FlowNodeTypeEnum.agent]: true,
     [FlowNodeTypeEnum.pluginOutput]: true,
     [FlowNodeTypeEnum.runApp]: true,
-    [FlowNodeTypeEnum.toolCall]: true
+    [FlowNodeTypeEnum.toolCall]: true,
+    [FlowNodeTypeEnum.tool]: true
   };
 
+  const commonFields = {
+    moduleType: true,
+    pluginOutput: true,
+    runningTime: true,
+    toolId: true
+  };
   const filedMap: Record<string, boolean> = responseDetail
     ? {
         quoteList: true,
-        moduleType: true,
-        pluginOutput: true,
-        runningTime: true
+        ...commonFields
       }
-    : {
-        moduleType: true,
-        pluginOutput: true,
-        runningTime: true
-      };
+    : commonFields;
 
   return nodeRespones
     .filter((item) => publicNodeMap[item.moduleType])
     .map((item) => {
       const obj: DispatchNodeResponseType = {};
-      for (let key in item) {
+      for (const key in item) {
         if (key === 'toolDetail' || key === 'pluginDetail') {
-          // @ts-ignore
           obj[key] = filterPublicNodeResponseData({ nodeRespones: item[key], responseDetail });
         } else if (filedMap[key]) {
-          // @ts-ignore
+          // @ts-expect-error Dynamic public field copy is constrained by filedMap.
           obj[key] = item[key];
         }
       }
@@ -326,16 +249,6 @@ export const checkInteractiveResponseStatus = ({
   input: string;
 }): 'submit' | 'query' => {
   if (interactive.type === 'agentPlanAskQuery') {
-    return 'query';
-  }
-  if (interactive.type === 'agentPlanAskUserForm') {
-    try {
-      // 如果是表单提交，会是一个对象，如果解析失败，则认为是非表单提交。
-      JSON.parse(input);
-    } catch {
-      return 'query';
-    }
-  } else if (interactive.type === 'agentPlanCheck' && input !== ConfirmPlanAgentText) {
     return 'query';
   }
   return 'submit';

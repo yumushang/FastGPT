@@ -1,4 +1,4 @@
-import { i18nT } from '../../../web/i18n/utils';
+import { i18nT } from '../../common/i18n/utils';
 import type { JsonSchemaPropertiesItemType } from '../app/jsonschema';
 
 export enum FlowNodeTemplateTypeEnum {
@@ -163,6 +163,7 @@ export enum NodeInputKeyEnum {
   aiChatVision = 'aiChatVision',
   stringQuoteText = 'stringQuoteText',
   aiChatReasoning = 'aiChatReasoning',
+  aiChatReasoningEffort = 'aiChatReasoningEffort',
   aiChatTopP = 'aiChatTopP',
   aiChatStopSign = 'aiChatStopSign',
   aiChatResponseFormat = 'aiChatResponseFormat',
@@ -189,6 +190,7 @@ export enum NodeInputKeyEnum {
   datasetSearchUsingExtensionQuery = 'datasetSearchUsingExtensionQuery',
   datasetSearchExtensionModel = 'datasetSearchExtensionModel',
   datasetSearchExtensionBg = 'datasetSearchExtensionBg',
+  datasetSearchInput = 'datasetSearchInput',
   collectionFilterMatch = 'collectionFilterMatch',
   authTmbId = 'authTmbId',
   datasetDeepSearch = 'datasetDeepSearch',

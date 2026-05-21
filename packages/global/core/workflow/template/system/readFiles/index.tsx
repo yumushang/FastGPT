@@ -1,4 +1,4 @@
-import { i18nT } from '../../../../../../web/i18n/utils';
+import { i18nT } from '../../../../../common/i18n/utils';
 import {
   FlowNodeTemplateTypeEnum,
   NodeInputKeyEnum,
@@ -27,7 +27,7 @@ export const ReadFilesNode: FlowNodeTemplateType = {
   showStatus: true,
   version: '4.9.2',
   isTool: false,
-  courseUrl: '/introduction/guide/course/fileinput/',
+  courseUrl: '/guide/build/general/fileInput',
   inputs: [
     {
       key: NodeInputKeyEnum.fileUrlList,

@@ -22,13 +22,12 @@ import { getWebReqUrl } from '@fastgpt/web/common/system/utils';
 import type { OnOptimizePromptProps } from '@/components/common/PromptEditor/OptimizerPopover';
 import type { OnOptimizeCodeProps } from '@/pageComponents/app/detail/WorkflowComponents/Flow/nodes/NodeCode/Copilot';
 import type {
-  StepTitleItemType,
   ToolModuleResponseItemType,
   SkillModuleResponseItemType
 } from '@fastgpt/global/core/chat/type';
 import type { TopAgentFormDataType } from '@fastgpt/service/core/chat/HelperBot/dispatch/topAgent/type';
 import type { UserInputInteractive } from '@fastgpt/global/core/workflow/template/system/interactive/type';
-import type { AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
+import type { AgentPlanStatusType, AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
 import type { StreamNoNeedToBeResumeType } from '@fastgpt/global/openapi/core/ai/api';
 import type { OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 
@@ -97,8 +96,8 @@ type ResponseQueueItemType = CommonResponseType &
         plan: AgentPlanType;
       }
     | {
-        event: SseResponseEventEnum.stepTitle;
-        stepTitle: StepTitleItemType;
+        event: SseResponseEventEnum.planStatus;
+        planStatus: AgentPlanStatusType;
       }
     | {
         event: SseResponseEventEnum.skillCall;
@@ -133,7 +132,7 @@ function handleEventSourceData(params: HandleEventSourceDataParams) {
       case SseResponseEventEnum.toolResponse:
       case SseResponseEventEnum.interactive:
       case SseResponseEventEnum.plan:
-      case SseResponseEventEnum.stepTitle:
+      case SseResponseEventEnum.planStatus:
       case SseResponseEventEnum.skillCall: {
         enqueue({ responseValueId, stepId, event, ...obj });
         break;
@@ -401,6 +400,11 @@ function $resumefetch({ url, onmessage, onResumeUnavailable, controller }: Resum
       }
       return resolve({ responseText, completedChat, resumeUnavailable });
     };
+    const onAbort = () => {
+      finished = true;
+      responseQueue = [];
+      return onfinish();
+    };
     const onfailed = (err?: any) => {
       finished = true;
       const message = getErrText(err, error ?? '响应过程出现异常~');
@@ -424,8 +428,7 @@ function $resumefetch({ url, onmessage, onResumeUnavailable, controller }: Resum
 
     function animateResponseLoop() {
       if (signal.aborted) {
-        responseQueue.forEach(applyMessageItem);
-        return onfinish();
+        return onAbort();
       }
 
       if (responseQueue.length > 0) {
@@ -448,6 +451,8 @@ function $resumefetch({ url, onmessage, onResumeUnavailable, controller }: Resum
     animateResponseLoop();
 
     const enqueue = (data: ResponseQueueItemType) => {
+      if (signal.aborted) return;
+
       if (resumePhase === StreamResumePhaseEnum.catchup) {
         applyMessageItem(data);
         return;
@@ -485,6 +490,8 @@ function $resumefetch({ url, onmessage, onResumeUnavailable, controller }: Resum
           }
         },
         onmessage: ({ event, data }) => {
+          if (signal.aborted) return;
+
           if (event === StreamResumePhaseEvent) {
             if (data === StreamResumePhaseEnum.catchup || data === StreamResumePhaseEnum.live) {
               resumePhase = data;
@@ -546,8 +553,7 @@ function $resumefetch({ url, onmessage, onResumeUnavailable, controller }: Resum
       clearTimeout(timer);
 
       if (controller.signal.aborted) {
-        finished = true;
-        return;
+        return onAbort();
       }
 
       onfailed(err);
@@ -601,7 +607,10 @@ type StreamResumeFetchParams = {
   onResumeUnavailable?: (data: ResumeUnavailableType) => void;
   controller: AbortController;
 };
-export function streamResumeFetch(params: StreamResumeFetchParams) {
+
+let activeResumeController: AbortController | undefined;
+
+export async function streamResumeFetch(params: StreamResumeFetchParams) {
   const { appId, chatId, outLinkAuthData, onmessage, onResumeUnavailable, controller } = params;
   const query = new URLSearchParams({ appId, chatId });
 
@@ -612,7 +621,16 @@ export function streamResumeFetch(params: StreamResumeFetchParams) {
 
   const url = `/api/core/chat/resume?${query}`;
 
-  return $resumefetch({ url, onmessage, onResumeUnavailable, controller });
+  if (activeResumeController && activeResumeController !== controller) {
+    activeResumeController.abort('replace');
+  }
+  activeResumeController = controller;
+
+  return $resumefetch({ url, onmessage, onResumeUnavailable, controller }).finally(() => {
+    if (activeResumeController === controller) {
+      activeResumeController = undefined;
+    }
+  });
 }
 
 export const onOptimizePrompt = async ({

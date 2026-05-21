@@ -64,11 +64,13 @@ import { formatTime2YMDHM } from '@fastgpt/global/common/string/time';
 import { LimitTypeEnum, teamFrequencyLimit } from '@fastgpt/service/common/api/frequencyLimit';
 import { getIpFromRequest } from '@fastgpt/service/common/geo';
 import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 const logger = getLogger(LogCategories.MODULE.CHAT.ITEM);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  let {
+  const { body: completionProps } = parseApiInput({ req, bodySchema: CompletionsPropsSchema });
+  const {
     chatId,
     appId,
     customUid,
@@ -80,14 +82,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     teamToken,
 
     stream = false,
-    detail = false,
-    retainDatasetCite = false,
     showSkillReferences,
     messages = [],
-    variables = {},
     responseChatItemId = getNanoid(),
     metadata
-  } = CompletionsPropsSchema.parse(req.body);
+  } = completionProps;
+  let { detail = false, retainDatasetCite = false, variables = {} } = completionProps;
 
   const startTime = Date.now();
 
@@ -276,6 +276,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (app.version === 'v2') {
         return dispatchWorkFlow({
           apiVersion: 'v1',
+          req,
           res,
           lang: getLocale(req),
           requestOrigin: req.headers.origin,

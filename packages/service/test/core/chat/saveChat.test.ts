@@ -194,6 +194,85 @@ describe('pushChatRecords', () => {
       expect(String(chat?.teamId)).toBe(props.teamId);
     });
 
+    it('should persist agent loop control values in AI chat item value', async () => {
+      const plan = {
+        planId: 'plan_1',
+        task: 'Compare products',
+        description: 'Compare FastGPT and Dify',
+        steps: [
+          {
+            id: 's1',
+            title: 'Compare positioning',
+            description: 'Compare product positioning',
+            acceptanceCriteria: ['Positioning is clear'],
+            status: 'pending' as const,
+            evidence: []
+          }
+        ]
+      };
+      const agentPlanUpdate = {
+        id: 'call_update_plan',
+        functionName: 'update_plan',
+        params: '{"updates":[]}',
+        response: 'ok',
+        assistantText: 'draft while updating plan',
+        reasoningText: 'planning'
+      };
+      const agentAsk = {
+        id: 'call_ask_agent',
+        functionName: 'ask_agent',
+        params: '{"question":"请补充目标"}',
+        planId: 'plan_1',
+        assistantText: 'need more input',
+        reasoningText: 'asking'
+      };
+      const agentStopGate = {
+        id: 'stop_gate_2_req_too_early',
+        reason: 'Active plan is not complete.',
+        feedback: '<stop_gate_feedback>Continue the active plan.</stop_gate_feedback>',
+        assistantText: 'too early',
+        reasoningText: 'checking'
+      };
+      const props = createMockProps(
+        {
+          aiContent: {
+            obj: ChatRoleEnum.AI,
+            value: [
+              {
+                text: { content: 'Final answer' }
+              },
+              {
+                plan
+              },
+              {
+                agentPlanUpdate
+              },
+              {
+                agentAsk
+              },
+              {
+                agentStopGate
+              }
+            ],
+            responseData: []
+          }
+        },
+        { appId: testAppId, teamId: testTeamId, tmbId: testTmbId }
+      );
+
+      await pushChatRecords(props);
+
+      const aiItem = await MongoChatItem.findOne({
+        appId: testAppId,
+        chatId: props.chatId,
+        obj: ChatRoleEnum.AI
+      }).lean();
+
+      expect(aiItem?.value).toEqual(
+        expect.arrayContaining([{ plan }, { agentPlanUpdate }, { agentAsk }, { agentStopGate }])
+      );
+    });
+
     it('should create chat item responses when responseData is provided', async () => {
       const props = createMockProps({
         aiContent: {
@@ -891,7 +970,6 @@ describe('pushChatRecords', () => {
         chatId: props.chatId,
         obj: ChatRoleEnum.AI
       });
-      console.log(chatItem?.value, 1212);
       if (chatItem) {
         if (chatItem.obj === ChatRoleEnum.AI) {
           const lastValue = chatItem.value[chatItem.value.length - 1];
@@ -997,6 +1075,133 @@ describe('pushChatRecords', () => {
       }
     });
 
+    it('should sanitize fileSelect form value before storing interactive history', async () => {
+      await MongoChatItem.create({
+        chatId: 'test-chat-id',
+        teamId: testTeamId,
+        tmbId: testTmbId,
+        appId: testAppId,
+        obj: ChatRoleEnum.AI,
+        dataId: 'data-id-1',
+        value: [
+          {
+            interactive: {
+              type: 'userInput',
+              params: {
+                submitted: false,
+                inputForm: [
+                  {
+                    key: 'upload',
+                    type: FlowNodeInputTypeEnum.fileSelect,
+                    label: 'Upload',
+                    value: []
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      });
+
+      const props = createMockProps(
+        {
+          userContent: {
+            obj: ChatRoleEnum.Human,
+            value: [
+              {
+                text: {
+                  content: JSON.stringify({
+                    upload: [
+                      {
+                        id: 'runtime-id',
+                        key: 'chat/files/invoice.png',
+                        url: 'https://preview.example.com/invoice.png',
+                        name: 'invoice.png',
+                        type: ChatFileTypeEnum.image,
+                        icon: 'https://preview.example.com/invoice.png',
+                        status: 'done',
+                        process: 100,
+                        error: 'should not persist'
+                      },
+                      {
+                        id: 'external-id',
+                        url: 'https://external.example.com/report.pdf',
+                        name: 'report.pdf',
+                        type: ChatFileTypeEnum.file,
+                        status: 'done'
+                      },
+                      {
+                        url: 'data:image/png;base64,AAAA',
+                        name: 'inline.png',
+                        type: ChatFileTypeEnum.image
+                      }
+                    ]
+                  })
+                }
+              }
+            ]
+          },
+          aiContent: {
+            obj: ChatRoleEnum.AI,
+            value: [],
+            responseData: []
+          }
+        },
+        { appId: testAppId, teamId: testTeamId, tmbId: testTmbId }
+      );
+
+      const interactive = {
+        type: 'userInput' as const,
+        params: {
+          description: '',
+          submitted: false,
+          inputForm: [
+            {
+              key: 'upload',
+              type: FlowNodeInputTypeEnum.fileSelect,
+              label: 'Upload',
+              value: [],
+              valueType: WorkflowIOValueTypeEnum.arrayString,
+              required: false
+            }
+          ]
+        },
+        entryNodeIds: [],
+        memoryEdges: [],
+        nodeOutputs: []
+      };
+
+      await updateInteractiveChat({ interactive, ...props });
+
+      const chatItem = await MongoChatItem.findOne({
+        appId: testAppId,
+        chatId: props.chatId,
+        obj: ChatRoleEnum.AI
+      });
+
+      if (chatItem?.obj !== ChatRoleEnum.AI) {
+        throw new Error('chatItem does not have AI interactive value');
+      }
+
+      const lastValue = chatItem.value[chatItem.value.length - 1];
+      if (lastValue.interactive?.type !== 'userInput') {
+        throw new Error('chatItem does not have userInput interactive');
+      }
+
+      expect(lastValue.interactive.params.inputForm[0].value).toEqual([
+        {
+          key: 'chat/files/invoice.png',
+          name: 'invoice.png',
+          type: ChatFileTypeEnum.image
+        },
+        {
+          url: 'https://external.example.com/report.pdf',
+          name: 'report.pdf',
+          type: ChatFileTypeEnum.file
+        }
+      ]);
+    });
+
     it('should persist agentPlanAskQuery answer before pushing new records', async () => {
       await MongoChatItem.create({
         chatId: 'test-chat-id',
@@ -1011,7 +1216,10 @@ describe('pushChatRecords', () => {
               type: 'agentPlanAskQuery',
               planId: 'plan_1',
               params: {
-                content: '请补充目标'
+                content: '请补充目标',
+                reason: '需要用户明确任务目标',
+                blockerType: 'missing_required_input',
+                options: ['继续研究 Rust', '改为研究 Go', '先给出学习路线']
               }
             }
           }
@@ -1036,7 +1244,10 @@ describe('pushChatRecords', () => {
         type: 'agentPlanAskQuery' as const,
         planId: 'plan_1',
         params: {
-          content: '请补充目标'
+          content: '请补充目标',
+          reason: '需要用户明确任务目标',
+          blockerType: 'missing_required_input',
+          options: ['继续研究 Rust', '改为研究 Go', '先给出学习路线']
         },
         entryNodeIds: [],
         memoryEdges: [],
@@ -1061,6 +1272,12 @@ describe('pushChatRecords', () => {
       }
 
       expect(lastValue.interactive.params.answer).toBe('深入了解 Rust 系统编程方向');
+      expect(lastValue.interactive.params.reason).toBe('需要用户明确任务目标');
+      expect(lastValue.interactive.params.options).toEqual([
+        '继续研究 Rust',
+        '改为研究 Go',
+        '先给出学习路线'
+      ]);
     });
 
     it('should remove paymentPause interactive value', async () => {

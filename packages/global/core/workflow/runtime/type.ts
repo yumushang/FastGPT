@@ -19,17 +19,20 @@ import type { WorkflowResponseType } from '../../../../service/core/workflow/dis
 import type { AiChatQuoteRoleType } from '../template/system/aiChat/type';
 import type { OpenaiAccountType } from '../../../support/user/team/type';
 import { CompletionFinishReasonSchema } from '../../ai/llm/type';
+import type { ReasoningEffort } from '../../ai/llm/type';
 import type {
   InteractiveNodeResponseType,
   WorkflowInteractiveResponseType
 } from '../template/system/interactive/type';
 import { SearchDataResponseItemSchema } from '../../dataset/type';
 import type { localeType } from '../../../common/i18n/type';
-import { type UserChatItemValueItemType } from '../../chat/type';
+import { type ChatFileStoreValue, type UserChatItemValueItemType } from '../../chat/type';
 import { DatasetSearchModeEnum } from '../../dataset/constants';
 import { ChatRoleEnum } from '../../chat/constants';
 import z from 'zod';
 import type { JSONSchemaInputType } from '../../app/jsonschema';
+
+const AgentPlanNodeStatusSchema = z.enum(['set_plan', 'update_plan', 'ask_question']);
 
 /*
   1. 输入线分类：普通线(实际上就是从 start 直接过来的分支）和递归线（可以追溯到自身的分支）
@@ -45,6 +48,16 @@ export type NodeEdgeGroupsMap = Map<string, NodeEdgeGroups>;
 export type ExternalProviderType = {
   openaiAccount?: OpenaiAccountType;
   externalWorkflowVariables?: Record<string, string>;
+};
+
+export type WorkflowVariableStateLike = {
+  get: (key: string) => unknown;
+  set: (key: string, value: unknown) => Promise<unknown>;
+  getStoreValue: (key: string) => unknown;
+  getFileStoreValueByRuntimeUrl: (url: string) => ChatFileStoreValue | undefined;
+  toRuntimeRecord: () => Record<string, unknown>;
+  toStoreRecord: () => Record<string, unknown>;
+  clone: () => WorkflowVariableStateLike;
 };
 
 /* workflow props */
@@ -77,7 +90,7 @@ export type ChatDispatchProps = {
   chatId: string;
   responseChatItemId?: string;
   histories: ChatItemMiniType[];
-  variables: Record<string, any>; // global variable
+  variableState: WorkflowVariableStateLike; // global variable state
   query: UserChatItemValueItemType[]; // trigger query
   chatConfig: AppSchemaType['chatConfig'];
   lastInteractive?: WorkflowInteractiveResponseType; // last interactive response
@@ -156,6 +169,9 @@ export const DispatchNodeResponseSchema = z
     textOutput: z.string().optional().meta({ description: '文本输出' }),
 
     llmRequestIds: z.array(z.string()).optional().meta({ description: 'LLM 请求追踪 ID 列表' }),
+    agentPlanStatus: AgentPlanNodeStatusSchema.optional().meta({
+      description: 'Agent 计划节点状态'
+    }),
 
     error: z
       .union([z.record(z.string(), z.any()), z.string()])
@@ -204,19 +220,12 @@ export const DispatchNodeResponseSchema = z
     limit: z.number().optional().meta({ description: '限制' }),
     searchMode: z.enum(DatasetSearchModeEnum).optional().meta({ description: '搜索模式' }),
     embeddingWeight: z.number().optional().meta({ description: '嵌入权重' }),
+    datasetQueries: z.array(z.string()).optional().meta({ description: '检索词' }),
+
     rerankModel: z.string().optional().meta({ description: '重排模型' }),
     rerankWeight: z.number().optional().meta({ description: '重排权重' }),
     reRankInputTokens: z.number().optional().meta({ description: '重排输入 token' }),
     searchUsingReRank: z.boolean().optional().meta({ description: '使用重排' }),
-    queryExtensionResult: z
-      .object({
-        model: z.string().meta({ description: '模型' }),
-        inputTokens: z.number().meta({ description: '输入 token' }),
-        outputTokens: z.number().meta({ description: '输出 token' }),
-        query: z.string().meta({ description: '查询内容' })
-      })
-      .optional()
-      .meta({ description: '查询扩展结果' }),
     deepSearchResult: z
       .object({
         model: z.string().meta({ description: '模型' }),
@@ -348,7 +357,10 @@ export type DispatchNodeResponseType = Omit<
   toolDetail?: DispatchNodeResponseType[];
 };
 
-export type DispatchNodeResultType<T = {}, ERR = { [NodeOutputKeyEnum.errorText]?: string }> = {
+export type DispatchNodeResultType<
+  T = Record<string, never>,
+  ERR = { [NodeOutputKeyEnum.errorText]?: string }
+> = {
   [DispatchNodeResponseKeyEnum.answerText]?: string;
   [DispatchNodeResponseKeyEnum.reasoningText]?: string;
   [DispatchNodeResponseKeyEnum.skipHandleId]?: string[]; // skip some edge handle id
@@ -359,7 +371,6 @@ export type DispatchNodeResultType<T = {}, ERR = { [NodeOutputKeyEnum.errorText]
   [DispatchNodeResponseKeyEnum.assistantResponses]?: AIChatItemValueItemType[]; // Assistant response(Store to db)
   [DispatchNodeResponseKeyEnum.rewriteHistories]?: ChatItemMiniType[];
   [DispatchNodeResponseKeyEnum.runTimes]?: number;
-  [DispatchNodeResponseKeyEnum.newVariables]?: Record<string, any>;
   [DispatchNodeResponseKeyEnum.memories]?: Record<string, any>;
   [DispatchNodeResponseKeyEnum.interactive]?: InteractiveNodeResponseType;
   [DispatchNodeResponseKeyEnum.customFeedbacks]?: string[];
@@ -380,6 +391,7 @@ export type AIChatNodeProps = {
   [NodeInputKeyEnum.aiChatIsResponseText]: boolean;
   [NodeInputKeyEnum.aiChatVision]?: boolean;
   [NodeInputKeyEnum.aiChatReasoning]?: boolean;
+  [NodeInputKeyEnum.aiChatReasoningEffort]?: ReasoningEffort;
   [NodeInputKeyEnum.aiChatTopP]?: number;
   [NodeInputKeyEnum.aiChatStopSign]?: string;
   [NodeInputKeyEnum.aiChatResponseFormat]?: string;
