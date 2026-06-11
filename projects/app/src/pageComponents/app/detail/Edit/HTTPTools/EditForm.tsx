@@ -59,6 +59,11 @@ const EditForm = ({
     isOpen: isOpenConfigModal,
     onClose: onCloseConfigModal
   } = useDisclosure();
+  const {
+    onOpen: onOpenManualImportModal,
+    isOpen: isOpenManualImportModal,
+    onClose: onCloseManualImportModal
+  } = useDisclosure();
 
   const { runAsync: runDeleteHttpTool, loading: isDeletingTool } = useRequest(
     async (updatedToolList: HttpToolConfigType[]) =>
@@ -100,22 +105,31 @@ const EditForm = ({
               {toolList?.length && toolList.length > 0 ? t('common:Config') : t('app:Start_config')}
             </Button>
           ) : (
-            <Button
-              px={'2'}
-              leftIcon={<MyIcon name={'common/addLight'} w={'18px'} />}
-              onClick={() =>
-                setEditingManualTool({
-                  name: '',
-                  description: '',
-                  inputSchema: { type: 'object' },
-                  outputSchema: { type: 'object' },
-                  path: '',
-                  method: 'POST'
-                })
-              }
-            >
-              {t('common:Add')}
-            </Button>
+            <Flex gap={2}>
+              <Button
+                px={'2'}
+                leftIcon={<MyIcon name={'common/folderImport'} w={'18px'} />}
+                onClick={onOpenManualImportModal}
+              >
+                {t('common:core.module.http.openapi import')}
+              </Button>
+              <Button
+                px={'2'}
+                leftIcon={<MyIcon name={'common/addLight'} w={'18px'} />}
+                onClick={() =>
+                  setEditingManualTool({
+                    name: '',
+                    description: '',
+                    inputSchema: { type: 'object' },
+                    outputSchema: { type: 'object' },
+                    path: '',
+                    method: 'POST'
+                  })
+                }
+              >
+                {t('common:Add')}
+              </Button>
+            </Flex>
           )}
         </Flex>
 
@@ -273,6 +287,13 @@ const EditForm = ({
       </Box>
 
       {isOpenConfigModal && <SchemaConfigModal onClose={onCloseConfigModal} />}
+      {isOpenManualImportModal && (
+        <SchemaConfigModal
+          onClose={onCloseManualImportModal}
+          isManualImport
+          existingToolList={toolList || []}
+        />
+      )}
       {toolDetail && (
         <ToolDetailModal
           tool={toolDetail}
