@@ -118,11 +118,22 @@ export const pathData2ToolList = async (
       const inputRequired: string[] = [];
       const outputProperties: Record<string, JsonSchemaPropertiesItemType> = {};
       const outputRequired: string[] = [];
+      const { path, staticParams } = splitPathAndStaticParams(pathItem.path);
       let requestSchema = undefined;
 
       if (pathItem.params && Array.isArray(pathItem.params)) {
         pathItem.params.forEach((param) => {
           if (param.name && param.schema) {
+            const staticQueryValue = getOpenApiStaticQueryValue(param);
+            if (staticQueryValue !== undefined) {
+              addStaticParam(staticParams, param.name, staticQueryValue);
+              return;
+            }
+
+            if (hasStaticParam(staticParams, param.name)) {
+              return;
+            }
+
             requestSchema = param.schema;
             inputProperties[param.name] = {
               type: param.schema.type || 'any',
@@ -178,9 +189,10 @@ export const pathData2ToolList = async (
       return {
         name: pathItem.name,
         description: pathItem.description || pathItem.name,
-        path: pathItem.path,
+        path,
         method: pathItem.method?.toLowerCase(),
         requestSchema,
+        ...(staticParams.length > 0 && { staticParams }),
         inputSchema: {
           type: 'object',
           properties: inputProperties,
@@ -197,4 +209,67 @@ export const pathData2ToolList = async (
     console.error('Error converting API schema to tool list:', error);
     return [];
   }
+};
+
+const splitPathAndStaticParams = (path: string) => {
+  const [pathWithoutQuery, queryString] = path.split('?');
+  const staticParams: NonNullable<HttpToolConfigType['staticParams']> = [];
+
+  if (queryString) {
+    const searchParams = new URLSearchParams(queryString);
+    searchParams.forEach((value, key) => {
+      if (value !== '') {
+        addStaticParam(staticParams, key, value);
+      }
+    });
+  }
+
+  return {
+    path: pathWithoutQuery || path,
+    staticParams
+  };
+};
+
+const addStaticParam = (
+  staticParams: NonNullable<HttpToolConfigType['staticParams']>,
+  key: string,
+  value: string
+) => {
+  if (!hasStaticParam(staticParams, key)) {
+    staticParams.push({ key, value });
+  }
+};
+
+const hasStaticParam = (
+  staticParams: NonNullable<HttpToolConfigType['staticParams']>,
+  key: string
+) => staticParams.some((param) => param.key === key);
+
+const getOpenApiStaticQueryValue = (param: any) => {
+  if (param.in !== 'query') return undefined;
+
+  // OpenAPI 文档中带固定示例值的 query 参数，导入为静态 Params，而不是工具输入。
+  const value =
+    param.example ??
+    param.schema?.default ??
+    param.schema?.const ??
+    getFirstOpenApiExampleValue(param.examples ?? param.schema?.examples);
+
+  if (value === undefined || value === null || value === '') return undefined;
+  return String(value);
+};
+
+const getFirstOpenApiExampleValue = (examples: any) => {
+  if (!examples) return undefined;
+
+  if (Array.isArray(examples)) {
+    return examples[0];
+  }
+
+  if (typeof examples === 'object') {
+    const firstExample = Object.values(examples)[0] as any;
+    return firstExample?.value ?? firstExample;
+  }
+
+  return undefined;
 };

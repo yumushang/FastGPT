@@ -50,6 +50,7 @@ import { putUpdateHttpTool } from '@/web/core/app/api/httpTools';
 import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import CurlImportModal from './CurlImportModal';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
 import type { EditorVariableLabelPickerType } from '@fastgpt/web/components/common/Textarea/PromptEditor/type';
 import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
@@ -309,9 +310,11 @@ const ManualToolModal = ({
           <Box px={2}>
             <Flex mb={2} alignItems={'center'} justifyContent={'space-between'}>
               <FormLabel>{t('common:core.module.Http request settings')}</FormLabel>
-              <Button size={'sm'} onClick={onOpenCurlImport}>
-                {t('common:core.module.http.curl import')}
-              </Button>
+              <Flex gap={2}>
+                <Button size={'sm'} onClick={onOpenCurlImport}>
+                  {t('common:core.module.http.curl import')}
+                </Button>
+              </Flex>
             </Flex>
             <Flex gap={2}>
               <MySelect
@@ -514,6 +517,7 @@ const ManualToolModal = ({
           }}
         />
       )}
+
       {editingParam && (
         <CustomParamEditModal
           param={editingParam}

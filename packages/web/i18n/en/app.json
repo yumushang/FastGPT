@@ -10,6 +10,8 @@
   "HTTPTools_Create_Type_Tip": "Modification is not supported after selection",
   "HTTP_tools_detail": "View details",
   "HTTP_tools_list_with_number": "Tool list: {{total}}",
+  "confirm_delete_all_http_tools": "Confirm to delete all HTTP tools? This action cannot be undone.",
+  "delete_all_http_tools": "Delete all",
   "Index": "Index",
   "MCP_tools_detail": "check the details",
   "MCP_tools_list": "Tool list",
