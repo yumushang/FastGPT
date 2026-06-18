@@ -44,3 +44,4 @@ projects/app/worker/
 pro/admin/worker/
 
 .turbo
+.agents

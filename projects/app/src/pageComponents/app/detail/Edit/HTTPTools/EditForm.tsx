@@ -26,6 +26,7 @@ import SchemaConfigModal from './SchemaConfigModal';
 import ManualToolModal from './ManualToolModal';
 import type { StoreSecretValueType } from '@fastgpt/global/common/secret/type';
 import type { UpdateHttpToolsBodyType } from '@fastgpt/global/openapi/core/app/httpTools/api';
+import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
 
 const EditForm = ({
   currentTool,
@@ -59,6 +60,14 @@ const EditForm = ({
     isOpen: isOpenConfigModal,
     onClose: onCloseConfigModal
   } = useDisclosure();
+  const {
+    onOpen: onOpenManualImportModal,
+    isOpen: isOpenManualImportModal,
+    onClose: onCloseManualImportModal
+  } = useDisclosure();
+  const { openConfirm: openDeleteAllConfirm, ConfirmModal: DeleteAllConfirmModal } = useConfirm({
+    type: 'delete'
+  });
 
   const { runAsync: runDeleteHttpTool, loading: isDeletingTool } = useRequest(
     async (updatedToolList: HttpToolConfigType[]) =>
@@ -100,22 +109,45 @@ const EditForm = ({
               {toolList?.length && toolList.length > 0 ? t('common:Config') : t('app:Start_config')}
             </Button>
           ) : (
-            <Button
-              px={'2'}
-              leftIcon={<MyIcon name={'common/addLight'} w={'18px'} />}
-              onClick={() =>
-                setEditingManualTool({
-                  name: '',
-                  description: '',
-                  inputSchema: { type: 'object' },
-                  outputSchema: { type: 'object' },
-                  path: '',
-                  method: 'POST'
-                })
-              }
-            >
-              {t('common:Add')}
-            </Button>
+            <Flex gap={2}>
+              <Button
+                px={'2'}
+                leftIcon={<MyIcon name={'common/folderImport'} w={'18px'} />}
+                onClick={onOpenManualImportModal}
+              >
+                {t('common:core.module.http.openapi import')}
+              </Button>
+              <Button
+                px={'2'}
+                variant={'whiteDanger'}
+                leftIcon={<MyIcon name={'delete'} w={'18px'} />}
+                isDisabled={!toolList || toolList.length === 0}
+                onClick={() =>
+                  openDeleteAllConfirm({
+                    customContent: t('app:confirm_delete_all_http_tools'),
+                    onConfirm: () => runDeleteHttpTool([])
+                  })()
+                }
+              >
+                {t('app:delete_all_http_tools')}
+              </Button>
+              <Button
+                px={'2'}
+                leftIcon={<MyIcon name={'common/addLight'} w={'18px'} />}
+                onClick={() =>
+                  setEditingManualTool({
+                    name: '',
+                    description: '',
+                    inputSchema: { type: 'object' },
+                    outputSchema: { type: 'object' },
+                    path: '',
+                    method: 'POST'
+                  })
+                }
+              >
+                {t('common:Add')}
+              </Button>
+            </Flex>
           )}
         </Flex>
 
@@ -273,6 +305,13 @@ const EditForm = ({
       </Box>
 
       {isOpenConfigModal && <SchemaConfigModal onClose={onCloseConfigModal} />}
+      {isOpenManualImportModal && (
+        <SchemaConfigModal
+          onClose={onCloseManualImportModal}
+          isManualImport
+          existingToolList={toolList || []}
+        />
+      )}
       {toolDetail && (
         <ToolDetailModal
           tool={toolDetail}
@@ -290,6 +329,7 @@ const EditForm = ({
           editingTool={editingManualTool}
         />
       )}
+      <DeleteAllConfirmModal />
     </>
   );
 };

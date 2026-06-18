@@ -34,6 +34,7 @@ import {
 } from '@/components/common/secret/HeaderAuthConfig';
 import HeaderAuthForm from '@/components/common/secret/HeaderAuthForm';
 import type { StoreSecretValueType } from '@fastgpt/global/common/secret/type';
+import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 
 export type HttpToolsType = {
   id?: string;
@@ -46,7 +47,15 @@ export type HttpToolsType = {
   headerSecret?: StoreSecretValueType;
 };
 
-const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
+const SchemaConfigModal = ({
+  onClose,
+  isManualImport = false,
+  existingToolList = []
+}: {
+  onClose: () => void;
+  isManualImport?: boolean;
+  existingToolList?: HttpToolConfigType[];
+}) => {
   const { t } = useTranslation();
   const { toast } = useToast();
 
@@ -110,6 +119,19 @@ const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
       const apiData = await str2OpenApiSchema(data.apiSchemaStr || '');
       const toolList = await pathData2ToolList(apiData.pathData);
 
+      if (isManualImport) {
+        const importToolList = toolList.map((tool) => ({
+          ...tool,
+          // 手动模式不保存 apiSchemaStr，通过完整路径避免切换成批量配置模式。
+          path: getManualImportToolPath(apiData.serverPath, tool.path)
+        }));
+
+        return putUpdateHttpTool({
+          appId: appDetail._id,
+          toolList: mergeHttpToolList(existingToolList, importToolList)
+        });
+      }
+
       return putUpdateHttpTool({
         appId: appDetail._id,
         baseUrl: apiData.serverPath,
@@ -122,7 +144,7 @@ const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
     {
       onSuccess: () => {
         toast({
-          title: t('common:update_success'),
+          title: isManualImport ? t('common:import_success') : t('common:update_success'),
           status: 'success'
         });
         onClose();
@@ -135,9 +157,9 @@ const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
     <MyModal
       isOpen={true}
       onClose={onClose}
-      iconSrc={'common/setting'}
+      iconSrc={isManualImport ? 'common/folderImport' : 'common/setting'}
       iconColor={'primary.600'}
-      title={t('app:Params_config')}
+      title={isManualImport ? t('common:core.module.http.openapi import') : t('app:Params_config')}
       w={600}
     >
       <ModalBody px={9}>
@@ -184,136 +206,144 @@ const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
           />
         </Box>
 
-        <Box mt={6} mb={2} color={'myGray.900'} fontSize={'14px'} fontWeight={'medium'}>
-          {t('common:auth_config')}
-        </Box>
-        <Box mt={2}>
-          <HeaderAuthForm
-            headerSecretValue={storeHeader2HeaderValue(headerSecret)}
-            onChange={(data) => {
-              const storeData = headerValue2StoreHeader(data);
-              setValue('headerSecret', storeData);
-            }}
-            fontWeight="normal"
-          />
-        </Box>
+        {!isManualImport && (
+          <>
+            <Box mt={6} mb={2} color={'myGray.900'} fontSize={'14px'} fontWeight={'medium'}>
+              {t('common:auth_config')}
+            </Box>
+            <Box mt={2}>
+              <HeaderAuthForm
+                headerSecretValue={storeHeader2HeaderValue(headerSecret)}
+                onChange={(data) => {
+                  const storeData = headerValue2StoreHeader(data);
+                  setValue('headerSecret', storeData);
+                }}
+                fontWeight="normal"
+              />
+            </Box>
+          </>
+        )}
 
-        <Box mt={6} mb={2} color={'myGray.900'} fontSize={'14px'} fontWeight={'medium'}>
-          {t('app:request_headers')}
-        </Box>
-        <Box
-          mt={1}
-          borderRadius={'md'}
-          overflow={'hidden'}
-          borderWidth={'1px'}
-          borderBottom={'none'}
-        >
-          <TableContainer overflowY={'visible'} overflowX={'unset'}>
-            <Table>
-              <Thead>
-                <Tr>
-                  <Th px={2} borderRadius="none !important">
-                    {t('common:core.module.http.Props name')}
-                  </Th>
-                  <Th px={2} borderRadius="none !important">
-                    {t('common:core.module.http.Props value')}
-                  </Th>
-                </Tr>
-              </Thead>
-              <Tbody>
-                {customHeaders?.map((item, index) => (
-                  <Tr key={`${index}`}>
-                    <Td p={0} w={'150px'}>
-                      <HttpInput
-                        placeholder={t('common:core.module.http.Props name')}
-                        value={item.key}
-                        onBlur={(val) => {
-                          setCustomHeaders((prev) => {
-                            const newHeaders = prev.map((h, i) =>
-                              i === index ? { ...h, key: val } : h
-                            );
-                            const json =
-                              '{\n' +
-                              newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
-                              '\n}';
-                            setValue('customHeaders', json);
-                            return newHeaders;
-                          });
-                        }}
-                        updateTrigger={updateTrigger}
-                      />
-                    </Td>
-                    <Td p={0}>
-                      <Box display={'flex'} alignItems={'center'}>
+        {!isManualImport && (
+          <>
+            <Box mt={6} mb={2} color={'myGray.900'} fontSize={'14px'} fontWeight={'medium'}>
+              {t('app:request_headers')}
+            </Box>
+            <Box
+              mt={1}
+              borderRadius={'md'}
+              overflow={'hidden'}
+              borderWidth={'1px'}
+              borderBottom={'none'}
+            >
+              <TableContainer overflowY={'visible'} overflowX={'unset'}>
+                <Table>
+                  <Thead>
+                    <Tr>
+                      <Th px={2} borderRadius="none !important">
+                        {t('common:core.module.http.Props name')}
+                      </Th>
+                      <Th px={2} borderRadius="none !important">
+                        {t('common:core.module.http.Props value')}
+                      </Th>
+                    </Tr>
+                  </Thead>
+                  <Tbody>
+                    {customHeaders?.map((item, index) => (
+                      <Tr key={`${index}`}>
+                        <Td p={0} w={'150px'}>
+                          <HttpInput
+                            placeholder={t('common:core.module.http.Props name')}
+                            value={item.key}
+                            onBlur={(val) => {
+                              setCustomHeaders((prev) => {
+                                const newHeaders = prev.map((h, i) =>
+                                  i === index ? { ...h, key: val } : h
+                                );
+                                const json =
+                                  '{\n' +
+                                  newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
+                                  '\n}';
+                                setValue('customHeaders', json);
+                                return newHeaders;
+                              });
+                            }}
+                            updateTrigger={updateTrigger}
+                          />
+                        </Td>
+                        <Td p={0}>
+                          <Box display={'flex'} alignItems={'center'}>
+                            <HttpInput
+                              placeholder={t('common:core.module.http.Props value')}
+                              value={item.value}
+                              onBlur={(val) =>
+                                setCustomHeaders((prev) => {
+                                  const newHeaders = prev.map((h, i) =>
+                                    i === index ? { ...h, value: val } : h
+                                  );
+                                  const json =
+                                    '{\n' +
+                                    newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
+                                    '\n}';
+                                  setValue('customHeaders', json);
+                                  return newHeaders;
+                                })
+                              }
+                            />
+                            <MyIcon
+                              name={'delete'}
+                              cursor={'pointer'}
+                              _hover={{ color: 'red.600' }}
+                              w={'14px'}
+                              onClick={() =>
+                                setCustomHeaders((prev) => {
+                                  const newHeaders = prev.filter((h) => h.key !== item.key);
+                                  const json =
+                                    '{\n' +
+                                    newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
+                                    '\n}';
+                                  setValue('customHeaders', json);
+                                  return newHeaders;
+                                })
+                              }
+                            />
+                          </Box>
+                        </Td>
+                      </Tr>
+                    ))}
+                    <Tr>
+                      <Td p={0} w={'150px'}>
                         <HttpInput
-                          placeholder={t('common:core.module.http.Props value')}
-                          value={item.value}
-                          onBlur={(val) =>
+                          placeholder={t('common:core.module.http.Add props')}
+                          value={''}
+                          updateTrigger={updateTrigger}
+                          onBlur={(val) => {
+                            if (!val) return;
                             setCustomHeaders((prev) => {
-                              const newHeaders = prev.map((h, i) =>
-                                i === index ? { ...h, value: val } : h
-                              );
+                              const newHeaders = [...prev, { key: val, value: '' }];
                               const json =
                                 '{\n' +
                                 newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
                                 '\n}';
                               setValue('customHeaders', json);
                               return newHeaders;
-                            })
-                          }
+                            });
+                            setUpdateTrigger((prev) => !prev);
+                          }}
                         />
-                        <MyIcon
-                          name={'delete'}
-                          cursor={'pointer'}
-                          _hover={{ color: 'red.600' }}
-                          w={'14px'}
-                          onClick={() =>
-                            setCustomHeaders((prev) => {
-                              const newHeaders = prev.filter((h) => h.key !== item.key);
-                              const json =
-                                '{\n' +
-                                newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
-                                '\n}';
-                              setValue('customHeaders', json);
-                              return newHeaders;
-                            })
-                          }
-                        />
-                      </Box>
-                    </Td>
-                  </Tr>
-                ))}
-                <Tr>
-                  <Td p={0} w={'150px'}>
-                    <HttpInput
-                      placeholder={t('common:core.module.http.Add props')}
-                      value={''}
-                      updateTrigger={updateTrigger}
-                      onBlur={(val) => {
-                        if (!val) return;
-                        setCustomHeaders((prev) => {
-                          const newHeaders = [...prev, { key: val, value: '' }];
-                          const json =
-                            '{\n' +
-                            newHeaders.map((h) => `"${h.key}":"${h.value}"`).join(',\n') +
-                            '\n}';
-                          setValue('customHeaders', json);
-                          return newHeaders;
-                        });
-                        setUpdateTrigger((prev) => !prev);
-                      }}
-                    />
-                  </Td>
-                  <Td p={0}>
-                    <Box display={'flex'} alignItems={'center'}>
-                      <HttpInput placeholder={t('common:core.module.http.Add_props_value')} />
-                    </Box>
-                  </Td>
-                </Tr>
-              </Tbody>
-            </Table>
-          </TableContainer>
-        </Box>
+                      </Td>
+                      <Td p={0}>
+                        <Box display={'flex'} alignItems={'center'}>
+                          <HttpInput placeholder={t('common:core.module.http.Add_props_value')} />
+                        </Box>
+                      </Td>
+                    </Tr>
+                  </Tbody>
+                </Table>
+              </TableContainer>
+            </Box>
+          </>
+        )}
       </ModalBody>
 
       <ModalFooter px={9} display={'flex'} flexDirection={'column'}>
@@ -326,12 +356,30 @@ const SchemaConfigModal = ({ onClose }: { onClose: () => void }) => {
             onClick={handleSubmit((data) => onUpdateHttpTool(data))}
             isLoading={isUpdatingHttpTool}
           >
-            {t('common:Save')}
+            {isManualImport ? t('common:Import') : t('common:Save')}
           </Button>
         </Box>
       </ModalFooter>
     </MyModal>
   );
+};
+
+const getManualImportToolPath = (serverPath: string, path: string) => {
+  if (!serverPath || path.startsWith('http://') || path.startsWith('https://')) return path;
+
+  return `${serverPath.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+};
+
+const mergeHttpToolList = (
+  existingToolList: HttpToolConfigType[],
+  importToolList: HttpToolConfigType[]
+) => {
+  const importToolMap = new Map(importToolList.map((tool) => [tool.name, tool]));
+
+  return [
+    ...existingToolList.filter((tool) => !importToolMap.has(tool.name)),
+    ...Array.from(importToolMap.values())
+  ];
 };
 
 export default React.memo(SchemaConfigModal);

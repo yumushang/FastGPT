@@ -50,7 +50,6 @@ import { putUpdateHttpTool } from '@/web/core/app/api/httpTools';
 import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import CurlImportModal from './CurlImportModal';
-import OpenApiImportModal, { type OpenApiImportResult } from './OpenApiImportModal';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import type { EditorVariableLabelPickerType } from '@fastgpt/web/components/common/Textarea/PromptEditor/type';
 import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
@@ -146,12 +145,6 @@ const ManualToolModal = ({
     onOpen: onOpenCurlImport,
     isOpen: isOpenCurlImport,
     onClose: onCloseCurlImport
-  } = useDisclosure();
-
-  const {
-    onOpen: onOpenOpenApiImport,
-    isOpen: isOpenOpenApiImport,
-    onClose: onCloseOpenApiImport
   } = useDisclosure();
 
   const { runAsync: onSubmit, loading: isSubmitting } = useRequest(
@@ -318,9 +311,6 @@ const ManualToolModal = ({
             <Flex mb={2} alignItems={'center'} justifyContent={'space-between'}>
               <FormLabel>{t('common:core.module.Http request settings')}</FormLabel>
               <Flex gap={2}>
-                <Button size={'sm'} onClick={onOpenOpenApiImport}>
-                  {t('common:core.module.http.openapi import')}
-                </Button>
                 <Button size={'sm'} onClick={onOpenCurlImport}>
                   {t('common:core.module.http.curl import')}
                 </Button>
@@ -527,37 +517,7 @@ const ManualToolModal = ({
           }}
         />
       )}
-      {isOpenOpenApiImport && (
-        <OpenApiImportModal
-          onClose={onCloseOpenApiImport}
-          onImport={(result: OpenApiImportResult) => {
-            setValue('name', result.name);
-            setValue('description', result.description);
-            setValue('method', result.method);
-            setValue('path', result.path);
-            if (result.params) {
-              setValue('params', result.params);
-            }
-            if (result.headers) {
-              setValue('headers', result.headers);
-            }
-            if (result.headerSecret) {
-              setValue('headerSecret', result.headerSecret);
-            }
-            setValue('bodyType', result.bodyType as ContentTypes);
-            if (result.bodyContent) {
-              setValue('bodyContent', result.bodyContent);
-            }
-            if (result.bodyFormData) {
-              setValue('bodyFormData', result.bodyFormData);
-            }
-            if (result.customParams && result.customParams.length > 0) {
-              setValue('customParams', result.customParams);
-            }
-            onCloseOpenApiImport();
-          }}
-        />
-      )}
+
       {editingParam && (
         <CustomParamEditModal
           param={editingParam}

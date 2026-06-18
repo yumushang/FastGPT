@@ -10,6 +10,8 @@
   "HTTPTools_Create_Type_Tip": "选择后不支持修改",
   "HTTP_tools_detail": "查看详情",
   "HTTP_tools_list_with_number": "工具列表: {{total}}",
+  "confirm_delete_all_http_tools": "确认删除全部 HTTP 工具？此操作不可恢复。",
+  "delete_all_http_tools": "全部删除",
   "Index": "索引",
   "MCP_tools_detail": "查看详情",
   "MCP_tools_list": "工具列表",
