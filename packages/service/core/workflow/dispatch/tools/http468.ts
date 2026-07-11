@@ -29,6 +29,7 @@ import { SERVICE_LOCAL_HOST } from '../../../../common/system/tools';
 import { formatHttpError } from '../utils';
 import { isInternalAddress } from '../../../../common/system/utils';
 import { serviceRequestMaxContentLength } from '../../../../common/system/constants';
+import { sign } from '../../../../common/xf/signUtil';
 
 type PropsArrType = {
   key: string;
@@ -70,6 +71,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
     runtimeNodes,
     histories,
     workflowStreamResponse,
+    externalProvider,
     params: {
       system_httpMethod: httpMethod = 'POST',
       system_httpReqUrl: httpReqUrl,
@@ -211,7 +213,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
       return fetchData({
         method: httpMethod,
         url: httpReqUrl,
-        headers: { ...sensitiveHeaders, ...publicHeaders },
+        headers: { ...sensitiveHeaders, ...publicHeaders, ...externalProvider?.chHeaders },
         body: requestBody,
         params,
         timeout: httpTimeout
@@ -496,17 +498,25 @@ async function fetchData({
     return Promise.reject('Url is invalid');
   }
 
+  const requestData = ['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) ? body : undefined;
+  let tempHeaders: Record<string, any> = { ...headers };
+  if (process.env.XF_SIGN_ENABLE === 'true' && process.env.XF_SIGN_MD5SECRET) {
+    const signHeaders = sign(method, requestData || params);
+    tempHeaders = {
+      ...headers,
+      ...signHeaders
+    };
+  }
+
   const { data: response } = await axios({
     method,
     maxContentLength: serviceRequestMaxContentLength,
     baseURL: `http://${SERVICE_LOCAL_HOST}`,
     url,
-    headers: {
-      ...headers
-    },
+    headers: tempHeaders,
     timeout: timeout * 1000,
     params: params,
-    data: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined
+    data: requestData
   });
 
   return {
