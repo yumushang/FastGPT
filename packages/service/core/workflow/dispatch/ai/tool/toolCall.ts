@@ -325,7 +325,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
               toolName: '',
               toolAvatar: '',
               params: '',
-              response: sliceStrStartEnd(response, 5000, 5000)
+              response
             }
           }
         });
@@ -367,7 +367,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
               toolName: '',
               toolAvatar: '',
               params: '',
-              response: sliceStrStartEnd(stringToolResponse, 5000, 5000)
+              response: stringToolResponse
             }
           }
         });
