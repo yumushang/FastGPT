@@ -45,3 +45,5 @@ pro/admin/worker/
 
 .turbo
 .agents
+
+.pnpm-store
