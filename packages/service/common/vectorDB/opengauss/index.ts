@@ -24,6 +24,17 @@ export class OpenGaussVectorCtrl implements VectorControllerType {
         );
       `);
 
+      // 迁移:旧版本建的表没有 custom_data 列，补充该列
+      const { rowCount: customDataColumnCount } = await OgClient.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='${DatasetVectorTableName}' AND column_name='custom_data'
+        LIMIT 1;
+      `);
+      if (customDataColumnCount === 0) {
+        await OgClient.query(`ALTER TABLE ${DatasetVectorTableName} ADD COLUMN custom_data JSONB;`);
+        logger.info('Added custom_data column to vector table');
+      }
+
       await OgClient.query(
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS vector_index ON ${DatasetVectorTableName} USING hnsw (vector vector_ip_ops) WITH (m = 32, ef_construction = 128);`
       );

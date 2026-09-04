@@ -212,6 +212,7 @@ export async function authDatasetData({
         : undefined,
     chunkIndex: datasetData.chunkIndex,
     indexes: datasetData.indexes,
+    customData: datasetData.customData,
     datasetId: String(datasetData.datasetId),
     collectionId: String(datasetData.collectionId),
     sourceName: result.collection.name || '',

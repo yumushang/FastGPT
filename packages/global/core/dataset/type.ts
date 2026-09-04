@@ -361,7 +361,9 @@ export const UpdateDatasetDataPropsSchema = z.object({
   indexPrefix: z.string().optional().meta({
     description: '索引前缀标题'
   }),
-  customData: z.object().optional()
+  customData: z.record(z.string(), z.any()).optional().meta({
+    description: '自定义字段（key-value），用于搜索过滤'
+  })
 });
 export type UpdateDatasetDataPropsType = z.infer<typeof UpdateDatasetDataPropsSchema>;
 

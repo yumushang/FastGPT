@@ -123,7 +123,9 @@ export const InsertDataBodySchema = PushDataChunkSchema.omit({ q: true }).extend
     example: '68ad85a7463006c963799a06',
     description: '集合 ID'
   }),
-  customData: z.object().optional()
+  customData: z.record(z.string(), z.any()).optional().meta({
+    description: '自定义字段（key-value），用于搜索过滤'
+  })
 });
 export type InsertDataBody = z.infer<typeof InsertDataBodySchema>;
 

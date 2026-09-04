@@ -24,7 +24,8 @@ export class ObVectorCtrl implements VectorControllerType {
             team_id VARCHAR(50) NOT NULL,
             dataset_id VARCHAR(50) NOT NULL,
             collection_id VARCHAR(50) NOT NULL,
-            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            custom_data JSON
         );
       `);
       await this.obClient.query(
@@ -36,6 +37,23 @@ export class ObVectorCtrl implements VectorControllerType {
       await this.obClient.query(
         `CREATE INDEX IF NOT EXISTS create_time_index ON ${DatasetVectorTableName}(createtime);`
       );
+
+      // 迁移:旧版本建的表没有 custom_data 列，补充该列
+      const [customDataColumns] = await this.obClient.query<RowDataPacket[]>(
+        `SELECT 1 FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = '${DatasetVectorTableName}'
+           AND column_name = 'custom_data'
+         LIMIT 1`
+      );
+      if (customDataColumns.length === 0) {
+        await this.obClient.query(
+          `ALTER TABLE ${DatasetVectorTableName} ADD COLUMN custom_data JSON;`
+        );
+        logger.info('Added custom_data column to vector table', {
+          provider: this.controllerType
+        });
+      }
 
       logger.info('Vector DB initialization completed', {
         provider: this.controllerType
