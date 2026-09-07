@@ -6,16 +6,12 @@ import {
   PerResourceTypeEnum,
   ReadPermissionVal
 } from '@fastgpt/global/support/permission/constant';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import {
   UpdateDatasetBodySchema,
   type UpdateDatasetBody
 } from '@fastgpt/global/openapi/core/dataset/api';
-import {
-  DatasetCollectionTypeEnum,
-  DatasetTypeEnum,
-  TrainingModeEnum
-} from '@fastgpt/global/core/dataset/constants';
+import { DatasetTypeEnum, TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
 import { type ClientSession } from 'mongoose';
 import { parseParentIdInMongo } from '@fastgpt/global/common/parentFolder/utils';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
@@ -33,15 +29,22 @@ import {
   upsertDatasetSyncJobScheduler
 } from '@fastgpt/service/core/dataset/datasetSync';
 import { delDatasetRelevantData } from '@fastgpt/service/core/dataset/controller';
-import { isEqual } from 'lodash';
+import { isEqual } from 'lodash-es';
 import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
-import { getEmbeddingModel, getLLMModel } from '@fastgpt/service/core/ai/model';
+import {
+  getEmbeddingModelData,
+  getLLMModelData,
+  getOptionalLLMModelData,
+  getOptionalVlmModelData
+} from '@fastgpt/service/core/ai/model';
 import { computedCollectionChunkSettings } from '@fastgpt/global/core/dataset/training/utils';
 import { getResourceOwnedClbs } from '@fastgpt/service/support/permission/controller';
 import { getS3AvatarSource } from '@fastgpt/service/common/s3/sources/avatar';
 import { isInternalAddress, PRIVATE_URL_TEXT } from '@fastgpt/service/common/system/utils';
+import { checkMoveFolderDepth } from '@fastgpt/service/common/parentFolder/depth';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 // 更新知识库接口
 // 包括如下功能：
@@ -55,20 +58,25 @@ import { isInternalAddress, PRIVATE_URL_TEXT } from '@fastgpt/service/common/sys
 //  (2) 目标目录的管理权限
 //  (3) 如果从根目录移动或移动到根目录，需要有团队的应用创建权限
 async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
-  let {
-    id,
-    parentId,
-    name,
-    avatar,
-    intro,
-    agentModel,
-    vlmModel,
-    websiteConfig,
-    externalReadUrl,
-    apiDatasetServer,
-    autoSync,
-    chunkSettings
-  } = UpdateDatasetBodySchema.parse(req.body);
+  const {
+    body: {
+      id,
+      parentId,
+      name,
+      avatar,
+      intro,
+      agentModelId,
+      vlmModelId,
+      websiteConfig,
+      externalReadUrl,
+      apiDatasetServer,
+      autoSync,
+      chunkSettings: rawChunkSettings
+    }
+  } = parseApiInput({
+    req,
+    bodySchema: UpdateDatasetBodySchema
+  });
 
   if (websiteConfig?.url) {
     if (await isInternalAddress(websiteConfig.url)) {
@@ -81,19 +89,29 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
   const { dataset, permission, tmbId, teamId } = await authDataset({
     req,
     authToken: true,
+    authApiKey: true,
     datasetId: id,
     per: ReadPermissionVal
   });
 
   let targetName = '';
 
-  chunkSettings = chunkSettings
+  const chunkSettings = rawChunkSettings
     ? computedCollectionChunkSettings({
-        ...chunkSettings,
-        llmModel: getLLMModel(dataset.agentModel),
-        vectorModel: getEmbeddingModel(dataset.vectorModel)
+        ...rawChunkSettings,
+        llmModel: getLLMModelData({
+          modelId: dataset.agentModelId,
+          model: dataset.agentModel
+        }),
+        vectorModel: getEmbeddingModelData({
+          modelId: dataset.vectorModelId,
+          model: dataset.vectorModel
+        })
       })
     : undefined;
+
+  const agentModelData = getOptionalLLMModelData({ modelId: agentModelId });
+  const vlmModelData = getOptionalVlmModelData({ modelId: vlmModelId });
 
   if (isMove) {
     if (parentId) {
@@ -101,6 +119,7 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
       const { dataset: targetDataset } = await authDataset({
         req,
         authToken: true,
+        authApiKey: true,
         datasetId: parentId,
         per: ManagePermissionVal
       });
@@ -113,6 +132,7 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
       await authDataset({
         req,
         authToken: true,
+        authApiKey: true,
         datasetId: dataset.parentId,
         per: ManagePermissionVal
       });
@@ -130,12 +150,20 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
     if (!permission.hasWritePer) return Promise.reject(DatasetErrEnum.unAuthDataset);
   }
 
-  const isFolder = dataset.type === DatasetTypeEnum.folder;
+  if (isMove) {
+    await checkMoveFolderDepth({
+      resourceId: id,
+      targetParentId: parentId,
+      teamId: dataset.teamId,
+      model: MongoDataset,
+      isFolderType: (type) => type === DatasetTypeEnum.folder
+    });
+  }
 
   updateTraining({
     teamId: dataset.teamId,
     datasetId: id,
-    agentModel
+    shouldReset: !!agentModelData
   });
 
   const onUpdate = async (session: ClientSession) => {
@@ -207,15 +235,16 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
         ...parseParentIdInMongo(parentId),
         ...(name && { name }),
         ...(avatar && { avatar }),
-        ...(agentModel && { agentModel }),
-        ...(vlmModel && { vlmModel }),
+        ...(agentModelData && { agentModelId: agentModelData.modelId }),
+        ...(vlmModelData && { vlmModelId: vlmModelData.modelId }),
         ...(websiteConfig && { websiteConfig }),
         ...(chunkSettings && { chunkSettings }),
         ...(intro !== undefined && { intro }),
         ...(externalReadUrl !== undefined && { externalReadUrl }),
         ...(isMove && { inheritPermission: true }),
         ...(typeof autoSync === 'boolean' && { autoSync }),
-        ...apiDatasetParams
+        ...apiDatasetParams,
+        ...(!isMove && { updateTime: new Date() })
       },
       { session }
     );
@@ -230,18 +259,35 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
 
   await mongoSessionRun(async (session) => {
     if (isMove) {
-      const parentClbs = await getResourceOwnedClbs({
-        teamId: dataset.teamId,
-        resourceId: parentId,
-        resourceType: PerResourceTypeEnum.dataset,
-        session
-      });
+      const [parentClbs, oldParentClbs, oldResourceClbs] = await Promise.all([
+        getResourceOwnedClbs({
+          teamId: dataset.teamId,
+          resourceId: parentId,
+          resourceType: PerResourceTypeEnum.dataset,
+          session
+        }),
+        dataset.parentId
+          ? getResourceOwnedClbs({
+              teamId: dataset.teamId,
+              resourceId: dataset.parentId,
+              resourceType: PerResourceTypeEnum.dataset,
+              session
+            })
+          : Promise.resolve([]),
+        getResourceOwnedClbs({
+          teamId: dataset.teamId,
+          resourceId: id,
+          resourceType: PerResourceTypeEnum.dataset,
+          session
+        })
+      ]);
 
-      await syncCollaborators({
+      const newResourceClbs = await syncCollaborators({
         teamId: dataset.teamId,
         resourceId: id,
         resourceType: PerResourceTypeEnum.dataset,
         collaborators: parentClbs,
+        oldParentCollaborators: oldParentClbs,
         session
       });
 
@@ -250,7 +296,8 @@ async function handler(req: ApiRequestProps<UpdateDatasetBody>) {
         resourceType: PerResourceTypeEnum.dataset,
         resourceModel: MongoDataset,
         folderTypeList: [DatasetTypeEnum.folder],
-        collaborators: parentClbs,
+        oldParentCollaborators: oldResourceClbs,
+        newParentCollaborators: newResourceClbs,
         session
       });
       logDatasetMove({ tmbId, teamId, dataset, targetName });
@@ -266,13 +313,13 @@ export default NextAPI(handler);
 const updateTraining = async ({
   teamId,
   datasetId,
-  agentModel
+  shouldReset
 }: {
   teamId: string;
   datasetId: string;
-  agentModel?: string;
+  shouldReset: boolean;
 }) => {
-  if (!agentModel) return;
+  if (!shouldReset) return;
 
   await MongoDatasetTraining.updateMany(
     {
@@ -282,7 +329,6 @@ const updateTraining = async ({
     },
     {
       $set: {
-        model: agentModel,
         retryCount: 5,
         lockTime: new Date('2000/1/1')
       }

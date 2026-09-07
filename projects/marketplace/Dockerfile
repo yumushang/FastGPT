@@ -1,5 +1,5 @@
 # --------- install dependence -----------
-FROM node:24-alpine AS maindeps
+FROM node:24.16.0-alpine AS maindeps
 WORKDIR /app
 
 ARG proxy
@@ -23,7 +23,7 @@ RUN if [ -z "$proxy" ]; then \
     fi
 
 # --------- builder -----------
-FROM node:24-alpine AS builder
+FROM node:24.16.0-alpine AS builder
 WORKDIR /app
 
 ARG proxy
@@ -43,11 +43,11 @@ RUN apk add --no-cache libc6-compat && npm install -g pnpm@10.33.2
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 ENV NEXT_PUBLIC_BASE_URL=$base_url
-RUN pnpm --filter @fastgpt-sdk/otel --filter @fastgpt-sdk/storage build
+RUN pnpm --filter @fastgpt-sdk/otel --filter @fastgpt-sdk/storage --filter @fastgpt-sdk/sandbox-adapter build
 RUN pnpm --filter=marketplace build
 
 # --------- runner -----------
-FROM node:24-alpine AS runner
+FROM node:24.16.0-alpine AS runner
 WORKDIR /app
 
 ARG proxy
@@ -63,9 +63,12 @@ RUN apk add --no-cache curl ca-certificates \
 
 # copy running files
 COPY --from=builder /app/projects/marketplace/public /app/projects/marketplace/public
-COPY --from=builder /app/projects/marketplace/next.config.js /app/projects/marketplace/next.config.js
+COPY --from=builder /app/projects/marketplace/next.config.ts /app/projects/marketplace/next.config.ts
+COPY --from=builder /app/projects/marketplace/next-i18next.config.js /app/projects/marketplace/next-i18next.config.js
 COPY --from=builder --chown=nextjs:nodejs /app/projects/marketplace/.next/standalone /app/
 COPY --from=builder --chown=nextjs:nodejs /app/projects/marketplace/.next/static /app/projects/marketplace/.next/static
+# next-i18next loads locale json files from ../../packages/web/i18n at runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/packages/web/i18n /app/packages/web/i18n
 # copy server chunks
 COPY --from=builder --chown=nextjs:nodejs /app/projects/marketplace/.next/server/chunks /app/projects/marketplace/.next/server/chunks
 

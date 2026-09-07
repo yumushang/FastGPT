@@ -1,8 +1,7 @@
-import fs, { existsSync } from 'fs';
+import fs from 'fs';
 import type { FastGPTFeConfigsType } from '@fastgpt/global/common/system/types/index';
 import type { FastGPTConfigFileType } from '@fastgpt/global/common/system/types/index';
 import { getFastGPTConfigFromDB } from '@fastgpt/service/common/system/config/controller';
-import { isProduction } from '@fastgpt/global/common/system/constants';
 import { initFastGPTConfig } from '@fastgpt/service/common/system/tools';
 import json5 from 'json5';
 import { defaultTemplateTypes } from '@fastgpt/web/core/workflow/constants';
@@ -13,43 +12,28 @@ import {
   type DeepRagSearchProps,
   type SearchDatasetDataResponse
 } from '@fastgpt/service/core/dataset/search';
-import { type AuthOpenApiLimitProps } from '@fastgpt/service/support/openapi/auth';
 import type {
   PushUsageItemsProps,
   ConcatUsageProps,
   CreateUsageProps
 } from '@fastgpt/global/support/wallet/usage/api';
-import { getSystemToolTags } from '@fastgpt/service/core/app/tool/api';
 import { isProVersion } from '@fastgpt/service/common/system/constants';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
+import {
+  getAgentSandboxArchiveMaxBytes,
+  getAgentSandboxMaxFileBytes,
+  getAgentSandboxSkillMaxBytes
+} from '@fastgpt/service/core/ai/sandbox/interface/config';
 import { serviceEnv } from '@fastgpt/service/env';
 import { hasAIProxyApiEndpoint } from '@fastgpt/service/thirdProvider/aiproxy/config';
 import { appEnv } from '@/env';
+import { pluginTagList } from '@fastgpt/global/sdk/fastgpt-plugin';
+import { pluginClient } from '@fastgpt/service/thirdProvider/fastgptPlugin';
 
 const logger = getLogger(LogCategories.SYSTEM);
-
-export const readConfigData = async (name: string) => {
-  const splitName = name.split('.');
-  const devName = `${splitName[0]}.local.${splitName[1]}`;
-
-  const filename = (() => {
-    if (!isProduction) {
-      // check local file exists
-      const hasLocalFile = existsSync(`data/${devName}`);
-      if (hasLocalFile) {
-        return `data/${devName}`;
-      }
-      return `data/${name}`;
-    }
-    // Fallback to default production path
-    const envPath = appEnv.CONFIG_JSON_PATH || '/app/data';
-    return `${envPath}/${name}`;
-  })();
-
-  const content = await fs.promises.readFile(filename, 'utf-8');
-
-  return content;
-};
+const pluginFeaturesProbeTimeoutMs = 3000;
+const defaultOpenSourceLoginGuideDocUrl =
+  'https://doc.fastgpt.io/zh-CN/guide/version/cloud/faq#%E8%B4%A6%E5%8F%B7%E7%99%BB%E5%BD%95%E9%97%AE%E9%A2%98';
 
 /* Init global variables */
 export function initGlobalVariables() {
@@ -61,11 +45,6 @@ export function initGlobalVariables() {
 
     global.deepRagHandler = function deepRagHandler(data: DeepRagSearchProps) {
       return POST<SearchDatasetDataResponse>('/core/dataset/deepRag', data);
-    };
-
-    global.authOpenApiHandler = function authOpenApiHandler(data: AuthOpenApiLimitProps) {
-      if (!isProVersion()) return Promise.resolve();
-      return POST<AuthOpenApiLimitProps>('/support/openapi/authLimit', data);
     };
 
     global.createUsageHandler = function createUsageHandler(data: CreateUsageProps) {
@@ -116,7 +95,7 @@ const defaultFeConfigs: FastGPTFeConfigsType = {
   show_git: true,
   docUrl: 'https://doc.fastgpt.io',
   openAPIDocUrl: 'https://doc.fastgpt.io/openapi/intro',
-  submitPluginRequestUrl: 'https://github.com/labring/fastgpt-plugin/issues',
+  enable_team_plugin_upload: false,
   appTemplateCourse:
     'https://fael3z0zfze.feishu.cn/wiki/CX9wwMGyEi5TL6koiLYcg7U0nWb?fromScene=spaceOverview',
   systemTitle: 'FastGPT',
@@ -125,7 +104,12 @@ const defaultFeConfigs: FastGPTFeConfigsType = {
   limit: {
     exportDatasetLimitMinutes: 0,
     websiteSyncLimitMinuted: 0,
-    workflowParallelRunMaxConcurrency: serviceEnv.WORKFLOW_PARALLEL_MAX_CONCURRENCY
+    agentSandboxMaxEditDebug: serviceEnv.AGENT_SANDBOX_MAX_EDIT_DEBUG,
+    agentSandboxArchiveMaxBytes: getAgentSandboxArchiveMaxBytes(),
+    skillSandboxMaxBytes: getAgentSandboxSkillMaxBytes(),
+    agentSandboxMaxFileBytes: getAgentSandboxMaxFileBytes(),
+    workflowParallelRunMaxConcurrency: serviceEnv.WORKFLOW_PARALLEL_MAX_CONCURRENCY,
+    maxFolderDepth: serviceEnv.MAX_FOLDER_DEPTH
   },
   scripts: [],
   favicon: '/favicon.ico',
@@ -134,46 +118,74 @@ const defaultFeConfigs: FastGPTFeConfigsType = {
   uploadFileMaxAmount: serviceEnv.UPLOAD_FILE_MAX_AMOUNT
 };
 
+async function getPluginRemoteDebugEnabled() {
+  try {
+    const features = await pluginClient.getPluginServiceFeatures({
+      signal: AbortSignal.timeout(pluginFeaturesProbeTimeoutMs)
+    });
+    return features.remoteDebug === true;
+  } catch (error) {
+    logger.warn('Plugin service features resolve failed', { error });
+    return false;
+  }
+}
+
 export async function initSystemConfig() {
-  // load config
-  const [{ fastgptConfig, licenseData }, fileConfig] = await Promise.all([
+  const [{ fastgptConfig, licenseData }, pluginRemoteDebug] = await Promise.all([
     getFastGPTConfigFromDB(),
-    readConfigData('config.json')
+    getPluginRemoteDebugEnabled()
   ]);
   global.licenseData = licenseData;
 
-  const fileRes = json5.parse(fileConfig) as FastGPTConfigFileType;
-
-  // get config from database
   const config: FastGPTConfigFileType = {
     feConfigs: {
-      ...fileRes?.feConfigs,
       ...defaultFeConfigs,
       ...(fastgptConfig.feConfigs || {}),
+      mcpServerProxyEndpoint: appEnv.SSE_MCP_SERVER_PROXY_ENDPOINT,
       limit: {
-        ...fileRes?.feConfigs?.limit,
         ...defaultFeConfigs.limit,
         ...(fastgptConfig.feConfigs?.limit || {})
       },
       isPlus: !!licenseData,
       hideChatCopyrightSetting: appEnv.HIDE_CHAT_COPYRIGHT_SETTING,
+      wecomLoginAutoRedirect: appEnv.WECOM_LOGIN_AUTO_REDIRECT,
       show_aiproxy: hasAIProxyApiEndpoint(),
       show_coupon: appEnv.SHOW_COUPON,
       show_discount_coupon: appEnv.SHOW_DISCOUNT_COUPON,
       show_dataset_enhance: licenseData?.functions?.datasetEnhance,
       show_batch_eval: licenseData?.functions?.batchEval,
-      show_agent_sandbox: !!serviceEnv.AGENT_SANDBOX_PROVIDER,
-      show_skill: serviceEnv.SHOW_SKILL,
-      payFormUrl: appEnv.PAY_FORM_URL,
+      pluginRemoteDebug,
+      payFormUrl: appEnv.PAY_FORM_URL || '',
+      marketplaceUrl: appEnv.MARKETPLACE_URL,
 
-      agentSandboxFree: appEnv.AGENT_SANDBOX_FREE_TIP
+      agentSandboxFree: appEnv.AGENT_SANDBOX_FREE_TIP,
+      agentSandboxProxyUrl: serviceEnv.AGENT_SANDBOX_PROXY_URL || ''
     },
-    systemEnv: {
-      ...fileRes.systemEnv,
-      ...(fastgptConfig.systemEnv || {})
-    },
+    systemEnv: Object.assign(
+      {
+        datasetParseMaxProcess: serviceEnv.DATASET_PARSE_MAX_PROCESS,
+        vectorMaxProcess: serviceEnv.VECTOR_MAX_PROCESS,
+        qaMaxProcess: serviceEnv.QA_MAX_PROCESS,
+        vlmMaxProcess: serviceEnv.VLM_MAX_PROCESS,
+        hnswEfSearch: serviceEnv.HNSW_EF_SEARCH,
+        hnswMaxScanTuples: serviceEnv.HNSW_MAX_SCAN_TUPLES,
+        customPdfParse: {
+          url: serviceEnv.CUSTOM_PDF_PARSE_URL,
+          key: serviceEnv.CUSTOM_PDF_PARSE_KEY,
+          somarkApiKey: serviceEnv.SOMARK_API_KEY,
+          doc2xKey: serviceEnv.DOC2X_KEY,
+          textinAppId: serviceEnv.TEXTIN_APP_ID,
+          textinSecretCode: serviceEnv.TEXTIN_SECRET_CODE
+        }
+      },
+      fastgptConfig.systemEnv || {} // 商业版数据存在数据库里
+    ),
     subPlans: fastgptConfig.subPlans
   };
+
+  if (!licenseData) {
+    config.feConfigs.loginGuideDocUrl = defaultOpenSourceLoginGuideDocUrl;
+  }
 
   // set config
   initFastGPTConfig(config);
@@ -190,7 +202,7 @@ export async function initSystemConfig() {
 
 export async function initSystemPluginTags() {
   try {
-    const tags = await getSystemToolTags();
+    const tags = pluginTagList;
 
     if (tags.length > 0) {
       const bulkOps = tags.map((tag, index) => ({

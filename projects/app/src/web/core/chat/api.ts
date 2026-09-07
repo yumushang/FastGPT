@@ -9,10 +9,11 @@ import type { ChatFavouriteAppType } from '@fastgpt/global/core/chat/favouriteAp
 import type {
   InitChatQueryType,
   InitChatResponseType,
-  InitTeamChatQueryType,
-  StopV2ChatParams
+  StopV2ChatParams,
+  StopV2ChatResponse
 } from '@fastgpt/global/openapi/core/chat/controler/api';
 import type { GetRecentlyUsedAppsResponseType } from '@fastgpt/global/openapi/core/chat/api';
+import { toChatAuthQueryInput } from '@/web/core/chat/utils';
 
 export const getRecentlyUsedApps = () =>
   GET<GetRecentlyUsedAppsResponseType>('/core/chat/recentlyUsed', undefined, { maxQuantity: 1 });
@@ -23,9 +24,7 @@ export const getRecentlyUsedApps = () =>
 export const getInitChatInfo = (data: InitChatQueryType) =>
   GET<InitChatResponseType>(`/core/chat/init`, data);
 export const getInitOutLinkChatInfo = (data: InitOutLinkChatQueryType) =>
-  GET<InitChatResponseType>(`/core/chat/outLink/init`, data);
-export const getTeamChatInfo = (data: InitTeamChatQueryType) =>
-  GET<InitChatResponseType>(`/core/chat/team/init`, data);
+  GET<InitChatResponseType>(`/core/chat/outLink/init`, toChatAuthQueryInput(data));
 
 /*---------- chat setting ------------*/
 export const getChatSetting = () => GET<ChatSettingType>('/proApi/core/chat/setting/detail');
@@ -49,4 +48,5 @@ export const deleteFavouriteApp = (data: { id: string }) =>
   DELETE<null>('/proApi/core/chat/setting/favourite/delete', data);
 
 /* Chat controller */
-export const postStopV2Chat = (data: StopV2ChatParams) => POST('/v2/chat/stop', data);
+export const postStopV2Chat = (data: StopV2ChatParams) =>
+  POST<StopV2ChatResponse>('/v2/chat/stop', data);

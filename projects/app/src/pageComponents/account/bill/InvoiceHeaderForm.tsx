@@ -13,9 +13,10 @@ import {
 import { type TeamInvoiceHeaderType } from '@fastgpt/global/support/user/team/type';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import { type UseFormReturn, useForm } from 'react-hook-form';
 import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
+import { accountPageRootStyles } from '@/pageComponents/account/styles';
 
 export const InvoiceHeaderSingleForm = ({
   inputForm,
@@ -24,20 +25,20 @@ export const InvoiceHeaderSingleForm = ({
   inputForm: UseFormReturn<TeamInvoiceHeaderType, any>;
   required?: boolean;
 }) => {
-  const { t } = useTranslation();
+  const { t } = useClientTranslation(['account_bill', 'user']);
 
   const { watch, register } = inputForm;
   const needSpecialInvoice = watch('needSpecialInvoice');
 
   const styles: InputProps = {
     bg: 'myGray.50',
-    w: '21.25rem'
+    w: ['100%', '21.25rem']
   };
 
   return (
     <>
       <Flex
-        w={['auto', '36rem']}
+        w={['100%', '36rem']}
         flexDir={'column'}
         gap={'1rem'}
         fontWeight={'500'}
@@ -138,14 +139,14 @@ export const InvoiceHeaderSingleForm = ({
             onChange={(e) => {
               inputForm.setValue('needSpecialInvoice', e === 'true');
             }}
-            w={'21.25rem'}
+            w={['100%', '21.25rem']}
           >
             <HStack h={'2rem'}>
               <Radio value="true" pr={'1rem'}>
-                <Box fontSize={'14px'}>{t('account:yes')}</Box>
+                <Box fontSize={'14px'}>{t('account_bill:yes')}</Box>
               </Radio>
               <Radio value="false">
-                <Box fontSize={'14px'}>{t('account:no')}</Box>
+                <Box fontSize={'14px'}>{t('account_bill:no')}</Box>
               </Radio>
             </HStack>
           </RadioGroup>
@@ -217,7 +218,7 @@ const InvoiceHeaderForm = () => {
     }
   });
 
-  const { t } = useTranslation();
+  const { t } = useClientTranslation(['account_bill', 'user']);
 
   const { loading: isSubmitting, runAsync: onUpdateHeader } = useRequest(
     (data: TeamInvoiceHeaderType) => updateTeamInvoiceHeader(data),
@@ -230,11 +231,18 @@ const InvoiceHeaderForm = () => {
 
   return (
     <>
-      <MyBox isLoading={isLoading} pt={'1rem'}>
-        <Flex w={'100%'} overflow={'auto'} justify={'center'} flexDir={'column'} align={'center'}>
+      <MyBox
+        {...accountPageRootStyles}
+        isLoading={isLoading}
+        px={[2, 6]}
+        pt={'1rem'}
+        overflowY={['visible', 'auto']}
+      >
+        <Flex w={'100%'} justify={'center'} flexDir={'column'} align={'center'}>
           <InvoiceHeaderSingleForm inputForm={inputForm} />
           <Flex w={'100%'} justify={'center'} mt={'3rem'}>
             <Button
+              w={['100%', 'auto']}
               variant={'primary'}
               px="0"
               onClick={inputForm.handleSubmit(onUpdateHeader)}

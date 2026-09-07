@@ -5,7 +5,7 @@ const {
   mockResolveMultipleFormData,
   mockClearDiskTempFiles,
   mockAuthDatasetCollection,
-  mockAuthFrequencyLimit,
+  mockAssertUploadRateLimit,
   mockGetTeamPlanStatus,
   mockReadFile,
   mockGetFileS3Key,
@@ -13,12 +13,15 @@ const {
   mockMongoSessionRun,
   mockCreateTrainingUsage,
   mockPushDataListToTrainingQueue,
-  mockGetDatasetImageIndexCapability
+  mockGetDatasetImageIndexCapability,
+  mockGetDatasetEmbeddingModel,
+  mockGetDatasetAgentModel,
+  mockGetDatasetVlmModel
 } = vi.hoisted(() => ({
   mockResolveMultipleFormData: vi.fn(),
   mockClearDiskTempFiles: vi.fn(),
   mockAuthDatasetCollection: vi.fn(),
-  mockAuthFrequencyLimit: vi.fn(),
+  mockAssertUploadRateLimit: vi.fn(),
   mockGetTeamPlanStatus: vi.fn(),
   mockReadFile: vi.fn(),
   mockGetFileS3Key: {
@@ -28,7 +31,10 @@ const {
   mockMongoSessionRun: vi.fn(),
   mockCreateTrainingUsage: vi.fn(),
   mockPushDataListToTrainingQueue: vi.fn(),
-  mockGetDatasetImageIndexCapability: vi.fn()
+  mockGetDatasetImageIndexCapability: vi.fn(),
+  mockGetDatasetEmbeddingModel: vi.fn(),
+  mockGetDatasetAgentModel: vi.fn(),
+  mockGetDatasetVlmModel: vi.fn()
 }));
 
 vi.mock('@/service/middleware/entry', () => ({
@@ -46,8 +52,8 @@ vi.mock('@fastgpt/service/support/permission/dataset/auth', () => ({
   authDatasetCollection: mockAuthDatasetCollection
 }));
 
-vi.mock('@fastgpt/service/common/system/frequencyLimit/utils', () => ({
-  authFrequencyLimit: mockAuthFrequencyLimit
+vi.mock('@fastgpt/service/common/rateLimit/interface/upload', () => ({
+  assertUploadRateLimit: mockAssertUploadRateLimit
 }));
 
 vi.mock('@fastgpt/service/support/wallet/sub/utils', () => ({
@@ -82,12 +88,11 @@ vi.mock('@fastgpt/service/core/dataset/training/controller', () => ({
   pushDataListToTrainingQueue: mockPushDataListToTrainingQueue
 }));
 
-vi.mock('@fastgpt/service/core/ai/model', async (importOriginal) => {
-  const actual = (await importOriginal()) as any;
+vi.mock('@fastgpt/service/core/dataset/model', () => {
   return {
-    ...actual,
-    getEmbeddingModel: vi.fn((model: string) => ({ name: model, model })),
-    getLLMModel: vi.fn((model: string) => ({ name: model, model }))
+    getDatasetEmbeddingModel: mockGetDatasetEmbeddingModel,
+    getDatasetAgentModel: mockGetDatasetAgentModel,
+    getDatasetVlmModel: mockGetDatasetVlmModel
   };
 });
 
@@ -103,6 +108,16 @@ import handler from '@/pages/api/core/dataset/data/insertImages';
 
 const collectionId = '68ad85a7463006c963799a06';
 const datasetId = '68ad85a7463006c963799a07';
+const vectorModelData = {
+  modelId: '68ad85a7463006c963799a08',
+  name: 'vision-embedding',
+  model: 'vision-embedding'
+};
+const agentModelData = {
+  modelId: '68ad85a7463006c963799a09',
+  name: 'gpt-5',
+  model: 'gpt-5'
+};
 
 describe('POST /api/core/dataset/data/insertImages', () => {
   beforeEach(() => {
@@ -137,6 +152,9 @@ describe('POST /api/core/dataset/data/insertImages', () => {
       supportImageEmbedding: true,
       supportImageIndex: true
     });
+    mockGetDatasetEmbeddingModel.mockReturnValue(vectorModelData);
+    mockGetDatasetAgentModel.mockReturnValue(agentModelData);
+    mockGetDatasetVlmModel.mockReturnValue(undefined);
     mockGetTeamPlanStatus.mockResolvedValue({ standard: { maxUploadFileCount: 10 } });
     mockReadFile.mockResolvedValue(Buffer.from('image-bytes'));
     mockGetFileS3Key.dataset.mockReturnValue({ fileKey: 'dataset/team/cat.png' });
@@ -149,12 +167,12 @@ describe('POST /api/core/dataset/data/insertImages', () => {
   it('should upload images with chunk mode when only native image embedding is available', async () => {
     const result = await handler({} as any);
 
-    expect(result).toEqual({});
+    expect(result).toBeUndefined();
     expect(mockCreateTrainingUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        vectorModel: 'vision-embedding',
-        agentModel: 'gpt-5',
-        vllmModel: undefined,
+        vectorModelId: vectorModelData.modelId,
+        agentModelId: agentModelData.modelId,
+        vllmModelId: undefined,
         session: 'session'
       })
     );
@@ -163,13 +181,26 @@ describe('POST /api/core/dataset/data/insertImages', () => {
       tmbId: 'tmb-id',
       datasetId,
       collectionId,
-      agentModel: 'gpt-5',
-      vectorModel: 'vision-embedding',
+      agentModel: agentModelData,
+      vectorModel: vectorModelData,
       vlmModel: undefined,
       mode: TrainingModeEnum.chunk,
       billId: 'usage-id',
       data: [{ imageId: 'dataset/team/cat.png' }],
       session: 'session'
+    });
+    expect(mockUploadImage2S3Bucket).toHaveBeenCalledWith('private', {
+      buffer: Buffer.from('image-bytes'),
+      uploadKey: 'dataset/team/cat.png',
+      mimetype: 'image/png',
+      filename: 'cat.png',
+      expiredTime: expect.any(Date)
+    });
+    expect(mockUploadImage2S3Bucket.mock.calls[0][1]).not.toHaveProperty('base64Img');
+    expect(mockAssertUploadRateLimit).toHaveBeenCalledWith({
+      identity: 'tmb-id',
+      limit: 10,
+      increment: 1
     });
     expect(mockClearDiskTempFiles).toHaveBeenCalledWith(['/tmp/cat.png']);
   });

@@ -24,7 +24,6 @@ import {
   WorkflowStart,
   userFilesInput
 } from '@fastgpt/global/core/workflow/template/system/workflowStart';
-import { SystemConfigNode } from '@fastgpt/global/core/workflow/template/system/systemConfig';
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { workflowStartNodeId } from '@/web/core/app/constants';
 import { AgentNode } from '@fastgpt/global/core/workflow/template/system/agent/index';
@@ -33,12 +32,20 @@ import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/i
 import { getAppChatConfig } from '@fastgpt/global/core/workflow/utils';
 import { Input_Template_File_Link } from '@fastgpt/global/core/workflow/template/input';
 import {
+  canInputBeAgentGenerated,
+  filterToolConfiguredParams,
+  getAgentToolInputMode,
   getToolConfigStatus,
   validateToolConfiguration
 } from '@fastgpt/global/core/app/formEdit/utils';
-import { getToolPreviewNode } from '@/web/core/app/api/tool';
+import { getClientToolPreviewNode } from '@/web/core/app/api/tool';
 import type { AppFileSelectConfigType } from '@fastgpt/global/core/app/type/config.schema';
 import { DatasetSearchModeEnum } from '@fastgpt/global/core/dataset/constants';
+import { inheritToolInputConfig } from '../FormComponent/ToolSelector/utils';
+import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+
+const getToolSelectionKey = (id?: string, source?: string) =>
+  source ? getToolIdentityKey(id, source) : id || '';
 
 /* format app nodes to edit form */
 export const appWorkflow2AgentForm = ({
@@ -49,6 +56,10 @@ export const appWorkflow2AgentForm = ({
   chatConfig: AppChatConfigType;
 }) => {
   const defaultAppForm = getDefaultAppForm();
+  defaultAppForm.chatConfig = getAppChatConfig({
+    chatConfig,
+    isPublicFetch: true
+  });
   const findInputValueByKey = (inputs: FlowNodeInputItemType[], key: string) => {
     return inputs.find((item) => item.key === key)?.value;
   };
@@ -56,6 +67,10 @@ export const appWorkflow2AgentForm = ({
   nodes.forEach((node) => {
     const inputMap = new Map(node.inputs.map((input) => [input.key, input.value]));
     if (node.flowNodeType === FlowNodeTypeEnum.agent) {
+      defaultAppForm.aiSettings.modelId = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.aiModelId
+      );
       defaultAppForm.aiSettings.model = findInputValueByKey(node.inputs, NodeInputKeyEnum.aiModel);
       defaultAppForm.aiSettings.systemPrompt = inputMap.get(NodeInputKeyEnum.aiSystemPrompt);
       defaultAppForm.aiSettings.temperature = inputMap.get(NodeInputKeyEnum.aiChatTemperature);
@@ -66,7 +81,11 @@ export const appWorkflow2AgentForm = ({
         NodeInputKeyEnum.aiChatReasoningEffort
       );
       defaultAppForm.aiSettings.aiChatTopP = inputMap.get(NodeInputKeyEnum.aiChatTopP);
-      defaultAppForm.aiSettings.useAgentSandbox = inputMap.get(NodeInputKeyEnum.useAgentSandbox);
+      const useAgentSandbox = inputMap.get(NodeInputKeyEnum.useAgentSandbox);
+      defaultAppForm.aiSettings.useAgentSandbox = useAgentSandbox;
+      defaultAppForm.aiSettings.sandboxEntrypoint = inputMap.get(
+        NodeInputKeyEnum.sandboxEntrypoint
+      );
 
       const tools = inputMap.get(NodeInputKeyEnum.selectedTools) as FlowNodeTemplateType[];
       if (tools) {
@@ -96,12 +115,6 @@ export const appWorkflow2AgentForm = ({
       if (skills && skills.length > 0) {
         defaultAppForm.selectedAgentSkills = skills;
       }
-    } else if (node.flowNodeType === FlowNodeTypeEnum.systemConfig) {
-      defaultAppForm.chatConfig = getAppChatConfig({
-        chatConfig,
-        systemConfigNode: node,
-        isPublicFetch: true
-      });
     }
   });
 
@@ -112,6 +125,29 @@ export type WorkflowType = {
   nodes: StoreNodeItemType[];
   edges: StoreEdgeItemType[];
 };
+
+/**
+ * 判断 ChatAgent 是否处于历史遗留的 Skill + 虚拟机不可用状态。
+ * 该状态允许普通保存草稿，但不能继续发布或运行，因为 Skill 运行依赖虚拟机环境。
+ */
+export const checkAgentSkillSandboxUnavailable = ({
+  appForm,
+  showSandbox,
+  enableSandbox
+}: {
+  appForm: Pick<AppFormEditFormType, 'aiSettings' | 'selectedAgentSkills'>;
+  showSandbox?: boolean;
+  enableSandbox?: boolean;
+}) => {
+  const hasSelectedAgentSkills = (appForm.selectedAgentSkills?.length || 0) > 0;
+
+  return (
+    hasSelectedAgentSkills &&
+    !appForm.aiSettings.useAgentSandbox &&
+    (!showSandbox || !enableSandbox)
+  );
+};
+
 export function agentForm2AppWorkflow(
   data: AppFormEditFormType,
   t: any // i18nT
@@ -119,21 +155,38 @@ export function agentForm2AppWorkflow(
   chatConfig: AppChatConfigType;
 } {
   const aiChatNodeId = '7BdojPlukIQw';
-  function systemConfigTemplate(): StoreNodeItemType {
-    return {
-      nodeId: SystemConfigNode.id,
-      name: t(SystemConfigNode.name),
-      intro: '',
-      flowNodeType: SystemConfigNode.flowNodeType,
-      position: {
-        x: 531.2422736065552,
-        y: -486.7611729549753
-      },
-      version: SystemConfigNode.version,
-      inputs: [],
-      outputs: []
-    };
-  }
+  const normalizedSandboxEntrypoint = data.aiSettings.sandboxEntrypoint?.trim() || undefined;
+  const modelMultimodal = {
+    vision: !!data.aiSettings.aiChatVision,
+    audio: !!data.aiSettings.aiChatAudio,
+    video: !!data.aiSettings.aiChatVideo,
+    extractFiles: !!data.aiSettings.aiChatExtractFiles
+  };
+  const modelReferenceInputs: FlowNodeInputItemType[] = [
+    ...(data.aiSettings.modelId !== undefined || !data.aiSettings.model
+      ? [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            renderTypeList: [FlowNodeInputTypeEnum.settingLLMModel],
+            label: t('common:core.module.input.label.aiModel'),
+            valueType: WorkflowIOValueTypeEnum.string,
+            value: data.aiSettings.modelId
+          }
+        ]
+      : []),
+    ...(data.aiSettings.model
+      ? [
+          {
+            key: NodeInputKeyEnum.aiModel,
+            renderTypeList: [FlowNodeInputTypeEnum.settingLLMModel],
+            label: t('common:core.module.input.label.aiModel'),
+            valueType: WorkflowIOValueTypeEnum.string,
+            value: data.aiSettings.model
+          }
+        ]
+      : [])
+  ];
+
   function workflowStartTemplate(): StoreNodeItemType {
     return {
       nodeId: workflowStartNodeId,
@@ -166,13 +219,7 @@ export function agentForm2AppWorkflow(
           },
           version: AgentNode.version,
           inputs: [
-            {
-              key: NodeInputKeyEnum.aiModel,
-              renderTypeList: [FlowNodeInputTypeEnum.settingLLMModel],
-              label: t('common:core.module.input.label.aiModel'),
-              valueType: WorkflowIOValueTypeEnum.string,
-              value: data.aiSettings.model
-            },
+            ...modelReferenceInputs,
             {
               key: NodeInputKeyEnum.aiSystemPrompt,
               renderTypeList: [FlowNodeInputTypeEnum.textarea, FlowNodeInputTypeEnum.reference],
@@ -189,7 +236,28 @@ export function agentForm2AppWorkflow(
               renderTypeList: [FlowNodeInputTypeEnum.hidden],
               label: '',
               valueType: WorkflowIOValueTypeEnum.boolean,
-              value: true
+              value: modelMultimodal.vision
+            },
+            {
+              key: NodeInputKeyEnum.aiChatAudio,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: modelMultimodal.audio
+            },
+            {
+              key: NodeInputKeyEnum.aiChatVideo,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: modelMultimodal.video
+            },
+            {
+              key: NodeInputKeyEnum.aiChatExtractFiles,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: modelMultimodal.extractFiles
             },
             {
               key: NodeInputKeyEnum.aiChatReasoning,
@@ -230,23 +298,35 @@ export function agentForm2AppWorkflow(
               label: '',
               valueType: WorkflowIOValueTypeEnum.arrayObject,
               value: data.selectedTools.map((tool) => {
+                const config = tool.inputs.reduce(
+                  (acc, input) => {
+                    if (input.key === NodeInputKeyEnum.forbidStream) {
+                      return acc;
+                    }
+                    // Special tool
+                    if (
+                      tool.flowNodeType === FlowNodeTypeEnum.appModule &&
+                      input.key === NodeInputKeyEnum.history
+                    ) {
+                      acc[input.key] = data.aiSettings.maxHistories;
+                    }
+                    acc[input.key] = input.value;
+                    return acc;
+                  },
+                  {} as Record<string, any>
+                );
+
                 return {
                   id: tool.pluginId,
+                  version: tool.version,
+                  source: tool.source,
+                  toolConfig: tool.toolConfig,
+                  inputs: tool.inputs.filter(canInputBeAgentGenerated).map((input) => ({
+                    key: input.key,
+                    mode: getAgentToolInputMode(input)
+                  })),
 
-                  config: tool.inputs.reduce(
-                    (acc, input) => {
-                      // Special tool
-                      if (
-                        tool.flowNodeType === FlowNodeTypeEnum.appModule &&
-                        input.key === NodeInputKeyEnum.history
-                      ) {
-                        acc[input.key] = data.aiSettings.maxHistories;
-                      }
-                      acc[input.key] = input.value;
-                      return acc;
-                    },
-                    {} as Record<string, any>
-                  )
+                  config: filterToolConfiguredParams({ params: config, inputs: tool.inputs })
                 };
               })
             },
@@ -263,11 +343,14 @@ export function agentForm2AppWorkflow(
                 searchMode: data.dataset.searchMode,
                 embeddingWeight: data.dataset.embeddingWeight,
                 usingReRank: data.dataset.usingReRank,
+                rerankModelId: data.dataset.rerankModelId,
                 rerankModel: data.dataset.rerankModel,
                 rerankWeight: data.dataset.rerankWeight,
                 datasetSearchUsingExtensionQuery: data.dataset.datasetSearchUsingExtensionQuery,
+                datasetSearchExtensionModelId: data.dataset.datasetSearchExtensionModelId,
                 datasetSearchExtensionModel: data.dataset.datasetSearchExtensionModel,
-                datasetSearchExtensionBg: data.dataset.datasetSearchExtensionBg
+                datasetSearchExtensionBg: data.dataset.datasetSearchExtensionBg,
+                [NodeInputKeyEnum.authTmbId]: data.dataset.authTmbId
               })
             },
             // agent sandbox
@@ -278,6 +361,13 @@ export function agentForm2AppWorkflow(
               valueType: WorkflowIOValueTypeEnum.boolean,
               value: data.aiSettings.useAgentSandbox ?? false
             },
+            {
+              key: NodeInputKeyEnum.sandboxEntrypoint,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.string,
+              value: normalizedSandboxEntrypoint
+            },
             // Skills configuration
             ...(data.selectedAgentSkills && data.selectedAgentSkills.length > 0
               ? [
@@ -286,7 +376,14 @@ export function agentForm2AppWorkflow(
                     renderTypeList: [FlowNodeInputTypeEnum.hidden],
                     label: '',
                     valueType: WorkflowIOValueTypeEnum.arrayObject,
-                    value: data.selectedAgentSkills
+                    value: data.selectedAgentSkills.map(
+                      ({ skillId, name, description, avatar }) => ({
+                        skillId,
+                        name,
+                        description,
+                        ...(avatar === undefined ? {} : { avatar })
+                      })
+                    )
                   }
                 ]
               : [])
@@ -308,7 +405,7 @@ export function agentForm2AppWorkflow(
   const workflow = agentChatTemplate();
 
   return {
-    nodes: [systemConfigTemplate(), workflowStartTemplate(), ...workflow.nodes],
+    nodes: [workflowStartTemplate(), ...workflow.nodes],
     edges: workflow.edges,
     chatConfig: data.chatConfig
   };
@@ -340,28 +437,38 @@ export const getEmptyAgentConfig = (t: any) => {
 export const loadGeneratedTools = async ({
   newToolIds,
   existsTools = [],
-  topAgentSelectedTools = [],
+  generatedSelectedTools = [],
   fileSelectConfig
 }: {
-  newToolIds: string[]; // 新的，完整的 toolId
+  newToolIds: Array<string | { id: string; source?: string }>; // 新的，完整的 toolId
   existsTools?: SelectedToolItemType[];
-  topAgentSelectedTools?: SelectedToolItemType[];
+  generatedSelectedTools?: SelectedToolItemType[];
   fileSelectConfig?: AppFileSelectConfigType;
 }): Promise<SelectedToolItemType[]> => {
   const results = (
     await Promise.all(
-      newToolIds.map<Promise<SelectedToolItemType | undefined>>(async (toolId: string) => {
+      newToolIds.map<Promise<SelectedToolItemType | undefined>>(async (toolRef) => {
+        const toolId = typeof toolRef === 'string' ? toolRef : toolRef.id;
+        const source = typeof toolRef === 'string' ? undefined : toolRef.source;
+        const identityKey = getToolSelectionKey(toolId, source);
         // 已经存在的工具，直接返回
-        const existTool = existsTools.find((tool) => tool.pluginId === toolId);
+        const existTool = existsTools.find(
+          (tool) => getToolSelectionKey(tool.pluginId, tool.source) === identityKey
+        );
         if (existTool) {
           return existTool;
         }
 
         // 新工具，需要与已配置的 tool 进行 input 合并
-        const tool = await getToolPreviewNode({ appId: toolId });
+        const tool = await getClientToolPreviewNode({
+          appId: toolId,
+          getLatestVersion: true,
+          source
+        });
         // 验证工具配置
         const toolValid = validateToolConfiguration({
           toolTemplate: tool,
+          isAppTool: true,
           canUploadFile: !!(
             fileSelectConfig?.canSelectFile ||
             fileSelectConfig?.canSelectImg ||
@@ -374,20 +481,16 @@ export const loadGeneratedTools = async ({
           return;
         }
 
-        const topTool = topAgentSelectedTools.find((item) => item.pluginId === toolId);
-        if (topTool) {
-          tool.inputs.forEach((input) => {
-            const topInput = topTool.inputs.find((topIn) => topIn.key === input.key);
-            if (topInput) {
-              input.value = topInput.value;
-            }
-          });
-        }
+        const generatedTool = generatedSelectedTools.find(
+          (item) => getToolSelectionKey(item.pluginId, item.source) === identityKey
+        );
+        const inheritedTool = inheritToolInputConfig({ tool, sourceTool: generatedTool });
 
         return {
-          ...tool,
+          ...inheritedTool,
           id: toolId,
-          configStatus: getToolConfigStatus({ tool }).status
+          source,
+          configStatus: getToolConfigStatus({ tool: inheritedTool }).status
         };
       })
     )

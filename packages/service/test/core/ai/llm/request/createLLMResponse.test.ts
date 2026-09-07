@@ -5,17 +5,16 @@ import type {
   StreamResponseType
 } from '@fastgpt/global/core/ai/llm/type';
 import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/constants';
-import type { LLMModelItemType } from '@fastgpt/global/core/ai/model.schema';
+import type {
+  LLMModelConfigType,
+  LLMSystemModelDataType
+} from '@fastgpt/global/core/ai/model.schema';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
 // Mock dependencies
 vi.mock('@fastgpt/service/core/ai/config', () => ({
   getAIApi: vi.fn(),
   defaultUserOpenAIBaseUrl: 'https://api.openai.com/v1'
-}));
-
-vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getLLMModel: vi.fn()
 }));
 
 vi.mock('@fastgpt/service/core/ai/llm/utils', () => ({
@@ -51,6 +50,9 @@ vi.mock('@fastgpt/service/core/ai/record/controller', () => ({
 
 vi.mock('@fastgpt/global/core/ai/llm/utils', () => ({
   removeDatasetCiteText: vi.fn((text: string) => text),
+  normalizeToolResponseContent: vi.fn((content: unknown) =>
+    typeof content === 'string' ? content : JSON.stringify(content)
+  ),
   getLLMSupportParams: vi.fn(() => ({
     vision: false,
     temperature: true,
@@ -71,7 +73,6 @@ vi.mock('@fastgpt/service/core/ai/utils', () => ({
 
 // Import mocked modules
 import { getAIApi } from '@fastgpt/service/core/ai/config';
-import { getLLMModel } from '@fastgpt/service/core/ai/model';
 import { loadRequestMessages } from '@fastgpt/service/core/ai/llm/utils';
 import { countGptMessagesTokens } from '@fastgpt/service/common/string/tiktoken/index';
 import { parseLLMStreamResponse, parseReasoningContent } from '@fastgpt/service/core/ai/utils';
@@ -79,10 +80,9 @@ import { getLLMSupportParams } from '@fastgpt/global/core/ai/llm/utils';
 import { promptToolCallMessageRewrite } from '@fastgpt/service/core/ai/llm/promptCall';
 import { saveLLMRequestRecord } from '@fastgpt/service/core/ai/record/controller';
 
-import { createLLMResponse } from '@fastgpt/service/core/ai/llm/request/createLLMResponse';
+import { createLLMResponse as rawCreateLLMResponse } from '@fastgpt/service/core/ai/llm/request';
 
 const mockGetAIApi = vi.mocked(getAIApi);
-const mockGetLLMModel = vi.mocked(getLLMModel);
 const mockLoadRequestMessages = vi.mocked(loadRequestMessages);
 const mockCountGptMessagesTokens = vi.mocked(countGptMessagesTokens);
 const mockParseLLMStreamResponse = vi.mocked(parseLLMStreamResponse);
@@ -90,6 +90,12 @@ const mockParseReasoningContent = vi.mocked(parseReasoningContent);
 const mockGetLLMSupportParams = vi.mocked(getLLMSupportParams);
 const mockPromptToolCallMessageRewrite = vi.mocked(promptToolCallMessageRewrite);
 const mockSaveLLMRequestRecord = vi.mocked(saveLLMRequestRecord);
+
+const createLLMResponse: typeof rawCreateLLMResponse = ((args: any) =>
+  rawCreateLLMResponse({
+    teamId: 'team_1',
+    ...args
+  })) as typeof rawCreateLLMResponse;
 
 const createMockAIApiResult = (
   ai: any,
@@ -115,18 +121,29 @@ const defaultSupportParams = {
 };
 
 // Helper to create mock model data
-const createMockModelData = (overrides?: Partial<LLMModelItemType>): LLMModelItemType => ({
+const createMockModelData = (
+  overrides?: Partial<Omit<LLMSystemModelDataType, 'config'>> & {
+    config?: Partial<LLMModelConfigType>;
+  }
+): LLMSystemModelDataType => ({
+  modelId: '68ad85a7463006c963799a05',
   type: ModelTypeEnum.llm,
   provider: 'openai',
   model: 'gpt-4',
   name: 'GPT-4',
-  maxContext: 128000,
-  maxResponse: 4096,
-  quoteMaxToken: 60000,
-  functionCall: true,
-  toolChoice: true,
-  reasoning: false,
-  ...overrides
+  isActive: true,
+  scope: 'system' as const,
+  isCustom: false,
+  ...overrides,
+  config: {
+    maxContext: 128000,
+    maxResponse: 4096,
+    quoteMaxToken: 60000,
+    functionCall: true,
+    toolChoice: true,
+    reasoning: false,
+    ...overrides?.config
+  }
 });
 
 // Helper to create async generator for stream response
@@ -149,7 +166,6 @@ describe('createLLMResponse', () => {
     vi.clearAllMocks();
 
     // Default mock setup
-    mockGetLLMModel.mockReturnValue(createMockModelData());
     mockLoadRequestMessages.mockImplementation(async ({ messages }: any) => messages as any);
     mockCountGptMessagesTokens.mockResolvedValue(100);
     mockParseReasoningContent.mockImplementation((content: string) => ['', content]);
@@ -182,7 +198,6 @@ describe('createLLMResponse', () => {
         requestUrl: 'https://model.example.com/v1/chat/completions',
         requestAuth: 'model-key'
       });
-      mockGetLLMModel.mockReturnValue(modelData);
       const createMock = vi.fn().mockResolvedValue(mockTextResponse);
       mockGetAIApi.mockReturnValue(
         createMockAIApiResult(
@@ -205,7 +220,7 @@ describe('createLLMResponse', () => {
           baseUrl: 'https://user.example.com/v1'
         } as any,
         body: {
-          model: 'gpt-4',
+          model: modelData,
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
           stream: false
         }
@@ -240,7 +255,6 @@ describe('createLLMResponse', () => {
         requestUrl: 'https://model.example.com/v1/chat/completions',
         requestAuth: 'model-key'
       });
-      mockGetLLMModel.mockReturnValue(modelData);
       const createMock = vi.fn().mockResolvedValue(mockTextResponse);
       mockGetAIApi.mockReturnValue(
         createMockAIApiResult(
@@ -263,7 +277,7 @@ describe('createLLMResponse', () => {
           key: 'user-key'
         } as any,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
           stream: false
         }
@@ -287,6 +301,33 @@ describe('createLLMResponse', () => {
           })
         })
       );
+    });
+
+    it('should pass custom timeout to the AI client', async () => {
+      const createMock = vi.fn().mockResolvedValue(mockTextResponse);
+      mockGetAIApi.mockReturnValue(
+        createMockAIApiResult({
+          chat: {
+            completions: {
+              create: createMock
+            }
+          }
+        })
+      );
+
+      await createLLMResponse({
+        timeout: 15_000,
+        body: {
+          model: createMockModelData(),
+          messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
+          stream: false
+        }
+      });
+
+      expect(mockGetAIApi).toHaveBeenCalledWith({
+        userKey: undefined,
+        timeout: 15_000
+      });
     });
 
     it('should not save usage when user request fails', async () => {
@@ -313,7 +354,7 @@ describe('createLLMResponse', () => {
           key: 'user-key'
         } as any,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
           stream: false
         }
@@ -333,9 +374,123 @@ describe('createLLMResponse', () => {
       );
       expect(mockSaveLLMRequestRecord.mock.calls[0][0].response).not.toHaveProperty('usage');
     });
+
+    it('should skip saving error record when saveLLMResponseRecord is false', async () => {
+      const createMock = vi.fn().mockRejectedValue(new Error('upstream failed'));
+      mockGetAIApi.mockReturnValue(
+        createMockAIApiResult({
+          chat: {
+            completions: {
+              create: createMock
+            }
+          }
+        })
+      );
+
+      const result = await createLLMResponse({
+        throwError: false,
+        saveLLMResponseRecord: false,
+        body: {
+          model: createMockModelData(),
+          messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
+          stream: false
+        }
+      });
+
+      expect(result.finish_reason).toBe('error');
+      expect(mockSaveLLMRequestRecord).not.toHaveBeenCalled();
+    });
   });
 
   describe('Non-stream text output', () => {
+    it('should normalize split assistant fields before sending request', async () => {
+      const mockResponse = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'ok'
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 2,
+          total_tokens: 12
+        }
+      };
+      const createMock = vi.fn().mockResolvedValue(mockResponse);
+      mockGetAIApi.mockReturnValue(
+        createMockAIApiResult({
+          chat: {
+            completions: {
+              create: createMock
+            }
+          }
+        })
+      );
+
+      const toolCall: ChatCompletionMessageToolCall = {
+        id: 'call_update_plan',
+        type: 'function',
+        function: {
+          name: 'update_plan',
+          arguments: '{"updates":[]}'
+        }
+      };
+
+      await createLLMResponse({
+        body: {
+          model: createMockModelData(),
+          messages: [
+            { role: ChatCompletionRequestMessageRoleEnum.User, content: 'make a plan' },
+            {
+              role: ChatCompletionRequestMessageRoleEnum.Assistant,
+              reasoning_content: 'Need to create a plan.'
+            },
+            {
+              role: ChatCompletionRequestMessageRoleEnum.Assistant,
+              tool_calls: [toolCall]
+            },
+            {
+              role: ChatCompletionRequestMessageRoleEnum.Tool,
+              tool_call_id: 'call_update_plan',
+              content: 'Created active plan.'
+            }
+          ],
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'update_plan',
+                description: 'Update plan',
+                parameters: {
+                  type: 'object',
+                  properties: {}
+                }
+              }
+            }
+          ],
+          stream: false
+        }
+      });
+
+      expect(createMock.mock.calls[0][0].messages).toEqual([
+        { role: ChatCompletionRequestMessageRoleEnum.User, content: 'make a plan' },
+        {
+          role: ChatCompletionRequestMessageRoleEnum.Assistant,
+          reasoning_content: 'Need to create a plan.',
+          tool_calls: [toolCall]
+        },
+        {
+          role: ChatCompletionRequestMessageRoleEnum.Tool,
+          tool_call_id: 'call_update_plan',
+          content: 'Created active plan.'
+        }
+      ]);
+    });
+
     it('should handle simple non-stream text response', async () => {
       const mockResponse = {
         choices: [
@@ -370,7 +525,7 @@ describe('createLLMResponse', () => {
       let streamedText = '';
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         },
@@ -385,6 +540,53 @@ describe('createLLMResponse', () => {
       expect(result.finish_reason).toBe('stop');
       expect(result.toolCalls).toBeUndefined();
       expect(streamedText).toBe('Hello! How can I help you?');
+    });
+
+    it('should skip saving request record when saveLLMResponseRecord is false', async () => {
+      const mockResponse = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Internal helper response'
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8
+        }
+      };
+
+      const mockAI = {
+        chat: {
+          completions: {
+            create: vi.fn().mockResolvedValue(mockResponse)
+          }
+        }
+      };
+      mockGetAIApi.mockReturnValue(createMockAIApiResult(mockAI));
+
+      const result = await createLLMResponse({
+        saveLLMResponseRecord: false,
+        body: {
+          model: createMockModelData(),
+          messages: [
+            { role: ChatCompletionRequestMessageRoleEnum.User, content: 'Generate title' }
+          ],
+          stream: false
+        }
+      });
+
+      expect(result.answerText).toBe('Internal helper response');
+      expect(result.usage).toEqual({
+        inputTokens: 5,
+        outputTokens: 3,
+        usedUserOpenAIKey: false
+      });
+      expect(mockSaveLLMRequestRecord).not.toHaveBeenCalled();
     });
 
     it('should fill stop finish reason for non-stream response when finish reason is missing', async () => {
@@ -420,7 +622,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         }
@@ -473,7 +675,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         }
@@ -540,7 +742,7 @@ describe('createLLMResponse', () => {
       let streamedText = '';
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: true
         },
@@ -605,7 +807,7 @@ describe('createLLMResponse', () => {
       const result = await createLLMResponse({
         throwError: false,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: true
         },
@@ -683,7 +885,7 @@ describe('createLLMResponse', () => {
       let callCount = 0;
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: true
         },
@@ -699,8 +901,6 @@ describe('createLLMResponse', () => {
 
   describe('Reasoning (thinking) output', () => {
     it('should handle non-stream response with reasoning_content', async () => {
-      mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
-
       const mockResponse = {
         choices: [
           {
@@ -736,7 +936,7 @@ describe('createLLMResponse', () => {
       let answerText = '';
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         },
@@ -755,7 +955,6 @@ describe('createLLMResponse', () => {
     });
 
     it('should handle non-stream response with think tag in content', async () => {
-      mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
       mockParseReasoningContent.mockReturnValue(['Thinking process here', 'Final answer']);
 
       const mockResponse = {
@@ -790,7 +989,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData({ config: { reasoning: true } }),
           messages,
           stream: false
         }
@@ -801,8 +1000,6 @@ describe('createLLMResponse', () => {
     });
 
     it('should handle stream response with reasoning_content', async () => {
-      mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
-
       const chunks = [
         {
           choices: [
@@ -865,7 +1062,7 @@ describe('createLLMResponse', () => {
       let answerText = '';
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: true
         },
@@ -950,7 +1147,7 @@ describe('createLLMResponse', () => {
       const toolCallResults: ChatCompletionMessageToolCall[] = [];
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: false
@@ -1020,7 +1217,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: false
@@ -1043,6 +1240,69 @@ describe('createLLMResponse', () => {
           })
         })
       );
+    });
+
+    it('should not treat reasoning-only tool_calls finish as empty response', async () => {
+      const mockResponse = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              reasoning_content: 'I already have enough context to answer.',
+              tool_calls: []
+            },
+            finish_reason: 'tool_calls'
+          }
+        ],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 12,
+          total_tokens: 32
+        }
+      };
+
+      const mockAI = {
+        chat: {
+          completions: {
+            create: vi.fn().mockResolvedValue(mockResponse)
+          }
+        }
+      };
+      mockGetAIApi.mockReturnValue(createMockAIApiResult(mockAI));
+
+      const result = await createLLMResponse({
+        body: {
+          model: createMockModelData(),
+          messages: [
+            {
+              role: ChatCompletionRequestMessageRoleEnum.User,
+              content: "What's the weather in Beijing?"
+            }
+          ],
+          tools: [
+            {
+              type: 'function' as const,
+              function: {
+                name: 'get_weather',
+                description: 'Get weather information',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    location: { type: 'string' }
+                  }
+                }
+              }
+            }
+          ],
+          stream: false
+        }
+      });
+
+      expect(result.finish_reason).toBe('tool_calls');
+      expect(result.responseEmptyTip).toBeUndefined();
+      expect(result.reasoningText).toBe('I already have enough context to answer.');
+      expect(result.error).toBeUndefined();
     });
 
     it('should handle stream tool call response', async () => {
@@ -1148,7 +1408,7 @@ describe('createLLMResponse', () => {
       const toolParamResults: string[] = [];
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: true
@@ -1230,7 +1490,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: true
@@ -1330,7 +1590,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: false
@@ -1400,7 +1660,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           tools,
           stream: false
@@ -1432,7 +1692,7 @@ describe('createLLMResponse', () => {
         createLLMResponse({
           throwError: true,
           body: {
-            model: 'gpt-4',
+            model: createMockModelData(),
             messages,
             stream: false
           }
@@ -1475,7 +1735,7 @@ describe('createLLMResponse', () => {
       const result = await createLLMResponse({
         throwError: false,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         }
@@ -1485,6 +1745,65 @@ describe('createLLMResponse', () => {
       expect(result.finish_reason).toBe('error');
       expect(result.usage.inputTokens).toBe(10);
       expect(result.usage.outputTokens).toBe(2);
+    });
+
+    it('should not save duplicate error record when response error is rethrown', async () => {
+      const mockResponse = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: ''
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        error: new Error('Some error'),
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 2,
+          total_tokens: 12
+        }
+      };
+
+      const mockAI = {
+        chat: {
+          completions: {
+            create: vi.fn().mockResolvedValue(mockResponse)
+          }
+        }
+      };
+      mockGetAIApi.mockReturnValue(createMockAIApiResult(mockAI));
+
+      const messages: ChatCompletionMessageParam[] = [
+        { role: ChatCompletionRequestMessageRoleEnum.User, content: 'Hello' }
+      ];
+
+      await expect(
+        createLLMResponse({
+          throwError: true,
+          body: {
+            model: createMockModelData(),
+            messages,
+            stream: false
+          }
+        })
+      ).rejects.toThrow('Some error');
+
+      expect(mockSaveLLMRequestRecord).toHaveBeenCalledTimes(1);
+      expect(mockSaveLLMRequestRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: 'test-request-id',
+          response: expect.objectContaining({
+            finish_reason: 'error',
+            usage: {
+              inputTokens: 10,
+              outputTokens: 2
+            },
+            error: expect.any(Error)
+          })
+        })
+      );
     });
 
     it('should keep usage when stream is interrupted with partial response', async () => {
@@ -1544,7 +1863,7 @@ describe('createLLMResponse', () => {
       const result = await createLLMResponse({
         throwError: false,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: true
         }
@@ -1601,7 +1920,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         }
@@ -1644,7 +1963,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         }
@@ -1703,7 +2022,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         },
@@ -1748,7 +2067,7 @@ describe('createLLMResponse', () => {
 
       const result = await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages,
           stream: false
         },
@@ -1772,7 +2091,6 @@ describe('createLLMResponse', () => {
     });
 
     it('should preserve reasoning_effort when model supports it', async () => {
-      mockGetLLMModel.mockReturnValue(createMockModelData({ reasoning: true }));
       mockGetLLMSupportParams.mockReturnValueOnce({
         ...defaultSupportParams,
         reasoning: true,
@@ -1788,7 +2106,7 @@ describe('createLLMResponse', () => {
 
       await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
           reasoning_effort: 'high',
           stream: false
@@ -1825,7 +2143,7 @@ describe('createLLMResponse', () => {
 
       await createLLMResponse({
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'hi' }],
           reasoning_effort: 'high',
           stream: false
@@ -1873,7 +2191,7 @@ describe('createLLMResponse', () => {
       const result = await createLLMResponse({
         throwError: false,
         body: {
-          model: 'gpt-4',
+          model: createMockModelData(),
           messages: [{ role: ChatCompletionRequestMessageRoleEnum.User, content: 'q' }],
           tools: [
             {
@@ -1893,6 +2211,56 @@ describe('createLLMResponse', () => {
       expect(result.error).toBeDefined();
       expect(result.requestMessages).toEqual(rewritten);
       expect(result.completeMessages).toEqual(rewritten);
+    });
+
+    it('should return normalized requestMessages on API error', async () => {
+      const mockAI = {
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(new Error('boom'))
+          }
+        }
+      };
+      mockGetAIApi.mockReturnValue(createMockAIApiResult(mockAI));
+
+      const toolCall: ChatCompletionMessageToolCall = {
+        id: 'call_search',
+        type: 'function',
+        function: {
+          name: 'search',
+          arguments: '{"q":"x"}'
+        }
+      };
+
+      const result = await createLLMResponse({
+        throwError: false,
+        body: {
+          model: createMockModelData(),
+          messages: [
+            { role: ChatCompletionRequestMessageRoleEnum.User, content: 'q' },
+            {
+              role: ChatCompletionRequestMessageRoleEnum.Assistant,
+              reasoning_content: 'Need search.'
+            },
+            {
+              role: ChatCompletionRequestMessageRoleEnum.Assistant,
+              tool_calls: [toolCall]
+            }
+          ],
+          stream: false
+        }
+      });
+
+      expect(result.error).toBeDefined();
+      expect(result.requestMessages).toEqual([
+        { role: ChatCompletionRequestMessageRoleEnum.User, content: 'q' },
+        {
+          role: ChatCompletionRequestMessageRoleEnum.Assistant,
+          reasoning_content: 'Need search.',
+          tool_calls: [toolCall]
+        }
+      ]);
+      expect(result.completeMessages).toEqual(result.requestMessages);
     });
   });
 });

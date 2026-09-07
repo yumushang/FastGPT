@@ -9,21 +9,19 @@ import { useWorkflowUtils } from './useUtils';
 import { useKeyPress as useKeyPressEffect } from 'ahooks';
 import { isNestedParentNodeType } from '@fastgpt/global/core/workflow/node/constant';
 import { WorkflowBufferDataContext } from '../../context/workflowInitContext';
-import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
 import { WorkflowUIContext } from '../../context/workflowUIContext';
+import { isWorkflowShortcutInputtingTarget } from './keyboard';
 
 export const useKeyboard = () => {
   const { t } = useTranslation();
   const getNodes = useContextSelector(WorkflowBufferDataContext, (v) => v.getNodes);
   const setNodes = useContextSelector(WorkflowBufferDataContext, (v) => v.setNodes);
   const mouseInCanvas = useContextSelector(WorkflowUIContext, (v) => v.mouseInCanvas);
-  const mousePosition = useContextSelector(WorkflowUIContext, (v) => v.mousePosition);
+  const getMousePosition = useContextSelector(WorkflowUIContext, (v) => v.getMousePosition);
 
-  const { getMyModelList } = useSystemStore();
-  const { data: myModels } = useRequest(getMyModelList, {
-    manual: false
-  });
+  const { modelList } = useUserModelLists();
+  const myModels = new Set(modelList.map((model) => model.model));
 
   const { copyData } = useCopyData();
   const { computedNewNodeName } = useWorkflowUtils();
@@ -31,17 +29,8 @@ export const useKeyboard = () => {
 
   const isDowningCtrl = useKeyPress(['Meta', 'Control']);
 
-  const hasInputtingElement = useCallback(() => {
-    const activeElement = document.activeElement;
-
-    if (activeElement) {
-      const tagName = activeElement.tagName.toLowerCase();
-      const className = activeElement.className.toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea') return true;
-      if (className.includes('prompteditor')) return true;
-    }
-
-    return false;
+  const hasInputtingElement = useCallback((event?: KeyboardEvent) => {
+    return isWorkflowShortcutInputtingTarget(event?.target);
   }, []);
 
   const onCopy = useCallback(async () => {
@@ -59,7 +48,9 @@ export const useKeyboard = () => {
     if (hasInputtingElement()) return;
 
     // Only paste if mouse is in canvas and we have mouse position
-    if (!mouseInCanvas || !mousePosition) return;
+    if (!mouseInCanvas) return;
+    const mousePosition = getMousePosition();
+    if (!mousePosition) return;
 
     const copyResult = await navigator.clipboard.readText();
     try {
@@ -123,12 +114,12 @@ export const useKeyboard = () => {
           //@ts-ignore
           .concat(newNodes)
       );
-    } catch (error) {}
+    } catch {}
   }, [
     computedNewNodeName,
+    getMousePosition,
     hasInputtingElement,
     mouseInCanvas,
-    mousePosition,
     myModels,
     screenToFlowPosition,
     setNodes
@@ -136,10 +127,12 @@ export const useKeyboard = () => {
 
   useKeyPressEffect(['ctrl.c', 'meta.c'], (e) => {
     if (!mouseInCanvas) return;
+    if (hasInputtingElement(e)) return;
     onCopy();
   });
   useKeyPressEffect(['ctrl.v', 'meta.v'], (e) => {
     if (!mouseInCanvas) return;
+    if (hasInputtingElement(e)) return;
     onPaste();
   });
   useKeyPressEffect(['ctrl.s', 'meta.s'], (e) => {

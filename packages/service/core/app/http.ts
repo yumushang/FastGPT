@@ -3,12 +3,21 @@ import { getSecretValue } from '../../common/secret/utils';
 import { axios } from '../../common/api/axios';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import type { RequireOnlyOne } from '@fastgpt/global/common/type/utils';
-import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
+import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import {
+  HttpToolConfigTypeSchema,
+  type HttpToolConfigType
+} from '@fastgpt/global/core/app/tool/httpTool/type';
 import { contentTypeMap, ContentTypes } from '@fastgpt/global/core/workflow/constants';
-import { replaceEditorVariable } from '@fastgpt/global/core/workflow/runtime/utils';
 import { isInternalAddress, PRIVATE_URL_TEXT } from '../../common/system/utils';
 import type { AppSchemaType } from '@fastgpt/global/core/app/type';
 import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
+import { replaceEditorVariable } from '../workflow/dispatch/utils/replaceEditorVariable';
+import FormData from 'form-data';
+import { getLogger, LogCategories } from '../../common/logger';
+import { decodeHttpToolSetNodesFromStorage } from './jsonSchemaStorage';
+
+const logger = getLogger(LogCategories.MODULE.APP.HTTP_TOOLS);
 
 export type RunHTTPToolParams = {
   baseUrl: string;
@@ -58,7 +67,7 @@ const buildHttpRequest = ({
     }
 
     if (staticBody.type === ContentTypes.formData) {
-      const formData = new (require('form-data'))();
+      const formData = new FormData();
       staticBody.formData?.forEach(({ key, value }) => {
         const replacedKey = replaceVariables(key);
         const replacedValue = replaceVariables(value);
@@ -178,14 +187,23 @@ export const runHTTPTool = async ({
 
     return { data };
   } catch (error) {
-    console.log(error);
+    logger.warn('HTTP tool request failed', { error });
     return { errorMsg: getErrText(error) };
   }
 };
 
+/** Read the current HTTP tool list from a toolset app. */
 export const getHTTPToolList = async (app: AppSchemaType) => {
+  if (app.type !== AppTypeEnum.httpToolSet) return [];
+
+  const modules = decodeHttpToolSetNodesFromStorage(app.modules);
+  const toolSet = modules[0]?.toolConfig?.httpToolSet;
+  const toolList = HttpToolConfigTypeSchema.array().safeParse(
+    toolSet && 'toolList' in toolSet ? toolSet.toolList : undefined
+  ).data;
+
   return (
-    app.modules[0].toolConfig?.httpToolSet?.toolList.map((item) => ({
+    toolList?.map((item) => ({
       ...item,
       id: `${AppToolSourceEnum.http}-${String(app._id)}/${item.name}`,
       avatar: app.avatar

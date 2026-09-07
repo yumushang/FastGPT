@@ -1,11 +1,16 @@
 import { type SearchDataResponseItemType } from '@fastgpt/global/core/dataset/type';
-import { countPromptTokens } from '../../../common/string/tiktoken/index';
+import { countPromptTokensBatch } from '../../../common/string/tiktoken/index';
 import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
-import { getSystemToolByIdAndVersionId, getSystemTools } from '../../app/tool/controller';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
+import { SystemToolRepo } from '../../app/tool/systemTool/systemTool.repo';
+import { jsonSchema2NodeInput, jsonSchema2NodeOutput } from '@fastgpt/global/core/app/jsonschema';
+import { isDebugToolSource, isTeamPluginSource } from '@fastgpt/global/core/app/tool/utils';
+import {
+  assertTeamPluginSourceAccess,
+  getRawPluginIdFromSystemToolId
+} from '../../plugin/teamPluginPolicy';
 
 /* filter search result */
 export const filterSearchResultsByMaxChars = async (
@@ -14,10 +19,11 @@ export const filterSearchResultsByMaxChars = async (
 ) => {
   const results: SearchDataResponseItemType[] = [];
   let totalTokens = 0;
+  const itemTokens = await countPromptTokensBatch(list.map((item) => item.q + item.a));
 
   for (let i = 0; i < list.length; i++) {
     const item = list[i];
-    totalTokens += await countPromptTokens(item.q + item.a);
+    totalTokens += itemTokens[i] || 0;
     if (totalTokens > maxTokens + 500) {
       break;
     }
@@ -30,54 +36,100 @@ export const filterSearchResultsByMaxChars = async (
   return results.length === 0 ? list.slice(0, 1) : results;
 };
 
+/**
+ * 把 SystemTool Toolset 替换为 Tool 节点
+ */
 export async function getSystemToolRunTimeNodeFromSystemToolset({
   toolSetNode,
+  teamId,
   lang = 'en'
 }: {
-  toolSetNode: Pick<RuntimeNodeItemType, 'toolConfig' | 'inputs' | 'nodeId'>;
+  toolSetNode: Pick<RuntimeNodeItemType, 'toolConfig' | 'inputs' | 'nodeId' | 'version'>;
+  teamId?: string;
   lang?: localeType;
 }): Promise<RuntimeNodeItemType[]> {
   const systemToolId = toolSetNode.toolConfig?.systemToolSet?.toolId!;
+  const toolConfigSource = (() => {
+    const toolConfigSource = toolSetNode.toolConfig?.systemToolSet?.source;
+    if (isDebugToolSource(toolConfigSource)) return toolConfigSource;
+    if (isTeamPluginSource(toolConfigSource)) return toolConfigSource;
+
+    return 'system';
+  })();
+  const systemToolSource = await (async () => {
+    if (!isTeamPluginSource(toolConfigSource)) return toolConfigSource;
+    if (!teamId) return Promise.reject('plugin.team_id_required');
+
+    await assertTeamPluginSourceAccess({
+      teamId,
+      source: toolConfigSource,
+      pluginId: getRawPluginIdFromSystemToolId(systemToolId)
+    });
+
+    return toolConfigSource;
+  })();
+  const selectedTools = toolSetNode.toolConfig?.systemToolSet?.toolList ?? [];
+  if (!selectedTools.length) return [];
 
   const toolsetInputConfig = toolSetNode.inputs.find(
     (item) => item.key === NodeInputKeyEnum.systemInputConfig
   );
-  const tools = await getSystemTools();
-  const children = tools.filter(
-    (item) => item.parentId === systemToolId && (item.status === 1 || item.status === undefined)
+  const systemToolRepo = SystemToolRepo.getInstance();
+  const tool = await systemToolRepo.getSystemToolDetail({
+    pluginId: systemToolId,
+    lang,
+    source: systemToolSource,
+    version: toolSetNode.version,
+    fallbackLatestVersion: true
+  });
+
+  if (!tool.children) return [];
+
+  const runtimeVersion = tool.version || toolSetNode.version;
+  const childMap = new Map<string, (typeof tool.children)[number]>(
+    tool.children.map((child) => [`${systemToolId}/${child.id}`, child])
   );
-  const nodes = await Promise.all(
-    children.map(async (child, index) => {
-      const toolListItem = toolSetNode.toolConfig?.systemToolSet?.toolList.find(
-        (item) => item.toolId === child.id
-      );
+  tool.children.forEach((child) => {
+    childMap.set(child.id, child);
+  });
 
-      const tool = await getSystemToolByIdAndVersionId(child.id);
+  const nodes = selectedTools.flatMap((selectedTool) => {
+    const child = childMap.get(selectedTool.toolId);
+    if (!child) return [];
 
-      const inputs = tool.inputs ?? [];
-      if (toolsetInputConfig?.value) {
-        const configInput = inputs.find((item) => item.key === NodeInputKeyEnum.systemInputConfig);
-        if (configInput) {
-          configInput.value = toolsetInputConfig.value;
+    const pluginId = `${systemToolId}/${child.id}`;
+    const intro = selectedTool.description || child.description;
+    const toolDescription = selectedTool.description || child.toolDescription || child.description;
+    const childInputs = jsonSchema2NodeInput({
+      jsonSchema: child.inputSchema,
+      schemaType: 'systemTool'
+    });
+    const childOutputs = jsonSchema2NodeOutput({ jsonSchema: child.outputSchema });
+
+    return {
+      flowNodeType: FlowNodeTypeEnum.tool,
+      avatar: tool.avatar,
+      inputs: toolsetInputConfig ? [toolsetInputConfig, ...childInputs] : childInputs,
+      outputs: childOutputs,
+      name: selectedTool.name || child.name,
+      intro,
+      nodeId: `${toolSetNode.nodeId}${child.id}`,
+      version: runtimeVersion,
+      jsonSchema: child.inputSchema,
+      toolDescription,
+      toolConfig: {
+        systemTool: {
+          toolId: pluginId,
+          ...(isDebugToolSource(toolConfigSource) || isTeamPluginSource(toolConfigSource)
+            ? { source: toolConfigSource }
+            : {})
         }
-      }
-
-      return {
-        ...tool,
-        inputs,
-        outputs: tool.outputs ?? [],
-        name: toolListItem?.name || parseI18nString(tool.name, lang),
-        intro: toolListItem?.description || parseI18nString(tool.intro, lang),
-        flowNodeType: FlowNodeTypeEnum.tool,
-        nodeId: `${toolSetNode.nodeId}${index}`,
-        toolConfig: {
-          systemTool: {
-            toolId: child.id
-          }
-        }
-      };
-    })
-  );
+      },
+      pluginId
+      // BUG: 不知道 catchError 从哪里拿，后续需要优化实现
+      // catchError: toolSetNode.
+    } satisfies RuntimeNodeItemType;
+  });
 
   return nodes;
 }

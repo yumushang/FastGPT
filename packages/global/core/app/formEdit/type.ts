@@ -3,43 +3,51 @@ import z from 'zod';
 import { AppChatConfigTypeSchema, AppDatasetSearchParamsTypeSchema } from '../type';
 import { FlowNodeTemplateTypeSchema } from '../../workflow/type/node';
 import { NodeInputKeyEnum } from '../../workflow/constants';
+import { SANDBOX_ENTRYPOINT_MAX_LENGTH } from '../../ai/sandbox/constants';
 
-export type AgentSubAppItemType = {};
+export type AgentSubAppItemType = object;
 
 /* ===== Agent Skill ===== */
 export const SelectedAgentSkillItemTypeSchema = z.object({
   skillId: z.string(),
   name: z.string(),
   description: z.string().default(''),
-  avatar: z.string().optional()
+  avatar: z.string().optional(),
+  isDeleted: z.boolean().default(false)
 });
 export type SelectedAgentSkillItemType = z.infer<typeof SelectedAgentSkillItemTypeSchema>;
-
-/**
- * 将 skills 输入值规范化为 skillId 字符串数组。
- * 兼容两种格式：
- *   - string[]：debugChat 运行时直接传入的 skillId 数组
- *   - SelectedAgentSkillItemType[]：工作流 NodeAgent 存储的完整对象数组（含 name/avatar 等展示字段）
- */
-export const normalizeSkillIds = (
-  skills: Array<string | SelectedAgentSkillItemType> | undefined
-): string[] => (skills ?? []).map((s) => (typeof s === 'string' ? s : s.skillId)).filter(Boolean);
+export const StoredSelectedAgentSkillItemTypeSchema = SelectedAgentSkillItemTypeSchema.pick({
+  skillId: true
+});
+export type StoredSelectedAgentSkillItemType = z.infer<
+  typeof StoredSelectedAgentSkillItemTypeSchema
+>;
 
 /* ===== Tool ===== */
-export const SelectedToolItemTypeSchema = FlowNodeTemplateTypeSchema.extend({
-  configStatus: z.enum(['noConfig', 'waitingForConfig', 'configured', 'invalid']).optional()
+const SelectedToolItemBaseSchema = FlowNodeTemplateTypeSchema.extend({
+  configStatus: z.enum(['noConfig', 'waitingForConfig', 'configured', 'invalid']).optional(),
+  config: z.record(z.string(), z.unknown()).optional()
 });
+
+export const SelectedToolItemTypeSchema = SelectedToolItemBaseSchema;
 export type SelectedToolItemType = z.infer<typeof SelectedToolItemTypeSchema>;
+export type AvailableSelectedToolItemType = SelectedToolItemType;
 
 export const AppFormEditFormV1TypeSchema = z.object({
   aiSettings: z.object({
-    [NodeInputKeyEnum.aiModel]: z.string(),
+    [NodeInputKeyEnum.aiModelId]: z.string().optional(),
+    /** @deprecated */
+    [NodeInputKeyEnum.aiModel]: z.string().optional(),
     [NodeInputKeyEnum.aiSystemPrompt]: z.string().optional(),
 
     [NodeInputKeyEnum.aiChatTemperature]: z.number().optional(),
     [NodeInputKeyEnum.aiChatMaxToken]: z.number().optional(),
     [NodeInputKeyEnum.aiChatIsResponseText]: z.boolean(),
     maxHistories: z.int().min(0).max(100),
+    [NodeInputKeyEnum.aiChatVision]: z.boolean().optional(),
+    [NodeInputKeyEnum.aiChatAudio]: z.boolean().optional(),
+    [NodeInputKeyEnum.aiChatVideo]: z.boolean().optional(),
+    [NodeInputKeyEnum.aiChatExtractFiles]: z.boolean().optional(),
     [NodeInputKeyEnum.aiChatReasoning]: z.boolean().optional(),
     [NodeInputKeyEnum.aiChatReasoningEffort]: z
       .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'])
@@ -48,7 +56,8 @@ export const AppFormEditFormV1TypeSchema = z.object({
     [NodeInputKeyEnum.aiChatStopSign]: z.string().optional(),
     [NodeInputKeyEnum.aiChatResponseFormat]: z.string().optional(),
     [NodeInputKeyEnum.aiChatJsonSchema]: z.string().optional(),
-    [NodeInputKeyEnum.useAgentSandbox]: z.boolean().default(false).optional()
+    [NodeInputKeyEnum.useAgentSandbox]: z.boolean().default(false).optional(),
+    [NodeInputKeyEnum.sandboxEntrypoint]: z.string().max(SANDBOX_ENTRYPOINT_MAX_LENGTH).optional()
   }),
   dataset: AppDatasetSearchParamsTypeSchema.extend({
     datasets: z.array(SelectedDatasetSchema)

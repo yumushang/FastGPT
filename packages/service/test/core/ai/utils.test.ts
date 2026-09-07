@@ -7,10 +7,26 @@ import {
   parseReasoningContent
 } from '@fastgpt/service/core/ai/utils';
 import type { CompletionFinishReason } from '@fastgpt/global/core/ai/llm/type';
-import type { LLMModelItemType } from '@fastgpt/global/core/ai/model.schema';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 
 const mockModel = (maxResponse: number, maxTemperature?: number) =>
-  ({ maxResponse, maxTemperature }) as LLMModelItemType;
+  ({
+    modelId: '507f1f77bcf86cd799439031',
+    provider: 'test',
+    model: 'test-llm',
+    name: 'test-llm',
+    type: ModelTypeEnum.llm,
+    scope: 'system' as const,
+    isActive: true,
+    isCustom: false,
+    config: {
+      maxContext: 8192,
+      maxResponse,
+      quoteMaxToken: 4096,
+      maxTemperature
+    }
+  }) satisfies LLMSystemModelDataType;
 
 describe('computedMaxToken', () => {
   it('should return undefined when maxToken is undefined', () => {
@@ -83,6 +99,14 @@ describe('parseReasoningContent', () => {
 
   it('should return empty answer when nothing after think tag', () => {
     expect(parseReasoningContent('<think>reasoning</think>')).toEqual(['reasoning', '']);
+  });
+
+  it('should remove separator whitespace after think tag', () => {
+    expect(parseReasoningContent('<think>reasoning</think>\n')).toEqual(['reasoning', '']);
+    expect(parseReasoningContent('<think>reasoning</think>\n\nanswer')).toEqual([
+      'reasoning',
+      'answer'
+    ]);
   });
 
   it('should handle multiline think content', () => {
@@ -189,6 +213,22 @@ describe('parseLLMStreamResponse', () => {
           { content: '你好3' }
         ],
         correct: { answer: '你好1你好2你好3', reasoning: '这是思考过程' }
+      },
+      {
+        data: [{ content: '<think>这是' }, { content: '思考过程</think>\n' }],
+        correct: { answer: '', reasoning: '这是思考过程' }
+      },
+      {
+        data: [{ content: '<think>这是' }, { content: '思考过程</think>\n' }, { content: '你好1' }],
+        correct: { answer: '你好1', reasoning: '这是思考过程' }
+      },
+      {
+        data: [{ content: '<think>这是' }, { content: '思考过程</think>\n\n你好1' }],
+        correct: { answer: '你好1', reasoning: '这是思考过程' }
+      },
+      {
+        data: [{ reasoning_content: '这是思考过程' }, { content: '\n' }, { content: '你好1' }],
+        correct: { answer: '你好1', reasoning: '这是思考过程' }
       },
       {
         data: [

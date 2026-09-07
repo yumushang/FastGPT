@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://fastgpt.io/"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
+<a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=logo"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
 
 # FastGPT
 
@@ -18,7 +18,7 @@ FastGPT เป็นแพลตฟอร์มสำหรับสร้าง
 </div>
 
 <p align="center">
-  <a href="https://fastgpt.io/">
+  <a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_badge">
     <img height="21" src="https://img.shields.io/badge/ใช้งานออนไลน์-d4eaf7?style=flat-square&logo=spoj&logoColor=7d09f1" alt="cloud">
   </a>
   <a href="https://doc.fastgpt.io/guide/getting-started">
@@ -40,7 +40,7 @@ https://github.com/labring/FastGPT/assets/15308462/7d3a38df-eb0e-4388-9250-2409b
 
 ```bash
 # รันคำสั่งเพื่อดึงไฟล์การกำหนดค่า
-bash <(curl -fsSL https://doc.fastgpt.cn/deploy/install.sh)
+bash <(curl -fsSL https://doc.fastgpt.io/deploy/install.sh)
 # เริ่มบริการ
 docker compose up -d
 ```
@@ -52,13 +52,13 @@ docker compose up -d
 ## 🛸 วิธีการใช้งาน
 
 - **เวอร์ชันคลาวด์**  
-  หากคุณไม่ต้องการติดตั้งแบบส่วนตัว คุณสามารถใช้บริการคลาวด์ของเราได้โดยตรงที่: [fastgpt.io](https://fastgpt.io/)
+  หากคุณไม่ต้องการติดตั้งแบบส่วนตัว คุณสามารถใช้บริการคลาวด์ของเราได้โดยตรงที่: [fastgpt.io](https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_service_link)
 
 - **เวอร์ชันโฮสต์ตัวเองของชุมชน**  
   คุณสามารถติดตั้งได้อย่างรวดเร็วโดยใช้ [Docker](https://doc.fastgpt.io/self-host/deploy/docker) หรือใช้ [Sealos Cloud](https://doc.fastgpt.io/self-host/deploy/sealos) เพื่อติดตั้ง FastGPT ด้วยคลิกเดียว
 
 - **เวอร์ชันพาณิชย์**  
-  หากคุณต้องการคุณสมบัติที่สมบูรณ์มากขึ้นหรือการสนับสนุนบริการเชิงลึก คุณสามารถเลือก [เวอร์ชันพาณิชย์](https://doc.fastgpt.io/guide/version/commercial) นอกจากการให้ซอฟต์แวร์ที่สมบูรณ์ เรายังให้คำแนะนำการนำไปใช้สำหรับสถานการณ์เฉพาะ คุณสามารถส่ง[ปรึกษาธุรกิจ](https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc)
+  หากคุณต้องการคุณสมบัติที่สมบูรณ์มากขึ้นหรือการสนับสนุนบริการเชิงลึก คุณสามารถเลือก [เวอร์ชันพาณิชย์](https://doc.fastgpt.io/guide/version/commercial) นอกจากการให้ซอฟต์แวร์ที่สมบูรณ์ เรายังให้คำแนะนำการนำไปใช้สำหรับสถานการณ์เฉพาะ คุณสามารถส่ง[ปรึกษาธุรกิจ](https://fastgpt.cn/en/contact?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=commercial_consultation)
 
 ## 💡 คุณสมบัติหลัก
 
@@ -68,7 +68,7 @@ docker compose up -d
 | ![Demo](./.github/imgs/intro3.png) | ![Demo](./.github/imgs/intro4.png) |
 
 `1` ความสามารถในการจัดระเบียบแอปพลิเคชัน
-   - [x] โหมด Agent วางแผน
+   - [x] การจัดระเบียบ Agent Skill
    - [x] Workflow สนทนา, workflow ปลั๊กอิน, รวมถึงโหนด RPA พื้นฐาน
    - [x] การโต้ตอบกับผู้ใช้
    - [x] MCP สองทิศทาง
@@ -89,25 +89,19 @@ docker compose up -d
    - [x] รองรับ txt, md, html, pdf, docx, pptx, csv, xlsx (เพิ่มเติมได้โดย PR), รองรับการอ่าน URL และการนำเข้า CSV จำนวนมาก
    - [x] การค้นหาแบบผสมและการจัดอันดับใหม่
    - [x] ฐานความรู้ API
-   - [ ] การสลับโมดูล RAG แบบร้อน
+   - [ ] 
 
-`4` อินเทอร์เฟซ OpenAPI
-   - [x] อินเทอร์เฟซ completions (สอดคล้องกับโหมดแชท GPT)
-   - [x] CRUD ฐานความรู้
-   - [x] CRUD การสนทนา
-   - [x] อินเทอร์เฟซ OpenAPI อัตโนมัติ
+`4` ความสามารถของปลั๊กอิน
+   - [x] การอัปเดต tool ระบบแบบ hot update
+   - [ ] การอัปเดตโมดูล RAG แบบ hot update
+   - [ ] การอัปเดต Agent-loop แบบ hot update
+   - [ ] ปลั๊กอินที่ AI สร้างแบบเรียลไทม์
 
 `5` ความสามารถในการดำเนินงาน
    - [x] หน้าต่างแชร์โดยไม่ต้องเข้าสู่ระบบ
    - [x] การฝัง Iframe คลิกเดียว
    - [x] การตรวจสอบบันทึกการสนทนาแบบรวมพร้อมการใส่คำอธิบายข้อมูล
    - [x] บันทึกการดำเนินงานแอปพลิเคชัน
-
-`6` อื่นๆ
-   - [x] การกำหนดค่าโมเดลแบบภาพ
-   - [x] รองรับการป้อนเสียงและเอาต์พุต (กำหนดค่าได้)
-   - [x] คำแนะนำการป้อนข้อมูลแบบคลุมเครือ
-   - [x] ตลาดเทมเพลต
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-กลับด้านบน-7d09f1.svg" alt="#" align="right">
@@ -116,10 +110,9 @@ docker compose up -d
 ## 💪 โปรเจกต์และลิงก์ของเรา
 
 - [เริ่มต้นพัฒนาในเครื่อง](https://doc.fastgpt.io/self-host/dev/)
-- [เอกสาร OpenAPI](https://doc.fastgpt.io/openapi/intro)
+- [เอกสาร OpenAPI](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: บริการ Load Balancing การรวมโมเดล](https://github.com/labring/aiproxy)
-- [Laf: เข้าถึงแอปพลิเคชันของบุคคลที่สามใน 3 นาที](https://github.com/labring/laf)
 - [Sealos: การติดตั้งแอปพลิเคชันคลัสเตอร์อย่างรวดเร็ว](https://github.com/labring/sealos)
 
 <a href="#readme">
@@ -130,7 +123,6 @@ docker compose up -d
 
 - [AI Proxy: บริการรวมโมเดลขนาดใหญ่](https://sealos.run/aiproxy/?k=fastgpt-github/)
 - [SiliconCloud - แพลตฟอร์มประสบการณ์โมเดล Open Source ออนไลน์](https://cloud.siliconflow.cn/i/TR9Ym0c4)
-- [PPIO: เรียกใช้ API โมเดล Open Source ราคาประหยัดและ GPU Container](https://ppinfra.com/user/register?invited_by=VITYVU&utm_source=github_fastgpt)
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-กลับด้านบน-7d09f1.svg" alt="#" align="right">
@@ -186,9 +178,9 @@ docker compose up -d
 
 <a href="https://github.com/labring/FastGPT/stargazers" target="_blank" style="display: block" align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
   </picture>
 </a>
 

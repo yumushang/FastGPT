@@ -9,7 +9,10 @@ import userErr from './code/user';
 import commonErr from './code/common';
 import s3Err from './code/s3';
 import SystemErrEnum from './code/system';
-import agentSkillErr from './code/agentSkill';
+import agentSkillErr from './code/skill';
+import sandboxErr from './code/sandbox';
+import couponErr from './code/coupon';
+import modelErr from './code/model';
 import { i18nT } from '../i18n/utils';
 
 export const ERROR_CODE: { [key: number]: string } = {
@@ -39,6 +42,7 @@ export const proxyError: Record<string, boolean> = {
 
 export enum ERROR_ENUM {
   unAuthorization = 'unAuthorization',
+  unAuthProToken = 'unAuthProToken',
   insufficientQuota = 'insufficientQuota',
   unAuthModel = 'unAuthModel',
   unAuthApiKey = 'unAuthApiKey',
@@ -73,6 +77,12 @@ export const ERROR_RESPONSE: Record<
     code: 403,
     statusText: ERROR_ENUM.unAuthorization,
     message: i18nT('common:code_error.error_message.403'),
+    data: null
+  },
+  [ERROR_ENUM.unAuthProToken]: {
+    code: 403,
+    statusText: ERROR_ENUM.unAuthProToken,
+    message: 'PRO_TOKEN check error',
     data: null
   },
   [ERROR_ENUM.tooManyRequest]: {
@@ -122,5 +132,8 @@ export const ERROR_RESPONSE: Record<
   ...commonErr,
   ...s3Err,
   ...SystemErrEnum,
-  ...agentSkillErr
+  ...agentSkillErr,
+  ...sandboxErr,
+  ...couponErr,
+  ...modelErr
 };

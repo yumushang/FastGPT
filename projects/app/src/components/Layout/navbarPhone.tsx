@@ -32,6 +32,7 @@ const NavbarPhone = ({ unread }: { unread: number }) => {
           '/dashboard/agent',
           '/app/detail',
           '/dashboard/tool',
+          '/dashboard/tool/marketplace',
           '/dashboard/systemTool',
           '/dashboard/templateMarket',
           '/dashboard/mcpServer',
@@ -61,7 +62,6 @@ const NavbarPhone = ({ unread }: { unread: number }) => {
           '/account/apikey',
           '/account/setting',
           '/account/inform',
-          '/account/promotion',
           '/account/model'
         ],
         unread
@@ -72,13 +72,18 @@ const NavbarPhone = ({ unread }: { unread: number }) => {
               label: t('common:navbar.Config'),
               icon: 'support/config/configLight',
               activeIcon: 'support/config/configFill',
-              link: '/config/tool',
-              activeLink: ['/config/tool', '/config/tool/marketplace']
+              link: '/config/plugin/tool',
+              activeLink: [
+                '/config/plugin/tool',
+                '/config/plugin/marketplace',
+                '/config/model',
+                '/config/system/migrations'
+              ]
             }
           ]
         : [])
     ],
-    [lastChatAppId, lastPane, t, userInfo?.username]
+    [lastChatAppId, lastPane, t, unread, userInfo?.username]
   );
 
   return (

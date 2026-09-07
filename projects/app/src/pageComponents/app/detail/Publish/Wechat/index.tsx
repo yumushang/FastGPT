@@ -19,7 +19,7 @@ import { formatTimeToChatTime } from '@fastgpt/global/common/string/time';
 import { defaultOutLinkForm } from '@/web/core/app/constants';
 import type { WechatAppType, OutLinkEditType } from '@fastgpt/global/support/outLink/type';
 import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
-import { useTranslation } from 'next-i18next';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import dynamic from 'next/dynamic';
 import MyMenu from '@fastgpt/web/components/common/MyMenu';
@@ -33,13 +33,19 @@ import MyTag from '@fastgpt/web/components/common/Tag/index';
 const WechatEditModal = dynamic(() => import('./WechatEditModal'));
 const QRLoginModal = dynamic(() => import('./QRLoginModal'));
 
-const Wechat = ({ appId }: { appId: string }) => {
-  const { t } = useTranslation();
+const Wechat = ({
+  appId,
+  onRefreshOutLinkCounts
+}: {
+  appId: string;
+  onRefreshOutLinkCounts: () => Promise<unknown>;
+}) => {
+  const { t } = useSafeTranslation();
   const { Loading, setIsLoading } = useLoading();
   const { feConfigs } = useSystemStore();
   const [editData, setEditData] = useState<OutLinkEditType<WechatAppType>>();
   const [isEdit, setIsEdit] = useState(false);
-  const [loginShareId, setLoginShareId] = useState<string>();
+  const [loginOutLinkId, setLoginOutLinkId] = useState<string>();
 
   const {
     data: shareChatList = [],
@@ -64,10 +70,10 @@ const Wechat = ({ appId }: { appId: string }) => {
   };
 
   return (
-    <Box position={'relative'} pt={3} px={5} minH={'50vh'}>
+    <Box position={'relative'} p={6} minH={'50vh'}>
       <Flex justifyContent={'space-between'}>
         <Flex alignItems={'center'}>
-          <Box fontWeight={'bold'} fontSize={['md', 'lg']}>
+          <Box color={'myGray.900'} fontWeight={'medium'} fontSize={'lg'}>
             {t('publish:wechat.title')}
           </Box>
           {feConfigs?.docUrl && (
@@ -109,7 +115,7 @@ const Wechat = ({ appId }: { appId: string }) => {
               <Th>{t('publish:wechat.status')}</Th>
               <Th>{t('common:support.outlink.Usage points')}</Th>
               <Th>{t('common:last_use_time')}</Th>
-              <Th />
+              <Th>{t('common:Action')}</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -119,9 +125,7 @@ const Wechat = ({ appId }: { appId: string }) => {
                 <Td>{statusBadge(item.app?.status)}</Td>
                 <Td>{Math.round(item.usagePoints)}</Td>
                 <Td>
-                  {item.lastTime
-                    ? t(formatTimeToChatTime(item.lastTime) as any).replace('#', ':')
-                    : t('common:un_used')}
+                  {item.lastTime ? t(formatTimeToChatTime(item.lastTime)) : t('common:un_used')}
                 </Td>
                 <Td display={'flex'} alignItems={'center'}>
                   {!item.app?.token ? (
@@ -130,7 +134,7 @@ const Wechat = ({ appId }: { appId: string }) => {
                       mr={3}
                       colorScheme="green"
                       onClick={() => {
-                        setLoginShareId(item.shareId);
+                        setLoginOutLinkId(item._id);
                       }}
                     >
                       {t('publish:wechat.login')}
@@ -144,7 +148,7 @@ const Wechat = ({ appId }: { appId: string }) => {
                         setIsLoading(true);
                         try {
                           await POST('/support/outLink/wechat/logout', {
-                            shareId: item.shareId
+                            outLinkId: item._id
                           });
                           refetch();
                         } finally {
@@ -160,7 +164,7 @@ const Wechat = ({ appId }: { appId: string }) => {
                       mr={3}
                       variant={'whitePrimary'}
                       onClick={() => {
-                        setLoginShareId(item.shareId);
+                        setLoginOutLinkId(item._id);
                       }}
                     >
                       {t('publish:wechat.relogin')}
@@ -197,7 +201,7 @@ const Wechat = ({ appId }: { appId: string }) => {
                               setIsLoading(true);
                               try {
                                 await delShareChatById(item._id);
-                                refetch();
+                                void Promise.all([refetch(), onRefreshOutLinkCounts()]);
                               } finally {
                                 setIsLoading(false);
                               }
@@ -224,7 +228,7 @@ const Wechat = ({ appId }: { appId: string }) => {
           defaultData={editData}
           isEdit={isEdit}
           onCreate={async (shareId) => {
-            const newList = await refetch();
+            const [newList] = await Promise.all([refetch(), onRefreshOutLinkCounts()]);
             return newList?.find((i) => i.shareId === shareId)?._id;
           }}
           onEdit={() => refetch()}
@@ -232,14 +236,14 @@ const Wechat = ({ appId }: { appId: string }) => {
         />
       )}
 
-      {loginShareId && (
+      {loginOutLinkId && (
         <QRLoginModal
-          shareId={loginShareId}
+          outLinkId={loginOutLinkId}
           onSuccess={() => {
             refetch();
-            setLoginShareId(undefined);
+            setLoginOutLinkId(undefined);
           }}
-          onClose={() => setLoginShareId(undefined)}
+          onClose={() => setLoginOutLinkId(undefined)}
         />
       )}
 

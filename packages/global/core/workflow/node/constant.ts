@@ -35,7 +35,9 @@ export enum FlowNodeInputTypeEnum {
   fileSelect = 'fileSelect',
   timePointSelect = 'timePointSelect',
   timeRangeSelect = 'timeRangeSelect',
-  password = 'password'
+  password = 'password',
+
+  agentGenerated = 'agentGenerated' // for compatibility for >= v4.16.0
 }
 export const FlowNodeInputMap: Record<
   FlowNodeInputTypeEnum,
@@ -114,6 +116,9 @@ export const FlowNodeInputMap: Record<
   },
   [FlowNodeInputTypeEnum.password]: {
     icon: 'core/workflow/inputType/password'
+  },
+  [FlowNodeInputTypeEnum.agentGenerated]: {
+    icon: 'core/workflow/inputType/agentGenerated'
   }
 };
 
@@ -127,8 +132,6 @@ export enum FlowNodeOutputTypeEnum {
 
 export enum FlowNodeTypeEnum {
   emptyNode = 'emptyNode',
-  systemConfig = 'userGuide',
-  pluginConfig = 'pluginConfig',
   globalVariable = 'globalVariable',
   comment = 'comment',
 
@@ -149,7 +152,6 @@ export enum FlowNodeTypeEnum {
   toolCall = 'tools',
   stopTool = 'stopTool',
   toolParams = 'toolParams',
-  lafModule = 'lafModule',
   ifElseNode = 'ifElseNode',
   variableUpdate = 'variableUpdate',
   code = 'code',

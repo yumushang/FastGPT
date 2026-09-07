@@ -9,19 +9,21 @@ const {
   mockClearDiskTempFiles,
   mockAuthDataset,
   mockCheckDatasetIndexLimit,
-  mockAuthFrequencyLimit,
+  mockAssertUploadRateLimit,
   mockGetTeamPlanStatus,
   mockReadFile,
   mockGetFileS3Key,
   mockUploadImage2S3Bucket,
   mockCreateCollectionAndInsertData,
-  mockGetDatasetImageIndexCapability
+  mockGetDatasetImageIndexCapability,
+  mockGetDatasetEmbeddingModel,
+  mockGetDatasetVlmModel
 } = vi.hoisted(() => ({
   mockResolveMultipleFormData: vi.fn(),
   mockClearDiskTempFiles: vi.fn(),
   mockAuthDataset: vi.fn(),
   mockCheckDatasetIndexLimit: vi.fn(),
-  mockAuthFrequencyLimit: vi.fn(),
+  mockAssertUploadRateLimit: vi.fn(),
   mockGetTeamPlanStatus: vi.fn(),
   mockReadFile: vi.fn(),
   mockGetFileS3Key: {
@@ -29,7 +31,9 @@ const {
   },
   mockUploadImage2S3Bucket: vi.fn(),
   mockCreateCollectionAndInsertData: vi.fn(),
-  mockGetDatasetImageIndexCapability: vi.fn()
+  mockGetDatasetImageIndexCapability: vi.fn(),
+  mockGetDatasetEmbeddingModel: vi.fn(),
+  mockGetDatasetVlmModel: vi.fn()
 }));
 
 vi.mock('@/service/middleware/entry', () => ({
@@ -51,8 +55,8 @@ vi.mock('@fastgpt/service/support/permission/teamLimit', () => ({
   checkDatasetIndexLimit: mockCheckDatasetIndexLimit
 }));
 
-vi.mock('@fastgpt/service/common/system/frequencyLimit/utils', () => ({
-  authFrequencyLimit: mockAuthFrequencyLimit
+vi.mock('@fastgpt/service/common/rateLimit/interface/upload', () => ({
+  assertUploadRateLimit: mockAssertUploadRateLimit
 }));
 
 vi.mock('@fastgpt/service/support/wallet/sub/utils', () => ({
@@ -77,6 +81,11 @@ vi.mock('@fastgpt/service/common/s3/utils', () => ({
 
 vi.mock('@fastgpt/service/core/dataset/collection/controller', () => ({
   createCollectionAndInsertData: mockCreateCollectionAndInsertData
+}));
+
+vi.mock('@fastgpt/service/core/dataset/model', () => ({
+  getDatasetEmbeddingModel: mockGetDatasetEmbeddingModel,
+  getDatasetVlmModel: mockGetDatasetVlmModel
 }));
 
 vi.mock('@fastgpt/service/core/dataset/utils', async (importOriginal) => {
@@ -124,6 +133,12 @@ describe('POST /api/core/dataset/collection/create/images', () => {
       supportImageEmbedding: true,
       supportImageIndex: true
     });
+    mockGetDatasetEmbeddingModel.mockReturnValue({
+      modelId: '68ad85a7463006c963799a09',
+      name: 'vision-embedding',
+      model: 'vision-embedding'
+    });
+    mockGetDatasetVlmModel.mockReturnValue(undefined);
     mockGetTeamPlanStatus.mockResolvedValue({ standard: { maxUploadFileCount: 10 } });
     mockReadFile.mockResolvedValue(Buffer.from('image-bytes'));
     mockGetFileS3Key.dataset.mockReturnValue({ fileKey: 'dataset/team/cat.png' });
@@ -161,6 +176,19 @@ describe('POST /api/core/dataset/collection/create/images', () => {
         name: 'Native image embedding collection',
         trainingType: DatasetCollectionDataProcessModeEnum.chunk
       }
+    });
+    expect(mockUploadImage2S3Bucket).toHaveBeenCalledWith('private', {
+      buffer: Buffer.from('image-bytes'),
+      uploadKey: 'dataset/team/cat.png',
+      mimetype: 'image/png',
+      filename: 'cat.png',
+      expiredTime: expect.any(Date)
+    });
+    expect(mockUploadImage2S3Bucket.mock.calls[0][1]).not.toHaveProperty('base64Img');
+    expect(mockAssertUploadRateLimit).toHaveBeenCalledWith({
+      identity: 'tmb-id',
+      limit: 10,
+      increment: 1
     });
     expect(mockClearDiskTempFiles).toHaveBeenCalledWith(['/tmp/cat.png']);
   });

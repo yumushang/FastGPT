@@ -6,7 +6,8 @@ import type {
 } from '@fastgpt/global/core/dataset/type';
 import { recallFromVectorStore } from '../../../../common/vectorDB/controller';
 import { getVectors } from '../../../ai/embedding';
-import { getEmbeddingModel, isImageEmbeddingModel } from '../../../ai/model';
+import { isImageEmbeddingModel } from '../../../ai/model';
+import type { EmbeddingSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 import { MongoDatasetCollection } from '../../collection/schema';
 import { MongoDatasetData } from '../../data/schema';
 import { getLogger, LogCategories } from '../../../../common/logger';
@@ -42,7 +43,7 @@ const buildVectorRecallTasks = async ({
   imageCaptionQueries,
   imageQueries
 }: {
-  model: string;
+  model: EmbeddingSystemModelDataType;
   textQueries: string[];
   imageCaptionQueries: string[];
   imageQueries: string[];
@@ -50,7 +51,7 @@ const buildVectorRecallTasks = async ({
   tasks: VectorRecallTask[];
   tokens: number;
 }> => {
-  const embeddingModel = getEmbeddingModel(model);
+  const embeddingModel = model;
   const textTasks = [
     ...textQueries.map((query) => ({ source: 'text' as const, query })),
     ...imageCaptionQueries.map((query) => ({ source: 'imageCaption' as const, query }))
@@ -144,7 +145,7 @@ export const embeddingRecall = async ({
 }: {
   teamId: string;
   datasetIds: string[];
-  model: string;
+  model: EmbeddingSystemModelDataType;
   imageQueries: string[];
   textQueries: string[];
   imageCaptionQueries: string[];
@@ -245,36 +246,39 @@ export const embeddingRecall = async ({
     image: []
   };
 
-  recallResults.forEach((recallResult, taskIndex) => {
+  for (const [taskIndex, recallResult] of recallResults.entries()) {
     const task = tasks[taskIndex];
     const set = new Set<string>();
 
-    const list = recallResult.results
-      .map((item, index) => {
-        const collection = collectionMaps.get(String(item.collectionId));
-        if (!collection) {
-          logger.warn('Dataset collection not found during recall', {
-            collectionId: item.collectionId,
-            dataId: item.id
-          });
-          return;
-        }
+    const list = (
+      await Promise.all(
+        recallResult.results.map((item, index) => {
+          const collection = collectionMaps.get(String(item.collectionId));
+          if (!collection) {
+            logger.warn('Dataset collection not found during recall', {
+              collectionId: item.collectionId,
+              dataId: item.id
+            });
+            return;
+          }
 
-        const data = dataMaps.get(String(item.id?.trim()));
-        if (!data) {
-          logger.warn('Dataset data not found during recall', {
-            dataId: item.id,
-            collectionId: item.collectionId
-          });
-          return;
-        }
+          const data = dataMaps.get(String(item.id?.trim()));
+          if (!data) {
+            logger.warn('Dataset data not found during recall', {
+              dataId: item.id,
+              collectionId: item.collectionId
+            });
+            return;
+          }
 
-        return buildSearchResultItem({
-          data,
-          collection,
-          score: [{ type: SearchScoreTypeEnum.embedding, value: item?.score || 0, index }]
-        });
-      })
+          return buildSearchResultItem({
+            data,
+            collection,
+            score: [{ type: SearchScoreTypeEnum.embedding, value: item?.score || 0, index }]
+          });
+        })
+      )
+    )
       .filter((item) => {
         if (!item) return false;
         if (set.has(item.id)) return false;
@@ -289,7 +293,7 @@ export const embeddingRecall = async ({
       }) as SearchDataResponseItemType[];
 
     groupedRecallLists[task.source].push(list);
-  });
+  }
 
   return {
     textEmbeddingRecallResults: concatRecallLists(groupedRecallLists.text, limit),

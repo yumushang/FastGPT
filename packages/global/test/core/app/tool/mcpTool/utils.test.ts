@@ -90,6 +90,7 @@ describe('mcpTool utils', () => {
       expect(result.toolConfig?.mcpTool?.toolId).toBe(
         `${AppToolSourceEnum.mcp}-toolset-456/searchTool`
       );
+      expect(result.inputs[0]).toMatchObject({ defaultToAgentGenerated: true });
     });
 
     it('should create tool runtime node with custom avatar', () => {
@@ -205,6 +206,17 @@ describe('mcpTool utils', () => {
       });
 
       expect(result).toEqual({ toolsetId: 'toolset-xyz', toolName: 'a/b/c/d' });
+    });
+
+    it('should preserve leading slash in tool name', () => {
+      const result = parsetMcpToolConfig({
+        toolId: 'mcp-69e20f48dbec7c6ece77556b//test'
+      });
+
+      expect(result).toEqual({
+        toolsetId: '69e20f48dbec7c6ece77556b',
+        toolName: '/test'
+      });
     });
 
     it('should return undefined when toolName segment is empty in toolId', () => {

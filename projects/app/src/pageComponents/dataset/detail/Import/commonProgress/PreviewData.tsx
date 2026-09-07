@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Button, Flex, HStack } from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
 import { useContextSelector } from 'use-context-selector';
@@ -8,15 +8,14 @@ import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { ImportDataSourceEnum } from '@fastgpt/global/core/dataset/constants';
-import { splitText2Chunks } from '@fastgpt/global/common/string/textSplitter';
-import { getPreviewChunks } from '@/web/core/dataset/api/file';
+import { getPreviewChunks, getRawTextPreviewChunks } from '@/web/core/dataset/api/file';
 import { type ImportSourceItemType } from '@/web/core/dataset/type';
 import { getPreviewSourceReadType } from '../utils';
 import { DatasetPageContext } from '@/web/core/dataset/context/datasetPageContext';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import Markdown from '@/components/Markdown';
 import { useToast } from '@fastgpt/web/hooks/useToast';
-import { getLLMMaxChunkSize } from '@fastgpt/global/core/dataset/training/utils';
+import { resetPreviewScroll } from './previewScroll';
 
 const PreviewData = () => {
   const { t } = useTranslation();
@@ -24,13 +23,17 @@ const PreviewData = () => {
   const goToNext = useContextSelector(DatasetImportContext, (v) => v.goToNext);
 
   const datasetId = useContextSelector(DatasetPageContext, (v) => v.datasetId);
-  const datasetDetail = useContextSelector(DatasetPageContext, (v) => v.datasetDetail);
 
   const sources = useContextSelector(DatasetImportContext, (v) => v.sources);
   const importSource = useContextSelector(DatasetImportContext, (v) => v.importSource);
   const processParamsForm = useContextSelector(DatasetImportContext, (v) => v.processParamsForm);
 
   const [previewFile, setPreviewFile] = useState<ImportSourceItemType>();
+  const previewScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    resetPreviewScroll(previewScrollRef.current);
+  }, [previewFile?.id]);
 
   const { data = { chunks: [], total: 0 }, loading: isLoading } = useRequest(
     async () => {
@@ -39,21 +42,12 @@ const PreviewData = () => {
       const chunkData = processParamsForm.getValues();
 
       if (importSource === ImportDataSourceEnum.fileCustom) {
-        const chunkSplitter = processParamsForm.getValues('chunkSplitter');
-        const { chunks } = splitText2Chunks({
-          text: previewFile.rawText || '',
-          chunkSize: chunkData.chunkSize,
-          maxSize: getLLMMaxChunkSize(datasetDetail.agentModel),
-          overlapRatio: 0.2,
-          customReg: chunkSplitter ? [chunkSplitter] : []
+        return getRawTextPreviewChunks({
+          datasetId,
+          rawText: previewFile.rawText || '',
+          ...chunkData,
+          overlapRatio: 0.2
         });
-        return {
-          chunks: chunks.map((chunk) => ({
-            q: chunk,
-            a: ''
-          })),
-          total: chunks.length
-        };
       }
 
       return getPreviewChunks({
@@ -90,12 +84,12 @@ const PreviewData = () => {
 
   return (
     <Flex flexDirection={'column'} h={'100%'}>
-      <Flex flex={'1 0 0'} border={'base'} borderRadius={'md'}>
-        <Flex flexDirection={'column'} flex={'1 0 0'} borderRight={'base'}>
+      <Flex flex={'1 0 0'} minW={0} overflow={'hidden'} border={'base'} borderRadius={'md'}>
+        <Flex flexDirection={'column'} flex={'0 0 50%'} maxW={'50%'} minW={0} borderRight={'base'}>
           <FormLabel fontSize={'md'} py={4} px={5} borderBottom={'base'}>
             {t('dataset:file_list')}
           </FormLabel>
-          <Box flex={'1 0 0'} overflowY={'auto'} px={5} py={3}>
+          <Box flex={'1 0 0'} minW={0} overflowY={'auto'} px={5} py={3}>
             {sources.map((source) => (
               <HStack
                 key={source.id}
@@ -126,22 +120,30 @@ const PreviewData = () => {
                 }}
               >
                 <MyIcon name={source.icon as any} w={'1.25rem'} />
-                <Box ml={1} flex={'1 0 0'} wordBreak={'break-all'} fontSize={'sm'}>
+                <Box ml={1} flex={'1 1 0'} minW={0} wordBreak={'break-all'} fontSize={'sm'}>
                   {source.sourceName}
                 </Box>
               </HStack>
             ))}
           </Box>
         </Flex>
-        <Flex flexDirection={'column'} flex={'1 0 0'}>
+        <Flex flexDirection={'column'} flex={'0 0 50%'} maxW={'50%'} minW={0}>
           <Flex py={4} px={5} borderBottom={'base'} justifyContent={'space-between'}>
             <FormLabel fontSize={'md'}>{t('dataset:preview_chunk')}</FormLabel>
             <Box fontSize={'xs'} color={'myGray.500'}>
               {t('dataset:preview_chunk_intro', { total: data.total })}
             </Box>
           </Flex>
-          <MyBox isLoading={isLoading} flex={'1 0 0'} h={0}>
-            <Box h={'100%'} overflowY={'auto'} px={5} py={3}>
+          <MyBox isLoading={isLoading} flex={'1 0 0'} h={0} minW={0}>
+            <Box
+              ref={previewScrollRef}
+              h={'100%'}
+              minW={0}
+              overflowY={'auto'}
+              overflowX={'auto'}
+              px={5}
+              py={3}
+            >
               {previewFile ? (
                 <>
                   {data.chunks.map((item, index) => (

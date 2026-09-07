@@ -1,20 +1,39 @@
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemoizedFn } from 'ahooks';
 import { createContext } from 'use-context-selector';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
-import type { AgentSkillDetailType } from '@fastgpt/global/core/agentSkills/type';
+import type { AgentSkillDetailType } from '@fastgpt/global/core/ai/skill/type';
 import type { SandboxStatusItemType, SandboxStatusPhase } from '@fastgpt/global/core/chat/type';
-import { AgentSkillTypeEnum } from '@fastgpt/global/core/agentSkills/constants';
+import { SandboxErrEnum } from '@fastgpt/global/common/error/code/sandbox';
+import { getErrText } from '@fastgpt/global/common/error/utils';
+import {
+  AgentSkillCreationStatusEnum,
+  AgentSkillTypeEnum
+} from '@fastgpt/global/core/ai/skill/constants';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { getSkillDetail, streamCreateEditDebugSandbox } from '@/web/core/skill/api';
-import { SkillPermission } from '@fastgpt/global/support/permission/agentSkill/controller';
+import {
+  getSkillDetail,
+  getSkillRuntimeStatus,
+  postUpgradeSkillRuntime,
+  streamInitSkillRuntime
+} from '@/web/core/skill/api';
+import { useSkillDebugChatStore } from './useSkillDebugChatStore';
+import type { SandboxRuntimeStatusResponse } from '@fastgpt/global/core/ai/sandbox/type';
+import { startRuntimeUpgradePolling } from './runtimeUpgradePolling';
 
 export enum TabEnum {
   config = 'config',
   preview = 'preview'
 }
 
-export type SandboxState = 'idle' | 'loading' | 'ready' | 'failed';
+export type SandboxState =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'failed'
+  | 'upgradeRequired'
+  | 'upgrading';
 
 export type SandboxLogEntry = {
   timestamp: string;
@@ -27,15 +46,19 @@ type SkillDetailContextType = {
   skillDetail: AgentSkillDetailType | undefined;
   isFetchingSkillDetail: boolean;
   refreshSkillDetail: () => void;
-  currentTab: TabEnum;
-  setCurrentTab: (tab: TabEnum) => void;
   showHistories: boolean;
   setShowHistories: (v: boolean) => void;
   sandboxState: SandboxState;
   sandboxLogs: SandboxLogEntry[];
-  sandboxEndpointUrl: string | null;
   sandboxError: string | null;
+  isSkillReady: boolean;
   startSandbox: () => void;
+  restartSandbox: () => void;
+  upgradeSandboxRuntime: () => void;
+  saveAllRef: React.MutableRefObject<(() => Promise<void>) | undefined>;
+  handleSandboxError: (err: string) => void;
+  chatId: string;
+  restartChat: () => void;
 };
 
 export const SkillDetailContext = createContext<SkillDetailContextType>({
@@ -43,15 +66,19 @@ export const SkillDetailContext = createContext<SkillDetailContextType>({
   skillDetail: undefined,
   isFetchingSkillDetail: false,
   refreshSkillDetail: () => {},
-  currentTab: TabEnum.config,
-  setCurrentTab: () => {},
   showHistories: false,
   setShowHistories: () => {},
   sandboxState: 'idle',
   sandboxLogs: [],
-  sandboxEndpointUrl: null,
   sandboxError: null,
-  startSandbox: () => {}
+  isSkillReady: false,
+  startSandbox: () => {},
+  restartSandbox: () => {},
+  upgradeSandboxRuntime: () => {},
+  saveAllRef: { current: undefined },
+  handleSandboxError: () => {},
+  chatId: '',
+  restartChat: () => {}
 });
 
 const formatTimestamp = () => {
@@ -61,21 +88,57 @@ const formatTimestamp = () => {
     .join(':');
 };
 
+const RUNTIME_UPGRADE_POLL_INTERVAL_MS = 3000;
+
 const SkillDetailContextProvider = ({ children }: { children: ReactNode }) => {
   const router = useRouter();
-  const { t } = useTranslation();
-  const { skillId = '' } = router.query as { skillId: string };
+  const { skillId: querySkillId } = router.query;
+  const skillId = (Array.isArray(querySkillId) ? querySkillId[0] : querySkillId) ?? '';
 
-  const [currentTab, setCurrentTab] = useState<TabEnum>(TabEnum.config);
+  return (
+    <SkillDetailContextProviderInner key={skillId || 'empty-skill'} skillId={skillId}>
+      {children}
+    </SkillDetailContextProviderInner>
+  );
+};
+
+const SkillDetailContextProviderInner = ({
+  children,
+  skillId
+}: {
+  children: ReactNode;
+  skillId: string;
+}) => {
+  const router = useRouter();
+  const { t } = useTranslation();
+  const activeSkillId = useSkillDebugChatStore((state) => state.skillId);
+  const activeChatId = useSkillDebugChatStore((state) => state.chatId);
+  const setSkillId = useSkillDebugChatStore((state) => state.setSkillId);
+  const setChatId = useSkillDebugChatStore((state) => state.setChatId);
+  const chatId = activeSkillId === skillId ? activeChatId : '';
+
   const [showHistories, setShowHistories] = useState(false);
 
   // Sandbox states
   const [sandboxState, setSandboxState] = useState<SandboxState>('idle');
   const [sandboxLogs, setSandboxLogs] = useState<SandboxLogEntry[]>([]);
-  const [sandboxEndpointUrl, setSandboxEndpointUrl] = useState<string | null>(null);
   const [sandboxError, setSandboxError] = useState<string | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<SandboxRuntimeStatusResponse>();
   const abortCtrlRef = useRef<AbortController | null>(null);
-  const hasStartedRef = useRef(false);
+  const runtimeRequestAbortCtrlRef = useRef<AbortController | null>(null);
+  const startedSkillIdRef = useRef('');
+  const runtimeRequestVersionRef = useRef(0);
+  const saveAllRef = useRef<() => Promise<void>>();
+
+  useEffect(() => {
+    if (skillId && activeSkillId !== skillId) {
+      setSkillId(skillId);
+    }
+  }, [skillId, activeSkillId, setSkillId]);
+
+  const restartChat = useCallback(() => {
+    setChatId();
+  }, [setChatId]);
 
   const phaseToMessage = useCallback(
     (status: SandboxStatusItemType): string => {
@@ -98,57 +161,178 @@ const SkillDetailContextProvider = ({ children }: { children: ReactNode }) => {
     [t]
   );
 
-  const startSandbox = useCallback(() => {
+  const translateErrorMessage = useCallback(
+    (message: string) => {
+      if (
+        message.includes(SandboxErrEnum.runtimeUpgradeInProgress) ||
+        message.includes('runtime_upgrade_in_progress')
+      ) {
+        return t('skill:sandbox_runtime_upgrade_in_progress');
+      }
+      if (
+        message.includes(SandboxErrEnum.runtimeUpgradeFailed) ||
+        message.includes('runtime_upgrade_failed')
+      ) {
+        return t('skill:sandbox_runtime_upgrade_failed');
+      }
+      return message;
+    },
+    [t]
+  );
+  const getSandboxErrorMessage = useCallback(
+    (error: unknown, fallback: string) => translateErrorMessage(getErrText(error, fallback)),
+    [translateErrorMessage]
+  );
+
+  const initSandboxRuntime = useMemoizedFn(async () => {
     if (!skillId) return;
 
-    // Abort previous if any
     abortCtrlRef.current?.abort();
-
     const abortCtrl = new AbortController();
     abortCtrlRef.current = abortCtrl;
+    const isCurrentRequest = () => !abortCtrl.signal.aborted && abortCtrlRef.current === abortCtrl;
 
-    setSandboxState('idle');
+    setSandboxState('loading');
     setSandboxLogs([]);
-    setSandboxEndpointUrl(null);
     setSandboxError(null);
 
-    let hasReceivedFirstEvent = false;
-
-    streamCreateEditDebugSandbox({
-      data: { skillId },
-      onStatus: (status) => {
-        // 收到第一条 SSE 消息后才从 idle 切到 loading（终端日志）
-        if (!hasReceivedFirstEvent) {
-          hasReceivedFirstEvent = true;
-          setSandboxState('loading');
-        }
-
-        const entry: SandboxLogEntry = {
-          timestamp: formatTimestamp(),
-          message: phaseToMessage(status),
-          phase: status.phase
-        };
-        setSandboxLogs((prev) => [...prev, entry]);
-
-        if (status.phase === 'ready' && status.providerSandboxId && status.endpoint?.port) {
-          setSandboxEndpointUrl(`/proxy/${status.providerSandboxId}/${status.endpoint.port}/`);
-          setSandboxState('ready');
-        } else if (status.phase === 'failed') {
-          setSandboxError(status.message || t('skill:sandbox_error_title'));
-          setSandboxState('failed');
-        }
-      },
-      onError: (err) => {
-        setSandboxError(err);
-        setSandboxState('failed');
-      },
-      abortCtrl
-    }).catch((err) => {
-      if (abortCtrl.signal.aborted) return;
-      setSandboxError(typeof err === 'string' ? err : err?.message || String(err));
+    let hasShownInitError = false;
+    const finishWithInitError = (error: unknown) => {
+      if (!isCurrentRequest() || hasShownInitError) return;
+      hasShownInitError = true;
+      setSandboxError(getSandboxErrorMessage(error, t('skill:sandbox_error_title')));
       setSandboxState('failed');
+    };
+
+    const handleSandboxPhase = (status: SandboxStatusItemType) => {
+      if (status.phase === 'ready') {
+        setSandboxError(null);
+        setSandboxState('ready');
+      } else if (status.phase === 'failed') {
+        finishWithInitError(status.message ?? t('skill:sandbox_error_title'));
+      }
+    };
+
+    try {
+      await streamInitSkillRuntime({
+        data: { skillId },
+        onStatus: (status) => {
+          if (!isCurrentRequest()) return;
+          setSandboxLogs((logs) => [
+            ...logs,
+            {
+              timestamp: formatTimestamp(),
+              message: phaseToMessage(status),
+              phase: status.phase
+            }
+          ]);
+          handleSandboxPhase(status);
+        },
+        onError: finishWithInitError,
+        abortCtrl
+      });
+    } catch (error) {
+      finishWithInitError(error);
+    }
+  });
+
+  /** Skill Edit 独立维护升级查询、确认和轮询，不与 App Chat 共享交互状态。 */
+  const applyRuntimeStatus = useMemoizedFn(async (status: SandboxRuntimeStatusResponse) => {
+    if (status.status === 'readyToInit') {
+      setRuntimeStatus(undefined);
+      await initSandboxRuntime();
+      return;
+    }
+    setRuntimeStatus(status);
+  });
+
+  const requestRuntimeStatus = useMemoizedFn(
+    async (
+      request: (abortCtrl: AbortController) => Promise<SandboxRuntimeStatusResponse>,
+      onError: (error: unknown) => void
+    ) => {
+      runtimeRequestAbortCtrlRef.current?.abort();
+      const abortCtrl = new AbortController();
+      runtimeRequestAbortCtrlRef.current = abortCtrl;
+      const requestVersion = ++runtimeRequestVersionRef.current;
+
+      try {
+        const status = await request(abortCtrl);
+        if (!abortCtrl.signal.aborted && requestVersion === runtimeRequestVersionRef.current) {
+          await applyRuntimeStatus(status);
+        }
+      } catch (error) {
+        if (!abortCtrl.signal.aborted && requestVersion === runtimeRequestVersionRef.current) {
+          onError(error);
+        }
+      } finally {
+        if (runtimeRequestAbortCtrlRef.current === abortCtrl) {
+          runtimeRequestAbortCtrlRef.current = null;
+        }
+      }
+    }
+  );
+
+  const checkRuntime = useMemoizedFn(() =>
+    requestRuntimeStatus(
+      (abortCtrl) => getSkillRuntimeStatus({ skillId }, abortCtrl),
+      (error) => {
+        setSandboxError(getSandboxErrorMessage(error, t('skill:sandbox_error_title')));
+        setSandboxState('failed');
+      }
+    )
+  );
+
+  const upgradeRuntime = useMemoizedFn(() => {
+    if (runtimeStatus?.status !== 'upgradeRequired') return;
+    setRuntimeStatus({ status: 'upgrading' });
+    void requestRuntimeStatus(
+      (abortCtrl) => postUpgradeSkillRuntime({ skillId }, abortCtrl),
+      (error) =>
+        setRuntimeStatus({
+          status: 'upgradeRequired',
+          lastError: getSandboxErrorMessage(error, t('skill:sandbox_runtime_upgrade_failed'))
+        })
+    );
+  });
+
+  useEffect(() => {
+    if (runtimeStatus?.status !== 'upgrading') return;
+
+    return startRuntimeUpgradePolling({
+      intervalMs: RUNTIME_UPGRADE_POLL_INTERVAL_MS,
+      request: (abortCtrl) => getSkillRuntimeStatus({ skillId }, abortCtrl),
+      onStatus: applyRuntimeStatus,
+      onError: (error) =>
+        setRuntimeStatus({
+          status: 'upgradeRequired',
+          lastError: getSandboxErrorMessage(error, t('skill:sandbox_runtime_upgrade_failed'))
+        })
     });
-  }, [skillId, phaseToMessage, t]);
+  }, [applyRuntimeStatus, getSandboxErrorMessage, runtimeStatus?.status, skillId, t]);
+
+  const startSandbox = useCallback(() => {
+    if (!skillId) return;
+    startedSkillIdRef.current = skillId;
+    abortCtrlRef.current?.abort();
+    setSandboxState('loading');
+    setSandboxLogs([]);
+    setSandboxError(null);
+    void checkRuntime();
+  }, [checkRuntime, skillId]);
+
+  const upgradeSandboxRuntime = useCallback(() => {
+    upgradeRuntime();
+  }, [upgradeRuntime]);
+
+  const restartSandbox = useCallback(() => {
+    startSandbox();
+  }, [startSandbox]);
+
+  const handleSandboxError = useCallback((err: string) => {
+    setSandboxError(err);
+    setSandboxState('failed');
+  }, []);
 
   // Skill detail fetch
   const {
@@ -162,36 +346,77 @@ const SkillDetailContextProvider = ({ children }: { children: ReactNode }) => {
         const detail: AgentSkillDetailType = {
           ...res,
           type: AgentSkillTypeEnum.skill,
-          config: res.config ?? {},
           teamId: res.teamId ?? '',
           tmbId: res.tmbId ?? '',
-          currentVersion: 0,
-          versionCount: 0,
+          currentVersionId: res.currentVersionId,
+          creationStatus: res.creationStatus,
+          creationError: res.creationError,
           createTime: new Date(res.createTime),
           updateTime: new Date(res.updateTime),
           appCount: res.appCount ?? 0,
-          permission: new SkillPermission({ role: res.permission ?? 0 })
+          permission: res.permission
         };
         return detail;
       });
     },
     {
       manual: false,
-      refreshDeps: [skillId]
+      refreshDeps: [skillId],
+      errorToast: '',
+      onError() {
+        router.replace('/dashboard/skill');
+      }
     }
   );
 
+  const currentSkillDetail = skillDetail?._id === skillId ? skillDetail : undefined;
+  const creationStatus = currentSkillDetail?.creationStatus;
+  const isSkillCreating = creationStatus === AgentSkillCreationStatusEnum.creating;
+  const isSkillCreateFailed = creationStatus === AgentSkillCreationStatusEnum.failed;
+  const isSkillNoCurrentVersion =
+    !!currentSkillDetail &&
+    creationStatus === AgentSkillCreationStatusEnum.ready &&
+    !currentSkillDetail.currentVersionId;
+  const isSkillReady =
+    !!currentSkillDetail &&
+    creationStatus === AgentSkillCreationStatusEnum.ready &&
+    !!currentSkillDetail.currentVersionId;
+  const runtimeSandboxState: SandboxState | undefined = (() => {
+    if (runtimeStatus?.status === 'upgradeRequired') return 'upgradeRequired';
+    if (runtimeStatus?.status === 'upgrading') return 'upgrading';
+  })();
+  const visibleSandboxState: SandboxState =
+    isSkillCreateFailed || isSkillNoCurrentVersion
+      ? 'failed'
+      : (runtimeSandboxState ?? sandboxState);
+  const visibleSandboxError = (() => {
+    if (isSkillCreateFailed) return currentSkillDetail?.creationError || t('common:create_failed');
+    if (isSkillNoCurrentVersion) return t('skill:no_current_version');
+    if (runtimeStatus?.lastError) return translateErrorMessage(runtimeStatus.lastError);
+    return sandboxError;
+  })();
+  useEffect(() => {
+    if (!isSkillCreating) return;
+
+    const timer = setInterval(() => {
+      refreshSkillDetail();
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [isSkillCreating, refreshSkillDetail]);
+
   // Auto-start sandbox when skillId is ready
   useEffect(() => {
-    if (skillId && !hasStartedRef.current) {
-      hasStartedRef.current = true;
+    if (skillId && isSkillReady && startedSkillIdRef.current !== skillId) {
       startSandbox();
     }
-  }, [skillId, startSandbox]);
+  }, [skillId, isSkillReady, startSandbox]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      runtimeRequestVersionRef.current += 1;
+      runtimeRequestAbortCtrlRef.current?.abort();
       abortCtrlRef.current?.abort();
     };
   }, []);
@@ -199,31 +424,39 @@ const SkillDetailContextProvider = ({ children }: { children: ReactNode }) => {
   const contextValue: SkillDetailContextType = useMemo(
     () => ({
       skillId,
-      skillDetail,
+      skillDetail: currentSkillDetail,
       isFetchingSkillDetail,
       refreshSkillDetail,
-      currentTab,
-      setCurrentTab,
       showHistories,
       setShowHistories,
-      sandboxState,
+      sandboxState: visibleSandboxState,
       sandboxLogs,
-      sandboxEndpointUrl,
-      sandboxError,
-      startSandbox
+      sandboxError: visibleSandboxError,
+      isSkillReady,
+      startSandbox,
+      restartSandbox,
+      upgradeSandboxRuntime,
+      saveAllRef,
+      handleSandboxError,
+      chatId,
+      restartChat
     }),
     [
       skillId,
-      skillDetail,
+      currentSkillDetail,
       isFetchingSkillDetail,
       refreshSkillDetail,
-      currentTab,
       showHistories,
-      sandboxState,
+      visibleSandboxState,
       sandboxLogs,
-      sandboxEndpointUrl,
-      sandboxError,
-      startSandbox
+      visibleSandboxError,
+      isSkillReady,
+      startSandbox,
+      restartSandbox,
+      upgradeSandboxRuntime,
+      handleSandboxError,
+      chatId,
+      restartChat
     ]
   );
 

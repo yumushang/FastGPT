@@ -1,5 +1,5 @@
 # --------- install dependence -----------
-FROM node:24-alpine AS maindeps
+FROM node:24.16.0-alpine AS maindeps
 WORKDIR /app
 
 ARG proxy
@@ -23,7 +23,7 @@ RUN if [ -z "$proxy" ]; then \
     fi
 
 # --------- builder -----------
-FROM node:24-alpine AS builder
+FROM node:24.16.0-alpine AS builder
 WORKDIR /app
 
 ARG proxy
@@ -48,17 +48,6 @@ ENV NEXT_PUBLIC_BASE_URL=$base_url
 RUN pnpm build:sdks
 RUN pnpm --filter=app build
 
-# Bundle server.ts into a single CJS file; only 'next' is kept external (already in standalone output)
-# Banner: mirrors what standalone server.js does — chdir to __dirname and load pre-serialized
-# Next.js config so that next() skips webpack (config-utils) during startup.
-RUN cd projects/app && ./node_modules/.bin/esbuild server.ts \
-    --bundle \
-    --platform=node \
-    --format=cjs \
-    --outfile=server-proxy.js \
-    --external:next \
-    '--banner:js=process.chdir(__dirname);try{const d=require("./.next/required-server-files.json");process.env.__NEXT_PRIVATE_STANDALONE_CONFIG=JSON.stringify(d.config);}catch(e){}'
-
 # Remove build-time-only packages from standalone output before copying to runner.
 # These are traced into standalone by mistake (rspack bindings, gnu platform binaries, etc.)
 RUN rm -rf projects/app/.next/standalone/node_modules/.pnpm/@next+rspack-binding-*/ \
@@ -69,20 +58,18 @@ RUN rm -rf projects/app/.next/standalone/node_modules/.pnpm/@next+rspack-binding
     projects/app/.next/standalone/node_modules/.pnpm/@img+sharp-libvips-linux-x64@*/
 
 # --------- runner -----------
-FROM node:24-alpine AS runner
+FROM node:24.16.0-alpine AS runner
 WORKDIR /app
 
 ARG proxy
 ARG base_url
-ARG SHOW_SKILL=false
-ENV SHOW_SKILL=$SHOW_SKILL
 
 # create user and use it
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 RUN [ -z "$proxy" ] || sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
-RUN apk add --no-cache curl ca-certificates \
+RUN apk add --no-cache curl ca-certificates libc++ \
   && update-ca-certificates
 
 # copy running files
@@ -98,16 +85,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/projects/app/.next/server/chunks 
 # copy worker
 COPY --from=builder --chown=nextjs:nodejs /app/projects/app/worker /app/projects/app/worker
 COPY --from=builder --chown=nextjs:nodejs /app/projects/app/worker /app/worker
+# LiteParse is externalized from the worker bundle and loads this file at runtime.
+RUN test -f /app/worker/node_modules/@llamaindex/liteparse-wasm/pkg/liteparse_wasm_bg.wasm
+# anydoc is a N-API package; loading it here verifies that the matching musl binary was packaged.
+RUN node -e "require('/app/worker/node_modules/@fastgpt-sdk/anydoc')"
 
-# copy standload packages
-COPY --from=maindeps /app/node_modules/tiktoken ./node_modules/tiktoken
-RUN rm -rf ./node_modules/tiktoken/encoders
 COPY --from=maindeps /app/node_modules/@zilliz/milvus2-sdk-node ./node_modules/@zilliz/milvus2-sdk-node
 
 # copy package.json to version file
 COPY --from=builder /app/projects/app/package.json ./package.json
 # copy config and data files (use --chown to avoid extra layer from chown)
-COPY --chown=nextjs:nodejs ./projects/app/data/config.json /app/data/config.json
 COPY --chown=nextjs:nodejs ./projects/app/data/test.mp3 /app/data/test.mp3
 COPY --chown=nextjs:nodejs ./projects/app/data/GeoLite2-City.mmdb /app/data/GeoLite2-City.mmdb
 
@@ -120,4 +107,4 @@ EXPOSE 3000
 
 USER nextjs
 
-ENTRYPOINT ["sh","-c","if [ \"$SHOW_SKILL\" = \"true\" ]; then node --max-old-space-size=4096 ./projects/app/server-proxy.js; else node --max-old-space-size=4096 ./projects/app/server.js; fi"]
+ENTRYPOINT ["node","--max-old-space-size=4096","./projects/app/server.js"]

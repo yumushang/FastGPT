@@ -13,10 +13,11 @@ import { createResourceDefaultCollaborators } from '@fastgpt/service/support/per
 import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
 import { checkTeamDatasetFolderLimit } from '@fastgpt/service/support/permission/teamLimit';
 import { authUserPer } from '@fastgpt/service/support/permission/user/auth';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { checkCreateFolderDepth } from '@fastgpt/service/common/parentFolder/depth';
 import {
   CreateDatasetFolderBodySchema,
   type CreateDatasetFolderBody
@@ -45,16 +46,23 @@ async function handler(req: ApiRequestProps<CreateDatasetFolderBody>) {
 
   await checkTeamDatasetFolderLimit({ teamId });
 
+  await checkCreateFolderDepth({ parentId, teamId, model: MongoDataset });
+
   await mongoSessionRun(async (session) => {
-    const dataset = await MongoDataset.create({
-      ...parseParentIdInMongo(parentId),
-      avatar: FolderImgUrl,
-      name,
-      intro,
-      teamId,
-      tmbId,
-      type: DatasetTypeEnum.folder
-    });
+    const [dataset] = await MongoDataset.create(
+      [
+        {
+          ...parseParentIdInMongo(parentId),
+          avatar: FolderImgUrl,
+          name,
+          intro,
+          teamId,
+          tmbId,
+          type: DatasetTypeEnum.folder
+        }
+      ],
+      { session }
+    );
 
     await createResourceDefaultCollaborators({
       tmbId,

@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://fastgpt.io/"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
+<a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=logo"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
 
 # FastGPT
 
@@ -18,7 +18,7 @@ FastGPT は AI Agent 構築プラットフォームであり、すぐに使え�
 </div>
 
 <p align="center">
-  <a href="https://fastgpt.io/">
+  <a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_badge">
     <img height="21" src="https://img.shields.io/badge/オンライン利用-d4eaf7?style=flat-square&logo=spoj&logoColor=7d09f1" alt="cloud">
   </a>
   <a href="https://doc.fastgpt.io/guide/getting-started">
@@ -40,7 +40,7 @@ Docker を使って FastGPT をすぐに起動できます。ターミナルで�
 
 ```bash
 # コマンドを実行して設定ファイルを取得
-bash <(curl -fsSL https://doc.fastgpt.cn/deploy/install.sh)
+bash <(curl -fsSL https://doc.fastgpt.io/deploy/install.sh)
 # サービスを起動
 docker compose up -d
 ```
@@ -52,13 +52,13 @@ docker compose up -d
 ## 🛸 利用方法
 
 - **クラウド版**  
-  プライベートデプロイが不要な場合は、クラウドサービスを直接ご利用いただけます：[fastgpt.io](https://fastgpt.io/)
+  プライベートデプロイが不要な場合は、クラウドサービスを直接ご利用いただけます：[fastgpt.io](https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_service_link)
 
 - **コミュニティセルフホスト版**  
   [Docker](https://doc.fastgpt.io/self-host/deploy/docker) で素早くデプロイするか、[Sealos Cloud](https://doc.fastgpt.io/self-host/deploy/sealos) でワンクリックデプロイが可能です。
 
 - **商用版**  
-  より完全な機能や深いサービスサポートが必要な場合は、[商用版](https://doc.fastgpt.io/guide/version/commercial)をお選びいただけます。完全なソフトウェアの提供に加え、シナリオに応じた導入ガイダンスも提供しています。[商用相談](https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc)からお問い合わせください。
+  より完全な機能や深いサービスサポートが必要な場合は、[商用版](https://doc.fastgpt.io/guide/version/commercial)をお選びいただけます。完全なソフトウェアの提供に加え、シナリオに応じた導入ガイダンスも提供しています。[商用相談](https://fastgpt.cn/en/contact?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=commercial_consultation)からお問い合わせください。
 
 ## 💡 コア機能
 
@@ -68,7 +68,7 @@ docker compose up -d
 | ![Demo](./.github/imgs/intro3.png) | ![Demo](./.github/imgs/intro4.png) |
 
 `1` アプリケーションオーケストレーション
-   - [x] プランニング Agent モード
+   - [x] Agent Skill オーケストレーション
    - [x] 対話ワークフロー、プラグインワークフロー、基本的な RPA ノードを含む
    - [x] ユーザーインタラクション
    - [x] 双方向 MCP
@@ -89,25 +89,19 @@ docker compose up -d
    - [x] txt, md, html, pdf, docx, pptx, csv, xlsx に対応（PR で追加可能）、URL 読み取りと CSV 一括インポートに対応
    - [x] ハイブリッド検索 & リランキング
    - [x] API ナレッジベース
-   - [ ] RAG モジュールのホットスワップ
+   - [ ] 
 
-`4` OpenAPI インターフェース
-   - [x] completions インターフェース（GPT チャットモードに準拠）
-   - [x] ナレッジベース CRUD
-   - [x] 対話 CRUD
-   - [x] 自動化 OpenAPI インターフェース
+`4` プラグイン機能
+   - [x] システムツールのホットアップデート
+   - [ ] RAG モジュールのホットアップデート
+   - [ ] Agent-loop のホットアップデート
+   - [ ] AI によるプラグインのリアルタイム生成
 
 `5` 運用機能
    - [x] ログイン不要の共有ウィンドウ
    - [x] Iframe ワンクリック埋め込み
    - [x] 統一された対話記録の閲覧とデータアノテーション
    - [x] アプリケーション運用ログ
-
-`6` その他
-   - [x] ビジュアルモデル設定
-   - [x] 音声入出力対応（設定可能）
-   - [x] あいまい入力ヒント
-   - [x] テンプレートマーケット
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-トップに戻る-7d09f1.svg" alt="#" align="right">
@@ -116,10 +110,9 @@ docker compose up -d
 ## 💪 プロジェクトとリンク
 
 - [クイックスタート ローカル開発](https://doc.fastgpt.io/self-host/dev/)
-- [OpenAPI ドキュメント](https://doc.fastgpt.io/openapi/intro)
+- [OpenAPI ドキュメント](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: モデル集約ロードバランシングサービス](https://github.com/labring/aiproxy)
-- [Laf: 3分でサードパーティアプリケーションに接続](https://github.com/labring/laf)
 - [Sealos: クラスタアプリケーションの迅速なデプロイ](https://github.com/labring/sealos)
 
 <a href="#readme">
@@ -130,7 +123,6 @@ docker compose up -d
 
 - [AI Proxy: 大規模モデル集約サービス](https://sealos.run/aiproxy/?k=fastgpt-github/)
 - [SiliconCloud - オープンソースモデルオンライン体験プラットフォーム](https://cloud.siliconflow.cn/i/TR9Ym0c4)
-- [PPIO: コスパの高いオープンソースモデル API と GPU コンテナをワンクリックで利用](https://ppinfra.com/user/register?invited_by=VITYVU&utm_source=github_fastgpt)
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-トップに戻る-7d09f1.svg" alt="#" align="right">
@@ -186,9 +178,9 @@ Feishu グループに参加：
 
 <a href="https://github.com/labring/FastGPT/stargazers" target="_blank" style="display: block" align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
   </picture>
 </a>
 

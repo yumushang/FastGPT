@@ -10,7 +10,7 @@ FastGPT 是一个 AI Agent 构建平台,通过 Flow 提供开箱即用的数据�
 
 ## 设计文档
 
-你可以参考 [项目设计文档](./.codex/design/) 来了解 FastGPT 已有的设计方案。
+你可以参考 [项目设计文档](./.agents/design/) 来了解 FastGPT 已有的设计方案。
 
 ## 架构
 
@@ -34,34 +34,23 @@ FastGPT 是一个 AI Agent 构建平台,通过 Flow 提供开箱即用的数据�
 
 ## 开发命令
 
-### 项目专用命令
-**主应用 (projects/app/)**:
-- `cd projects/app && pnpm dev` - 启动 NextJS 开发服务器
-- `cd projects/app && pnpm build` - 构建 NextJS 应用
-- `cd projects/app && pnpm start` - 启动生产服务器
-
-**代码沙箱 (projects/code-sandbox/)**:
-- `cd projects/code-sandbox && pnpm dev` - 以监视模式启动（Bun）
-- `cd projects/code-sandbox && pnpm build` - 构建沙箱服务
-- `cd projects/code-sandbox && pnpm test` - 运行 Vitest 测试
-
-**MCP 服务器 (projects/mcp_server/)**:
-- `cd projects/mcp_server && bun dev` - 使用 Bun 以监视模式启动
-- `cd projects/mcp_server && bun build` - 构建 MCP 服务器
-- `cd projects/mcp_server && bun start` - 启动 MCP 服务器
-
-### 工具命令
-- `pnpm lint` - 对所有 TypeScript 文件运行 ESLint 并自动修复
-- `pnpm initIcon` - 初始化图标资源
-- `pnpm gen:theme-typings` - 生成 Chakra UI 主题类型定义
+常用开发命令见 [FastGPT 开发命令](./.agents/code/commands.md)。
 
 ## 测试
 
 项目使用 Vitest 进行测试并生成覆盖率报告。主要测试命令:
 - `pnpm test` - 运行所有测试
-- `pnpm test {file-path}` - 使用 Vitest 运行指定测试文件的指定测试
+- `pnpm test <file-path...>` - 顺序运行跨 workspace 的局部测试，关闭覆盖率并限制为单 worker，避免多个 Vitest/Mongo 实例争抢本地资源
+- `FASTGPT_TEST_SCOPE=app pnpm test` - 只运行指定 workspace；支持逗号分隔多个 scope，以及 `workspace`、`repo`
+- `FASTGPT_TEST_MODE=integration pnpm test` - 运行 service 集成测试；`sandbox` 运行沙箱集成测试，`all` 运行 workspace 单测和 service 集成测试
 - 测试文件位于 `test/` 目录和 `projects/{{name}}/test/`，代表这`packages`和`单个 project`的测试文件目录。
 - 覆盖率报告生成在 `coverage/` 目录
+
+测试范围要求：
+
+- 默认只测试本次改动的代码及可能受影响的代码，根据依赖关系选择最小且足以验证改动的测试范围。
+- 在开发和交付过程中不主动运行全量测试。
+- 只有用户完成最终验收后，才运行完整测试。
 
 ## 代码组织模式
 
@@ -85,10 +74,11 @@ FastGPT 是一个 AI Agent 构建平台,通过 Flow 提供开箱即用的数据�
 ## 开发注意事项
 
 - **包管理器**: 使用 pnpm 及 workspace 配置
-- **Node 版本**: 需要 Node.js >=20.x, pnpm >=9.x
+- **Node 版本**: 需要 Node.js >=20.x, pnpm =10.x
 - **数据库**: 支持 MongoDB、带 pgvector 的 PostgreSQL 或 Milvus 向量存储
 - **AI 集成**: 通过统一接口支持多个 AI 提供商
 - **国际化**: 完整支持中文、英文和日文
+- **部署配置保护**: 修改代码过程中不得修改任何部署相关的 `.yml` 或 `.yaml` 文件；如果需求确实需要调整部署配置，必须先获得用户明确确认。
 
 ## 关键文件模式
 
@@ -106,7 +96,14 @@ FastGPT 是一个 AI Agent 构建平台,通过 Flow 提供开箱即用的数据�
 
 ## 代码规范
 
-[FastGPT 代码规范](./.codex/code/syntax.md)
+- 所有代码编写、修改、重构和测试调整都必须遵守 [FastGPT 代码规范](./.agents/code/syntax.md)。开始改动前先查看相关规范；如果规范与当前实现习惯冲突，优先按规范执行，并只在有明确业务或兼容性理由时说明例外。
+
+### MongoDB Schema 与索引维护
+
+- 所有由 FastGPT 管理的当前索引和废弃索引都必须通过 `defineIndex(schema, { key, options, deprecated })` 声明：`deprecated` 默认是 `false`，当前索引省略该字段；只有废弃索引显式使用 `deprecated: true`。不要直接调用 `schema.index()`，也不要在字段定义中使用 `index: true` 或 `unique: true` 隐式创建索引。
+- 每当新增、修改、删除或重命名 MongoDB/Mongoose Schema 字段、索引定义、唯一约束、TTL、partialFilterExpression、collation 等索引相关配置时，必须同步检查是否有 FastGPT 旧版本创建的索引不再被当前 Schema 使用。
+- 如果历史索引可能继续影响写入约束、查询计划或存储成本，应在所属 Schema 文件中通过 `defineIndex(schema, { key, options, deprecated: true })` 紧邻当前索引声明登记删除定义，并补充/调整 `packages/service/test/common/mongo/indexManager.test.ts` 的清理行为覆盖。索引名默认由 key 推导，也可通过 `options.name` 显式指定；删除前按 name 定位，再精确匹配 key（text 索引兼容 `_fts/_ftsx` 与 weights）；options 不参与匹配。
+- 不要登记客户自建索引、无法确认来源的索引，或仅凭当前 Schema 未声明就推断为废弃的索引。主动同步只允许删除 FastGPT 明确创建过、明确废弃且与 Schema 本地声明精确匹配的历史索引。
 
 ### API 入参校验
 
@@ -124,7 +121,7 @@ const { body, query } = parseApiInput({
 ```
 
 - 这个 helper 只用于 API 边界的请求入参校验。内部业务数据、数据库记录、模型返回、工具调用参数等 schema 校验仍使用普通 `Schema.parse(...)`，因为这些错误应按内部 bug 上报。
-- 相关设计见 [Zod 请求入参错误降噪设计](./.codex/design/api/zod-request-parse-error-handling.md)。
+- 相关设计见 [Zod 请求入参错误降噪设计](./.agents/design/api/zod-request-parse-error-handling.md)。
 
 ### 函数注释
 
@@ -133,12 +130,18 @@ const { body, query } = parseApiInput({
 - 避免写无意义注释，例如只复述“设置变量”“返回结果”。如果函数逻辑简单且语义已经完全由命名表达，可以不写冗余注释。
 - 对复杂函数内部的关键判断，也应补充简短中文注释，说明为什么这样处理，而不是逐行解释代码。
 
+### 子函数位置
+
+- 拆分子函数时，优先把只被单个函数使用的 helper 放在该函数内部，减少模块级私有函数的暴露范围和阅读负担。
+- 只有跨函数复用、需要单独导出测试、或语义上属于模块公共能力的 helper，才放到模块级；放到模块级时应补充函数级注释说明职责和边界。
+- 对于递归、错误处理、权限校验、路径处理、计费/requestId 等容易误解的局部 helper，应在局部函数或关键分支旁补充简短中文注释说明设计原因。
+
 ## 运行要求
 
 ### 性格
 
 1. 保持怀疑态度，要深入思考和分析现有代码，提出问题，并让用户确认。
-2. 编写单个需求时，运行测试命令，中途不要运行全量测试，只需局部测试即可，只需最后运行全量测试，确保没有问题。
+2. 编写单个需求时，只运行覆盖改动代码和可能受影响代码的局部测试；用户完成最终验收前，不主动运行全量测试。
 
 ### 工作流程
 
@@ -152,7 +155,7 @@ function agent_loop(用户需求){
       提出问题，让用户提供答案;
       调整需求文档;
    }
-   
+
    // 2. 开发文档编写
    while(开发文档编写未完成){
       编写开发文档;
@@ -176,10 +179,9 @@ function agent_loop(用户需求){
 
 ### 输出规范
 
-1. 输出语言：中文
-2. 输出文档位置:
-   2.1. 设计文档: [.codex/design](.codex/design)，todo 跟在设计文档后面。
-   2.2. 问题分析文档: [.codex/issue](.codex/issue)
-3. 相同需求文档，尽量写在一起（内容超过 300 行，可以分批写入），或者创建要给目录一起管理，不要随意平铺一堆不同版本的相同问题的文档。
-4. 文件输出，使用正确的编码格式，例如UTF-8。
-5. 除非用户指明，否则不要编写总结报告。
+1. 输出文档位置:
+   1.1. 设计文档: [.agents/design](.agents/design)，todo 跟在设计文档后面。
+   1.2. 问题分析文档: [.agents/issue](.agents/issue)
+2. 相同需求文档，尽量写在一起（内容超过 500 行，可以分批写入），或者创建要给目录一起管理，不要随意平铺一堆不同版本的相同问题的文档。
+3. 文件输出，使用正确的编码格式，例如UTF-8。
+4. 除非用户指明，否则不要编写总结报告。

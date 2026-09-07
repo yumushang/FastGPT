@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useEffect } from 'react';
 import { Flex, Stack } from '@chakra-ui/react';
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
-import type { VariableItemType } from '@fastgpt/global/core/app/type';
+import type { VariableItemType } from '@fastgpt/global/core/app/variable/type';
 import { useForm } from 'react-hook-form';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import { useTranslation } from 'next-i18next';
@@ -68,6 +68,17 @@ const VariableEditModal = ({
         (typeEnum === VariableInputEnum.numberInput && !defaultValIsNumber)
       ) {
         setValue('defaultValue', '');
+      }
+      if (
+        (typeEnum === VariableInputEnum.select || typeEnum === VariableInputEnum.multipleSelect) &&
+        !value.list?.length
+      ) {
+        setValue('list', [{ label: '', value: '' }]);
+      } else if (
+        typeEnum !== VariableInputEnum.select &&
+        typeEnum !== VariableInputEnum.multipleSelect
+      ) {
+        setValue('list', undefined);
       }
       if (typeEnum === VariableInputEnum.datasetSelect && !value.datasetOptions) {
         setValue('datasetOptions', []);
@@ -160,7 +171,7 @@ const VariableEditModal = ({
     <MyModal
       iconSrc="core/app/simpleMode/variable"
       title={t('common:core.module.Variable Setting')}
-      isOpen={true}
+      isOpen
       onClose={onClose}
       maxW={['90vw', '1078px']}
       w={'100%'}

@@ -1,32 +1,25 @@
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
-import { ChatGenerateStatusEnum, ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
-import { authOutLink } from '@/service/support/permission/auth/outLink';
-import { authCert } from '@fastgpt/service/support/permission/auth/common';
-import { authTeamSpaceToken } from '@/service/support/permission/auth/team';
+import { ChatGenerateStatusEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { buildChatTargetResponse } from '@fastgpt/global/openapi/core/chat/api';
+import { ChatErrEnum } from '@fastgpt/global/common/error/code/chat';
 import { NextAPI } from '@/service/middleware/entry';
-import { type ApiRequestProps, type ApiResponseType } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import {
   GetHistoriesBodySchema,
   GetHistoriesResponseSchema,
   type GetHistoriesResponseType
 } from '@fastgpt/global/openapi/core/chat/history/api';
 import { parsePaginationRequest } from '@fastgpt/service/common/api/pagination';
-import { addMonths } from 'date-fns';
 import { ObjectIdSchema } from '@fastgpt/global/common/type/mongo';
-import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { buildChatHistoryMatch } from '@/service/core/chat/history';
 
 /* get chat histories list */
-export async function handler(
-  req: ApiRequestProps,
-  _res: ApiResponseType
-): Promise<GetHistoriesResponseType> {
+export async function handler(req: ApiRequestProps): Promise<GetHistoriesResponseType> {
   const {
-    appId,
-    shareId,
-    outLinkUid,
-    teamId,
-    teamToken,
+    sourceType,
+    sourceId,
+    outLinkAuthData,
     source,
     startCreateTime,
     endCreateTime,
@@ -35,60 +28,23 @@ export async function handler(
   } = parseApiInput({ req, bodySchema: GetHistoriesBodySchema }).body;
   const { offset, pageSize } = parsePaginationRequest(req);
 
-  const match = await (async () => {
-    if (shareId && outLinkUid) {
-      const { uid } = await authOutLink({ shareId, outLinkUid });
-
-      return {
-        shareId,
-        outLinkUid: uid,
-        updateTime: {
-          $gte: addMonths(new Date(), -1)
-        }
-      };
-    }
-    if (appId && teamId && teamToken) {
-      const { uid, tags } = await authTeamSpaceToken({ teamId, teamToken });
-
-      const app = await MongoApp.findOne({
-        _id: appId,
-        teamId,
-        $or: [
-          { teamTags: { $size: 0 } },
-          { teamTags: { $exists: false } },
-          { teamTags: { $in: tags } }
-        ]
-      }).lean();
-      if (!app) return undefined;
-
-      return {
-        appId,
-        outLinkUid: uid,
-        source: ChatSourceEnum.team
-      };
-    }
-    if (appId) {
-      const { tmbId } = await authCert({ req, authToken: true, authApiKey: true });
-      return {
-        appId,
-        tmbId,
-        ...(source && { source })
-      };
-    }
-  })();
+  const match = await buildChatHistoryMatch({
+    req,
+    sourceType,
+    sourceId,
+    outLinkAuthData,
+    source
+  });
 
   if (!match) {
-    return {
-      list: [],
-      total: 0
-    };
+    return Promise.reject(ChatErrEnum.unAuthChat);
   }
 
   if (match.appId && !ObjectIdSchema.safeParse(match.appId).success) {
-    return {
+    return GetHistoriesResponseSchema.parse({
       list: [],
       total: 0
-    };
+    });
   }
 
   const timeMatch: Record<string, any> = {};
@@ -123,7 +79,10 @@ export async function handler(
     list: data.map((item) => ({
       chatId: item.chatId,
       updateTime: item.updateTime,
-      appId: item.appId,
+      ...buildChatTargetResponse({
+        sourceType: sourceType ?? ChatSourceTypeEnum.app,
+        sourceId: item.appId
+      }),
       customTitle: item.customTitle,
       title: item.title,
       top: item.top,

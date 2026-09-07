@@ -28,7 +28,7 @@ export const AgentNode: FlowNodeTemplateType = {
   templateType: FlowNodeTemplateTypeEnum.ai,
   showSourceHandle: true,
   showTargetHandle: true,
-  avatar: 'core/workflow/template/agent',
+  avatar: 'core/app/type/agentFill',
   avatarLinear: 'core/workflow/template/agentLinear',
   colorSchema: 'emerald',
   name: i18nT('workflow:template.agent_module'),
@@ -59,6 +59,27 @@ export const AgentNode: FlowNodeTemplateType = {
     },
     {
       key: NodeInputKeyEnum.aiChatVision,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
+      key: NodeInputKeyEnum.aiChatAudio,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
+      key: NodeInputKeyEnum.aiChatVideo,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
+      key: NodeInputKeyEnum.aiChatExtractFiles,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
       valueType: WorkflowIOValueTypeEnum.boolean,
@@ -110,11 +131,25 @@ export const AgentNode: FlowNodeTemplateType = {
     },
     Input_Template_File_Link,
     Input_Template_UserChatInput,
+    {
+      key: NodeInputKeyEnum.useAgentSandbox,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:use_agent_sandbox'),
+      description: i18nT('app:use_computer_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
+      key: NodeInputKeyEnum.sandboxEntrypoint,
+      renderTypeList: [FlowNodeInputTypeEnum.custom],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.string
+    },
     // Skill
     {
       key: NodeInputKeyEnum.skills,
-      renderTypeList: [FlowNodeInputTypeEnum.selectSkill, FlowNodeInputTypeEnum.reference],
-      label: 'Skill',
+      renderTypeList: [FlowNodeInputTypeEnum.selectSkill],
+      label: i18nT('common:navbar.Skill'),
       valueType: WorkflowIOValueTypeEnum.arrayObject,
       valueDesc: '{\n skillId:string;\n}[]',
       value: []
@@ -122,7 +157,7 @@ export const AgentNode: FlowNodeTemplateType = {
     // Tool
     {
       key: NodeInputKeyEnum.selectedTools,
-      renderTypeList: [FlowNodeInputTypeEnum.selectTool, FlowNodeInputTypeEnum.reference],
+      renderTypeList: [FlowNodeInputTypeEnum.selectTool],
       label: i18nT('workflow:agent.tools'),
       valueType: WorkflowIOValueTypeEnum.arrayObject,
       valueDesc: '{\n toolId:string;\n}[]',
@@ -131,7 +166,7 @@ export const AgentNode: FlowNodeTemplateType = {
     // Dataset
     {
       key: NodeInputKeyEnum.datasetSelectList,
-      renderTypeList: [FlowNodeInputTypeEnum.selectDataset, FlowNodeInputTypeEnum.reference],
+      renderTypeList: [FlowNodeInputTypeEnum.selectDataset],
       label: i18nT('common:core.module.input.label.Select dataset'),
       value: [],
       valueType: WorkflowIOValueTypeEnum.selectDataset,
@@ -173,7 +208,7 @@ export const AgentNode: FlowNodeTemplateType = {
       value: false
     },
     {
-      key: NodeInputKeyEnum.datasetSearchRerankModel,
+      key: NodeInputKeyEnum.datasetSearchRerankModelId,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
       valueType: WorkflowIOValueTypeEnum.string
@@ -193,7 +228,7 @@ export const AgentNode: FlowNodeTemplateType = {
       value: true
     },
     {
-      key: NodeInputKeyEnum.datasetSearchExtensionModel,
+      key: NodeInputKeyEnum.datasetSearchExtensionModelId,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
       valueType: WorkflowIOValueTypeEnum.string

@@ -24,7 +24,8 @@ export const Input_Template_UserChatInput: FlowNodeInputItemType = {
   valueType: WorkflowIOValueTypeEnum.string,
   label: i18nT('workflow:user_question'),
   toolDescription: 'user question',
-  required: true
+  required: true,
+  defaultToAgentGenerated: true
 };
 
 export const Input_Template_DynamicInput: FlowNodeInputItemType = {
@@ -36,14 +37,14 @@ export const Input_Template_DynamicInput: FlowNodeInputItemType = {
 };
 
 export const Input_Template_SelectAIModel: FlowNodeInputItemType = {
-  key: NodeInputKeyEnum.aiModel,
+  key: NodeInputKeyEnum.aiModelId,
   renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel, FlowNodeInputTypeEnum.reference],
   label: i18nT('common:core.module.input.label.aiModel'),
   required: true,
   valueType: WorkflowIOValueTypeEnum.string
 };
 export const Input_Template_SettingAiModel: FlowNodeInputItemType = {
-  key: NodeInputKeyEnum.aiModel,
+  key: NodeInputKeyEnum.aiModelId,
   renderTypeList: [FlowNodeInputTypeEnum.settingLLMModel, FlowNodeInputTypeEnum.reference],
   label: i18nT('common:core.module.input.label.aiModel'),
   valueType: WorkflowIOValueTypeEnum.string
@@ -79,11 +80,12 @@ export const Input_Template_Text_Quote: FlowNodeInputItemType = {
 
 export const Input_Template_File_Link: FlowNodeInputItemType = {
   key: NodeInputKeyEnum.fileUrlList,
-  renderTypeList: [FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.input],
+  renderTypeList: [FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.JSONEditor],
   label: i18nT('app:workflow.user_file_input'),
   debugLabel: i18nT('app:workflow.user_file_input'),
   description: i18nT('app:workflow.user_file_input_desc'),
-  valueType: WorkflowIOValueTypeEnum.arrayString
+  valueType: WorkflowIOValueTypeEnum.arrayString,
+  defaultToAgentGenerated: true
 };
 
 export const Input_Template_Children_Node_List: FlowNodeInputItemType = {
@@ -119,6 +121,7 @@ export const Input_Template_Stream_MODE: FlowNodeInputItemType = {
   key: NodeInputKeyEnum.forbidStream,
   renderTypeList: [FlowNodeInputTypeEnum.switch],
   valueType: WorkflowIOValueTypeEnum.boolean,
+  canAgentGenerated: false,
   label: i18nT('workflow:template.forbid_stream'),
   description: i18nT('workflow:template.forbid_stream_desc'),
   value: false

@@ -6,8 +6,6 @@ import { DatasetConcatModule } from './system/datasetConcat';
 import { DatasetSearchModule } from './system/datasetSearch';
 import { EmptyNode } from './system/emptyNode';
 import { HttpNode468 } from './system/http468';
-import { PluginConfigNode } from './system/pluginConfig';
-import { SystemConfigNode } from './system/systemConfig';
 import { WorkflowStart } from './system/workflowStart';
 
 import { StopToolNode } from './system/stopTool';
@@ -17,7 +15,7 @@ import { AgentNode } from './system/agent';
 import { RunAppModule } from './system/abandoned/runApp/index';
 import { PluginInputModule } from './system/pluginInput';
 import { PluginOutputModule } from './system/pluginOutput';
-import { AiQueryExtension } from './system/queryExtension';
+import { AiQueryExtension } from './system/abandoned/queryExtension';
 import { RunAppNode } from './system/runApp';
 import { RunPluginModule } from './system/runPlugin';
 
@@ -26,7 +24,6 @@ import { CustomFeedbackNode } from './system/customFeedback';
 import { IfElseNode } from './system/ifElse/index';
 import { FormInputNode } from './system/interactive/formInput';
 import { UserSelectNode } from './system/interactive/userSelect';
-import { LafModule } from './system/laf';
 import { LoopNode } from './system/abandoned/loop/index';
 import { LoopEndNode } from './system/loop/loopEnd';
 import { LoopStartNode } from './system/loop/loopStart';
@@ -56,8 +53,6 @@ const systemNodes: FlowNodeTemplateType[] = [
   AgentNode,
   ReadFilesNode,
   HttpNode468,
-  AiQueryExtension,
-  LafModule,
   IfElseNode,
   VariableUpdateNode,
   CodeNode,
@@ -67,7 +62,6 @@ const systemNodes: FlowNodeTemplateType[] = [
 ];
 /* app flow module templates */
 export const appSystemModuleTemplates: FlowNodeTemplateType[] = [
-  SystemConfigNode,
   WorkflowStart,
   ...systemNodes,
   CustomFeedbackNode,
@@ -76,7 +70,6 @@ export const appSystemModuleTemplates: FlowNodeTemplateType[] = [
 ];
 /* plugin flow module templates */
 export const pluginSystemModuleTemplates: FlowNodeTemplateType[] = [
-  PluginConfigNode,
   PluginInputModule,
   PluginOutputModule,
   ...systemNodes
@@ -98,5 +91,6 @@ export const moduleTemplatesFlat: FlowNodeTemplateType[] = [
   LoopEndNode,
   LoopRunStartNode,
   RunToolNode,
-  RunToolSetNode
+  RunToolSetNode,
+  AiQueryExtension
 ];

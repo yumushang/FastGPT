@@ -5,6 +5,7 @@ import {
   type AppQGConfigType
 } from './type';
 import type { AppFileSelectConfigType } from './type/config.schema';
+import { documentFileExtensions } from '../../common/file/constants';
 
 export enum AppTypeEnum {
   folder = 'folder',
@@ -35,6 +36,18 @@ export const ToolTypeList = [
 ];
 export const AppTypeList = [AppTypeEnum.simple, AppTypeEnum.chatAgent, AppTypeEnum.workflow];
 
+export enum AppListSortEnum {
+  updateTimeDesc = 'updateTimeDesc',
+  createTimeDesc = 'createTimeDesc',
+  createTimeAsc = 'createTimeAsc'
+}
+
+export const appListSortMongoMap: Record<AppListSortEnum, Record<string, 1 | -1>> = {
+  [AppListSortEnum.updateTimeDesc]: { updateTime: -1 },
+  [AppListSortEnum.createTimeDesc]: { createTime: -1 },
+  [AppListSortEnum.createTimeAsc]: { createTime: 1 }
+};
+
 export const defaultTTSConfig: AppTTSConfigType = { type: 'web' };
 
 export const defaultAutoExecuteConfig: AppAutoExecuteConfigType = {
@@ -50,7 +63,6 @@ export const defaultWhisperConfig: AppWhisperConfigType = {
 
 export const defaultQGConfig: AppQGConfigType = {
   open: false,
-  model: 'gpt-5',
   customPrompt: ''
 };
 
@@ -83,7 +95,7 @@ export enum AppTemplateTypeEnum {
 }
 
 export const defaultFileExtensionTypes = {
-  canSelectFile: ['.pdf', '.docx', '.pptx', '.xlsx', '.txt', '.md', '.html', '.csv'],
+  canSelectFile: [...documentFileExtensions],
   canSelectImg: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'],
   canSelectVideo: ['.mp4', '.mov', '.avi', '.mpeg', '.webm'],
   canSelectAudio: ['.mp3', '.wav', '.ogg', '.m4a', '.amr', '.mpga'],
@@ -122,4 +134,53 @@ export const getUploadFileType = ({
     types.push(...customFileExtensionList);
   }
   return types.join(', ');
+};
+
+/** 判断聊天上传文件是否符合应用文件选择配置 */
+export const isChatFileAllowedBySelectConfig = ({
+  filename,
+  contentType,
+  fileType,
+  fileSelectConfig
+}: {
+  filename: string;
+  contentType?: string;
+  fileType: 'image' | 'audio' | 'video' | 'file';
+  fileSelectConfig: AppFileSelectConfigType;
+}) => {
+  const allowedExtensions = getUploadFileType(fileSelectConfig)
+    .split(',')
+    .map((extension) => {
+      const normalized = extension.trim().toLowerCase();
+      return normalized ? (normalized.startsWith('.') ? normalized : `.${normalized}`) : '';
+    })
+    .filter(Boolean);
+  const normalizedFilename = filename.trim().toLowerCase();
+  const lastDotIndex = normalizedFilename.lastIndexOf('.');
+  const extension = lastDotIndex >= 0 ? normalizedFilename.slice(lastDotIndex) : '';
+
+  if (extension) return allowedExtensions.includes(extension);
+
+  const mimeCategory = contentType?.trim().toLowerCase().split('/')[0];
+  if (mimeCategory === 'image' || mimeCategory === 'audio' || mimeCategory === 'video') {
+    return (
+      fileSelectConfig[
+        mimeCategory === 'image'
+          ? 'canSelectImg'
+          : mimeCategory === 'audio'
+            ? 'canSelectAudio'
+            : 'canSelectVideo'
+      ] === true
+    );
+  }
+
+  if (contentType?.trim()) return false;
+
+  return fileType === 'image'
+    ? fileSelectConfig.canSelectImg === true
+    : fileType === 'video'
+      ? fileSelectConfig.canSelectVideo === true
+      : fileType === 'audio'
+        ? fileSelectConfig.canSelectAudio === true
+        : fileSelectConfig.canSelectFile === true;
 };

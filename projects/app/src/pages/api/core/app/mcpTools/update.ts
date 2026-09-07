@@ -1,4 +1,4 @@
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
 import { ManagePermissionVal } from '@fastgpt/global/support/permission/constant';
@@ -9,17 +9,27 @@ import { getMCPToolSetRuntimeNode } from '@fastgpt/global/core/app/tool/mcpTool/
 import { MongoAppVersion } from '@fastgpt/service/core/app/version/schema';
 import { storeSecretValue } from '@fastgpt/service/common/secret/utils';
 import { updateParentFoldersUpdateTime } from '@fastgpt/service/core/app/controller';
+import { beforeUpdateAppFormat } from '@fastgpt/service/core/app/controller';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   UpdateMcpToolsBodySchema,
-  type UpdateMcpToolsBodyType
+  UpdateMcpToolsResponseSchema,
+  type UpdateMcpToolsBodyType,
+  type UpdateMcpToolsResponseType
 } from '@fastgpt/global/openapi/core/app/mcpTools/api';
 import { assertMCPUrlNotInternal } from '@fastgpt/service/core/app/mcp';
+import { encodeMcpToolSetNodesForStorage } from '@fastgpt/service/core/app/jsonSchemaStorage';
 
-export type updateMCPToolsQuery = {};
-
-async function handler(req: ApiRequestProps<UpdateMcpToolsBodyType>, res: ApiResponseType) {
-  const { appId, url, toolList, headerSecret } = UpdateMcpToolsBodySchema.parse(req.body);
-  const { app } = await authApp({ req, authToken: true, appId, per: ManagePermissionVal });
+async function handler(
+  req: ApiRequestProps<UpdateMcpToolsBodyType>
+): Promise<UpdateMcpToolsResponseType> {
+  const {
+    body: { appId, url, toolList, headerSecret }
+  } = parseApiInput({
+    req,
+    bodySchema: UpdateMcpToolsBodySchema
+  });
+  const { app, teamId } = await authApp({ req, authToken: true, appId, per: ManagePermissionVal });
 
   await assertMCPUrlNotInternal(url);
 
@@ -31,15 +41,18 @@ async function handler(req: ApiRequestProps<UpdateMcpToolsBodyType>, res: ApiRes
     toolList,
     headerSecret: formatedHeaderAuth,
     name: app.name,
-    avatar: app.avatar
+    avatar: app.avatar ?? undefined
   });
+  const storageNodes = encodeMcpToolSetNodesForStorage([toolSetRuntimeNode]);
+
+  await beforeUpdateAppFormat({ nodes: [toolSetRuntimeNode], teamId });
 
   await mongoSessionRun(async (session) => {
     // update app and app version
     await MongoApp.updateOne(
       { _id: appId },
       {
-        modules: [toolSetRuntimeNode],
+        modules: storageNodes,
         updateTime: new Date()
       },
       { session }
@@ -49,7 +62,7 @@ async function handler(req: ApiRequestProps<UpdateMcpToolsBodyType>, res: ApiRes
       { appId },
       {
         $set: {
-          nodes: [toolSetRuntimeNode]
+          nodes: storageNodes
         }
       },
       { session }
@@ -58,6 +71,8 @@ async function handler(req: ApiRequestProps<UpdateMcpToolsBodyType>, res: ApiRes
   updateParentFoldersUpdateTime({
     parentId: app.parentId
   });
+
+  return UpdateMcpToolsResponseSchema.parse(undefined);
 }
 
 export default NextAPI(handler);

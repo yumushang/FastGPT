@@ -9,6 +9,10 @@ import {
 import { DatasetCollectionDataProcessModeEnum } from '../../../../core/dataset/constants';
 import { OutLinkChatAuthSchema } from '../../../../support/permission/chat';
 import { PaginationSchema, PaginationResponseSchema } from '../../../api';
+import {
+  createOptionalOutLinkChatTargetInputSchema,
+  transformOptionalChatAuthTargetInput
+} from '../../chat/api';
 
 const PushDataChunkSchema = z.object({
   q: z.string().optional().meta({
@@ -28,7 +32,10 @@ const PushDataChunkSchema = z.object({
   indexes: z
     .array(DatasetDataIndexItemSchema.omit({ dataId: true }))
     .optional()
-    .meta({ description: '额外向量索引' })
+    .meta({ description: '额外向量索引' }),
+  metadata: z.record(z.string(), z.any()).optional().meta({
+    description: '自定义元数据'
+  })
 });
 export type PushDataChunkType = z.infer<typeof PushDataChunkSchema>;
 
@@ -51,11 +58,11 @@ export type GetDatasetDataDetailResponse = z.infer<typeof GetDatasetDataDetailRe
  * API: 更新数据集数据
  * Route: PUT /api/core/dataset/data/update
  * ============================================================================ */
-export const UpdateDatasetDataBodySchema = UpdateDatasetDataPropsSchema;
+export const UpdateDatasetDataBodySchema = UpdateDatasetDataPropsSchema.omit({ metadata: true });
 export type UpdateDatasetDataBody = z.infer<typeof UpdateDatasetDataBodySchema>;
 export const UpdateDatasetDataResponseSchema = z.object({
   q: z.string().optional().meta({
-    example: '![image.png](/api/system/file/download/xxx?filename=image.png)',
+    example: '![image.png](/api/system/file/d/alias.exp.sig)',
     description: '展示态问题/主文本，内部 S3 图片会替换为签名访问地址'
   }),
   a: z.string().optional().meta({
@@ -119,7 +126,7 @@ export const DeleteDatasetDataQuerySchema = z.object({
 });
 export type DeleteDatasetDataQuery = z.infer<typeof DeleteDatasetDataQuerySchema>;
 
-export const DeleteDatasetDataResponseSchema = z.literal('success');
+export const DeleteDatasetDataResponseSchema = z.undefined().meta({ description: '删除成功' });
 export type DeleteDatasetDataResponse = z.infer<typeof DeleteDatasetDataResponseSchema>;
 
 /* ============================================================================
@@ -138,22 +145,17 @@ export const DeleteDatasetDataIndexBodySchema = z.object({
 });
 export type DeleteDatasetDataIndexBody = z.infer<typeof DeleteDatasetDataIndexBodySchema>;
 
-export const DeleteDatasetDataIndexResponseSchema = z.object({});
+export const DeleteDatasetDataIndexResponseSchema = z.undefined().meta({ description: '删除成功' });
 export type DeleteDatasetDataIndexResponse = z.infer<typeof DeleteDatasetDataIndexResponseSchema>;
 
 /* ============================================================================
  * API: 获取引用数据
  * Route: POST /api/core/dataset/data/getQuoteData
  * ============================================================================ */
-export const GetQuoteDataBodySchema = OutLinkChatAuthSchema.extend({
+export const GetQuoteDataBodyRawSchema = createOptionalOutLinkChatTargetInputSchema({
   id: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a05',
     description: '数据 ID'
-  }),
-  // 对话模式下的额外字段（三者必须同时提供，否则走 API 模式）
-  appId: ObjectIdSchema.optional().meta({
-    example: '68ad85a7463006c963799a10',
-    description: '应用 ID（对话模式必填）'
   }),
   chatId: z.string().optional().meta({
     example: '68ad85a7463006c963799a11',
@@ -165,10 +167,23 @@ export const GetQuoteDataBodySchema = OutLinkChatAuthSchema.extend({
   })
 }).refine(
   (d) =>
-    (!!d.chatId && !!d.appId && !!d.chatItemDataId) || (!d.chatId && !d.appId && !d.chatItemDataId),
-  { message: '对话模式下 appId / chatId / chatItemDataId 必须同时提供' }
+    (!!d.chatId &&
+      (!!d.appId ||
+        !!d.skillId ||
+        !!(d.outLinkAuthData?.shareId && d.outLinkAuthData?.outLinkUid)) &&
+      !!d.chatItemDataId) ||
+    (!d.chatId &&
+      !d.appId &&
+      !d.skillId &&
+      !(d.outLinkAuthData?.shareId || d.outLinkAuthData?.outLinkUid) &&
+      !d.chatItemDataId),
+  { message: '对话模式下 chat target / chatId / chatItemDataId 必须同时提供' }
 );
-export type GetQuoteDataBody = z.infer<typeof GetQuoteDataBodySchema>;
+export const GetQuoteDataBodySchema = GetQuoteDataBodyRawSchema.transform(
+  transformOptionalChatAuthTargetInput
+);
+export type GetQuoteDataBody = z.infer<typeof GetQuoteDataBodyRawSchema>;
+export type GetQuoteDataRuntimeBody = z.infer<typeof GetQuoteDataBodySchema>;
 
 export const GetQuoteDataResponseSchema = z.object({
   q: z.string().meta({
@@ -226,7 +241,7 @@ export const InsertImagesBodySchema = z.object({
 });
 export type InsertImagesBody = z.infer<typeof InsertImagesBodySchema>;
 
-export const InsertImagesResponseSchema = z.object({});
+export const InsertImagesResponseSchema = z.undefined().meta({ description: '插入成功' });
 export type InsertImagesResponse = z.infer<typeof InsertImagesResponseSchema>;
 
 /* ============================================================================
@@ -257,7 +272,7 @@ export const PushDataBodySchema = z.object({
     description: '自定义提示词'
   }),
   billId: z.string().optional().meta({
-    description: '账单 ID'
+    description: '可选的训练账单 ID；不传时自动创建'
   }),
 
   trainingMode: z.enum(DatasetCollectionDataProcessModeEnum).optional().meta({

@@ -17,8 +17,11 @@ const exactMap: Record<string, string> = {
   '/protocol/privacy': '/guide/version/cloud/privacy',
 
   // Self-host.
-  '/upgrading/intro': '/self-host/upgrading/upgrade-intruction',
-  '/upgrading': '/self-host/upgrading/upgrade-intruction',
+  '/upgrading/intro': '/self-host/upgrading/upgrade-instruction',
+  '/upgrading': '/self-host/upgrading/upgrade-instruction',
+  // Pre-rename misspellings of the upgrade page keep resolving.
+  '/self-host/upgrading/upgrade-intruction': '/self-host/upgrading/upgrade-instruction',
+  '/upgrading/upgrade-intruction': '/self-host/upgrading/upgrade-instruction',
   '/introduction/development/docker': '/self-host/deploy/docker',
   '/introduction/development/sealos': '/self-host/deploy/sealos',
   '/introduction/development/intro': '/self-host/dev',
@@ -48,6 +51,7 @@ const exactMap: Record<string, string> = {
   '/introduction/guide/dashboard/intro': '/guide/build/workflow/intro',
   '/introduction/guide/dashboard/mcp_server': '/guide/build/publish/mcp_server',
   '/introduction/guide/dashboard/mcp_tools': '/guide/build/tools/mcp_tools',
+  '/guide/build/tools/system-plugins/dev_system_tool': '/plugin/system-tool-development',
 
   // Workspace.
   '/introduction/commercial': '/guide/version/commercial',
@@ -57,7 +61,8 @@ const exactMap: Record<string, string> = {
   '/use-cases': defaultHomePath,
   '/self-host': '/self-host/deploy/docker',
   '/openapi': '/openapi/intro',
-  '/faq': '/faq/app'
+  '/openapi/share': '/guide/build/publish/link',
+  '/faq': '/faq/chat'
 };
 
 // Prefix redirects for groups that kept the same slug after moving.
@@ -87,6 +92,7 @@ const prefixMap: Record<string, string> = {
 };
 
 const i18nMiddleware = createI18nMiddleware(i18n);
+const documentCacheControl = 'public, max-age=0, must-revalidate';
 
 function normalizePath(path: string) {
   return path.length > 1 ? path.replace(/\/+$/, '') : path;
@@ -155,6 +161,9 @@ export default function middleware(request: NextRequest) {
   if (hasLangPrefix) {
     // Pass through with x-pathname; sync FD_LOCALE cookie if mismatched.
     const response = NextResponse.next({ request: { headers: requestHeaders } });
+    // Static HTML references build-hashed chunks. Reusing HTML across image rollouts can
+    // point the browser at chunks that only exist in the previous deployment.
+    response.headers.set('Cache-Control', documentCacheControl);
     const currentCookie = request.cookies.get('FD_LOCALE')?.value;
     if (currentCookie !== lang) {
       response.cookies.set('FD_LOCALE', lang, {
@@ -180,6 +189,6 @@ export default function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!api|_next/static|_next/image|favicon.ico|robots\\.txt|sitemap.*\\.xml|.*\\.svg|.*\\.png|deploy/.*).*)'
+    '/((?!api|_next/static|_next/image|favicon(?:\\.ico|/)|robots\\.txt|sitemap.*\\.xml|.*\\.svg|.*\\.png|deploy/.*).*)'
   ]
 };

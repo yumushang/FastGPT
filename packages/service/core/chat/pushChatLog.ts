@@ -1,9 +1,16 @@
 import { MongoChatItem } from './chatItemSchema';
 import { MongoChat } from './chatSchema';
 import { axios } from '../../common/api/axios';
-import { type AIChatItemType, type UserChatItemType } from '@fastgpt/global/core/chat/type';
+import {
+  type AIChatItemType,
+  type ChatItemDBSchemaType,
+  type UserChatItemType
+} from '@fastgpt/global/core/chat/type';
 import { getLogger, LogCategories } from '../../common/logger';
 import { serviceEnv } from '../../env';
+import { getChatItemResponseData } from './nodeResponseStorage';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { buildChatSourceQuery } from './source';
 
 const logger = getLogger(LogCategories.MODULE.CHAT.RECORD);
 
@@ -74,15 +81,22 @@ const pushChatLogInternal = async ({
 }) => {
   try {
     const [chatItemHuman, chatItemAi] = await Promise.all([
-      MongoChatItem.findById(chatItemIdHuman).lean() as Promise<UserChatItemType>,
-      MongoChatItem.findById(chatItemIdAi).lean() as Promise<AIChatItemType>
+      MongoChatItem.findById(chatItemIdHuman).lean() as Promise<
+        (UserChatItemType & ChatItemDBSchemaType) | null
+      >,
+      MongoChatItem.findById(chatItemIdAi).lean() as Promise<
+        (AIChatItemType & ChatItemDBSchemaType) | null
+      >
     ]);
 
     if (!chatItemHuman || !chatItemAi) {
       return;
     }
 
-    const chat = await MongoChat.findOne({ chatId }).lean();
+    const chat = await MongoChat.findOne({
+      ...buildChatSourceQuery({ sourceType: ChatSourceTypeEnum.app, sourceId: appId }),
+      chatId
+    }).lean();
 
     if (!chat) {
       return;
@@ -147,10 +161,13 @@ ${JSON.stringify(item.interactive, null, 2)}
       return;
     }
 
-    // computed response time
-    const responseData = chatItemAi.responseData;
-    const responseTime =
-      responseData?.reduce((acc, item) => acc + (item?.runningTime ?? 0), 0) || 0;
+    const responseData = await getChatItemResponseData({
+      sourceType: ChatSourceTypeEnum.app,
+      sourceId: appId,
+      chatId,
+      chatItemDataId: chatItemAi.dataId
+    });
+    const responseTime = responseData.reduce((acc, item) => acc + (item?.runningTime ?? 0), 0) || 0;
 
     const sourceIdPrefix = serviceEnv.CHAT_LOG_SOURCE_ID_PREFIX;
 

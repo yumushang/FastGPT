@@ -1,4 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+const mockCountPromptTokens = vi.hoisted(() => vi.fn(async (text: string) => text.length));
+
+vi.mock('@fastgpt/service/common/string/tiktoken/index', () => ({
+  countPromptTokens: mockCountPromptTokens
+}));
+
 import { useTextCosine } from '@fastgpt/service/core/ai/hooks/useTextCosine';
 import {
   generateMockEmbedding,
@@ -8,15 +15,28 @@ import {
   mockGetVectors
 } from '@test/mocks/core/ai/embedding';
 
+const embeddingModel = {
+  modelId: '68ad85a7463006c963799a68',
+  model: 'text-embedding-ada-002',
+  name: 'text-embedding-ada-002',
+  provider: 'openai',
+  type: 'embedding' as const,
+  scope: 'system' as const,
+  isActive: true,
+  isCustom: false,
+  config: { defaultToken: 100, maxToken: 100, weight: 0 }
+};
+
 describe('useTextCosine', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCountPromptTokens.mockImplementation(async (text: string) => text.length);
   });
 
   describe('lazyGreedyQuerySelection', () => {
     it('should return empty array when candidates is empty', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'test query',
@@ -31,7 +51,7 @@ describe('useTextCosine', () => {
 
     it('should select k candidates when k <= candidates.length', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original text',
@@ -44,7 +64,7 @@ describe('useTextCosine', () => {
 
     it('should select all candidates when k > candidates.length', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original text',
@@ -57,7 +77,7 @@ describe('useTextCosine', () => {
 
     it('should select single candidate correctly', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original text',
@@ -81,7 +101,7 @@ describe('useTextCosine', () => {
       });
 
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original text',
@@ -96,7 +116,7 @@ describe('useTextCosine', () => {
 
     it('should balance relevance and diversity with default alpha', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original text',
@@ -113,7 +133,14 @@ describe('useTextCosine', () => {
     });
 
     it('should call getVectors with correct parameters', async () => {
-      const { lazyGreedyQuerySelection } = useTextCosine({ embeddingModel: 'custom-model' });
+      const { lazyGreedyQuerySelection } = useTextCosine({
+        embeddingModel: {
+          modelId: '68ad85a7463006c963799a68',
+          model: 'mock-embedding-model',
+          name: 'Mock Embedding Model',
+          config: { maxToken: 12 }
+        } as any
+      });
       await lazyGreedyQuerySelection({
         originalText: 'test query',
         candidates: ['candidate'],
@@ -144,7 +171,14 @@ describe('useTextCosine', () => {
         vectors: [originalVector, candidateVector]
       });
 
-      const { lazyGreedyQuerySelection } = useTextCosine({ embeddingModel: 'custom-model' });
+      const { lazyGreedyQuerySelection } = useTextCosine({
+        embeddingModel: {
+          modelId: '68ad85a7463006c963799a68',
+          model: 'mock-embedding-model',
+          name: 'Mock Embedding Model',
+          config: { maxToken: 12 }
+        } as any
+      });
       const result = await lazyGreedyQuerySelection({
         originalText: ' test query ',
         candidates: [' ', ' candidate ', ''],
@@ -168,6 +202,48 @@ describe('useTextCosine', () => {
       expect(result.selectedData).toEqual(['candidate']);
     });
 
+    it('should pass overlong query and candidates to centralized embedding fallback', async () => {
+      mockGetVectors.mockResolvedValueOnce({
+        tokens: 10,
+        vectors: [
+          generateMockEmbedding('abcdefghijklmnopqrstuvwxy'),
+          generateMockEmbedding('klmnopqrstuvwxy')
+        ]
+      });
+
+      const { lazyGreedyQuerySelection } = useTextCosine({
+        embeddingModel: {
+          modelId: '68ad85a7463006c963799a68',
+          model: 'mock-embedding-model',
+          name: 'Mock Embedding Model',
+          config: { maxToken: 12 }
+        } as any
+      });
+      const result = await lazyGreedyQuerySelection({
+        originalText: 'abcdefghijklmnopqrstuvwxy',
+        candidates: ['klmnopqrstuvwxy'],
+        k: 1
+      });
+
+      expect(mockGetVectors).toHaveBeenCalledWith({
+        model: expect.objectContaining({
+          model: 'mock-embedding-model'
+        }),
+        inputs: [
+          {
+            type: 'text',
+            input: 'abcdefghijklmnopqrstuvwxy'
+          },
+          {
+            type: 'text',
+            input: 'klmnopqrstuvwxy'
+          }
+        ],
+        type: 'query'
+      });
+      expect(result.selectedData).toEqual(['klmnopqrstuvwxy']);
+    });
+
     it('should handle identical candidates correctly', async () => {
       const originalVector = generateMockEmbedding('original');
       const identicalVector = generateMockEmbedding('same');
@@ -178,7 +254,7 @@ describe('useTextCosine', () => {
       });
 
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original',
@@ -201,7 +277,7 @@ describe('useTextCosine', () => {
       });
 
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
 
       // With high alpha (more relevance)
@@ -222,7 +298,7 @@ describe('useTextCosine', () => {
       mockGetVectors.mockResolvedValueOnce(mockResponse);
 
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'test',
@@ -235,7 +311,7 @@ describe('useTextCosine', () => {
 
     it('should handle k=0 correctly', async () => {
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'test',
@@ -259,7 +335,7 @@ describe('useTextCosine', () => {
       });
 
       const { lazyGreedyQuerySelection } = useTextCosine({
-        embeddingModel: 'text-embedding-ada-002'
+        embeddingModel
       });
       const result = await lazyGreedyQuerySelection({
         originalText: 'original',

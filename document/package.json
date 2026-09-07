@@ -27,7 +27,8 @@
     "fumadocs-ui": "15.6.3",
     "gray-matter": "^4.0.3",
     "lucide-react": "^0.525.0",
-    "next": "^15.5.18",
+    "mermaid": "^10.9.6",
+    "next": "^15.5.21",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-responsive": "^10.0.1",
@@ -46,12 +47,12 @@
     "@types/node": "24.0.13",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "postcss": "^8.5.10",
+    "postcss": "catalog:",
     "tailwindcss": "^4.1.11",
     "textlint": "catalog:lint",
     "textlint-plugin-mdx": "catalog:lint",
     "textlint-rule-preset-zh-technical-writing": "catalog:lint",
-    "typescript": "^5.8.3",
+    "typescript": "catalog:",
     "zod": "^4.0.5"
   }
 }

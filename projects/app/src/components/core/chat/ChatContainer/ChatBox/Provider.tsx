@@ -1,13 +1,14 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { type BoxProps } from '@chakra-ui/react';
 import { useAudioPlay } from '@/web/common/utils/voice';
 import { type OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 import {
   type AppQGConfigType,
   type AppTTSConfigType,
   type AppWhisperConfigType,
-  type ChatInputGuideConfigType,
-  type VariableItemType
+  type ChatInputGuideConfigType
 } from '@fastgpt/global/core/app/type';
+import type { VariableItemType } from '@fastgpt/global/core/app/variable/type';
 import { type AppFileSelectConfigType } from '@fastgpt/global/core/app/type/config.schema';
 import { type ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import { ChatStatusEnum } from '@fastgpt/global/core/chat/constants';
@@ -26,9 +27,17 @@ import { useCreation } from 'ahooks';
 import type { ChatTypeEnum } from './constants';
 import type { ChatQuickAppType } from '@fastgpt/global/core/chat/setting/type';
 import { WorkflowRuntimeContextProvider } from '@/components/core/chat/ChatContainer/context/workflowRuntimeContext';
+import {
+  getChatSourceKey,
+  type ChatSourceTarget,
+  toChatAuthApiTarget
+} from '@/web/core/chat/utils';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { resolveChatFileUploadMode } from './utils/file';
 
 export type ChatProviderProps = {
-  appId: string;
+  /** 标准内部 chat target。ChatBox 不再接收 appId/skillId raw 形态。 */
+  sourceTarget: ChatSourceTarget;
   chatId: string;
   outLinkAuthData?: OutLinkChatAuthProps;
 
@@ -37,15 +46,18 @@ export type ChatProviderProps = {
   chatType: ChatTypeEnum;
   dialogTips?: string;
   wideLogo?: string;
+  squareLogo?: string;
   slogan?: string;
 
-  currentQuickAppId?: string;
   quickAppList?: ChatQuickAppType[];
   onSwitchQuickApp?: (appId: string) => Promise<void>;
+  boxBodyProps?: BoxProps;
+  inputBodyProps?: BoxProps;
 };
 
-type useChatStoreType = Omit<ChatProviderProps, 'appId' | 'chatId' | 'outLinkAuthData'> & {
+type useChatStoreType = Omit<ChatProviderProps, 'sourceTarget' | 'chatId' | 'outLinkAuthData'> & {
   welcomeText: string;
+  welcomeQuestions: string[];
   variableList: VariableItemType[];
   questionGuide: AppQGConfigType;
   ttsConfig: AppTTSConfigType;
@@ -77,6 +89,7 @@ type useChatStoreType = Omit<ChatProviderProps, 'appId' | 'chatId' | 'outLinkAut
 
 export const ChatBoxContext = createContext<useChatStoreType>({
   welcomeText: '',
+  welcomeQuestions: [],
   variableList: [],
   questionGuide: {
     open: false,
@@ -128,18 +141,23 @@ export const ChatBoxContext = createContext<useChatStoreType>({
     open: false,
     customUrl: ''
   },
+  boxBodyProps: undefined,
+  inputBodyProps: undefined,
   // @ts-ignore
   variablesForm: undefined
 });
 
 const Provider = ({
-  appId,
+  sourceTarget,
   chatId,
   outLinkAuthData,
   chatType,
+  enableTTS = true,
   children,
   ...props
 }: ChatProviderProps & {
+  /** AI 回复朗读和自动 TTS 能力开关，由 ChatBox features 下沉。 */
+  enableTTS?: boolean;
   children: React.ReactNode;
 }) => {
   const formatOutLinkAuth = useCreation(() => {
@@ -148,7 +166,14 @@ const Provider = ({
 
   const welcomeText = useContextSelector(
     ChatItemContext,
-    (v) => v.chatBoxData?.app?.chatConfig?.welcomeText ?? ''
+    (v) =>
+      v.chatBoxData?.app?.chatConfig?.welcomeConfig?.welcomeText ??
+      v.chatBoxData?.app?.chatConfig?.welcomeText ??
+      ''
+  );
+  const welcomeQuestions = useContextSelector(
+    ChatItemContext,
+    (v) => v.chatBoxData?.app?.chatConfig?.welcomeConfig?.welcomeQuestions ?? []
   );
   const variables = useContextSelector(
     ChatItemContext,
@@ -180,9 +205,25 @@ const Provider = ({
     ChatItemContext,
     (v) => v.chatBoxData?.app?.chatConfig?.fileSelectConfig ?? defaultAppSelectFileConfig
   );
+  const fileUploadMode = resolveChatFileUploadMode({
+    chatType,
+    sourceType: sourceTarget.sourceType
+  });
 
   const chatRecords = useContextSelector(ChatRecordContext, (v) => v.chatRecords);
   const setChatRecords = useContextSelector(ChatRecordContext, (v) => v.setChatRecords);
+  const resolvedChatAuthTarget = useMemo(
+    () => toChatAuthApiTarget({ sourceTarget, outLinkAuthData: formatOutLinkAuth }),
+    [sourceTarget, formatOutLinkAuth]
+  );
+  const audioScopeKey = useMemo(
+    () => `${getChatSourceKey(sourceTarget)}:${chatId}`,
+    [sourceTarget, chatId]
+  );
+  const resolvedAppId = useMemo(
+    () => (sourceTarget.sourceType === ChatSourceTypeEnum.app ? sourceTarget.sourceId : undefined),
+    [sourceTarget]
+  );
 
   // segment audio
   const [audioPlayingChatId, setAudioPlayingChatId] = useState<string>();
@@ -196,13 +237,26 @@ const Provider = ({
     finishSegmentedAudio,
     splitText2Audio
   } = useAudioPlay({
-    appId,
-    ttsConfig,
-    ...formatOutLinkAuth
+    appId: enableTTS ? resolvedAppId : undefined,
+    ttsConfig: enableTTS ? ttsConfig : defaultTTSConfig,
+    outLinkAuthData: formatOutLinkAuth
   });
 
+  const lastAudioScopeKeyRef = useRef(audioScopeKey);
+  useEffect(() => {
+    if (lastAudioScopeKeyRef.current === audioScopeKey) return;
+
+    lastAudioScopeKeyRef.current = audioScopeKey;
+    cancelAudio();
+    setAudioPlayingChatId(undefined);
+  }, [audioScopeKey, cancelAudio]);
+
   const autoTTSResponse =
-    whisperConfig?.open && whisperConfig?.autoSend && whisperConfig?.autoTTSResponse && hasAudio;
+    enableTTS &&
+    whisperConfig?.open &&
+    whisperConfig?.autoSend &&
+    whisperConfig?.autoTTSResponse &&
+    hasAudio;
 
   const isChatting = useMemo(
     () =>
@@ -218,10 +272,9 @@ const Provider = ({
       }
 
       const resData = await getChatResData({
-        appId: appId,
+        ...resolvedChatAuthTarget,
         chatId: chatId,
-        dataId,
-        ...formatOutLinkAuth
+        dataId
       });
       const nextResponseData = resData.length ? resData : aimItem?.responseData || [];
       setChatRecords((state) =>
@@ -231,11 +284,12 @@ const Provider = ({
       );
       return nextResponseData;
     },
-    [chatRecords, chatId, appId, formatOutLinkAuth, setChatRecords]
+    [chatRecords, chatId, resolvedChatAuthTarget, setChatRecords]
   );
   const value: useChatStoreType = {
     ...props,
     welcomeText,
+    welcomeQuestions,
     variableList: variables,
     questionGuide,
     ttsConfig,
@@ -259,9 +313,10 @@ const Provider = ({
   };
   return (
     <WorkflowRuntimeContextProvider
-      appId={appId}
+      sourceTarget={sourceTarget}
       chatId={chatId}
       outLinkAuthData={formatOutLinkAuth}
+      fileUploadMode={fileUploadMode}
     >
       <ChatBoxContext.Provider value={value}>{children}</ChatBoxContext.Provider>
     </WorkflowRuntimeContextProvider>

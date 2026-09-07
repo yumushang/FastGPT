@@ -1,26 +1,32 @@
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { authSystemAdmin } from '@fastgpt/service/support/permission/user/auth';
 import { pluginClient } from '@fastgpt/service/thirdProvider/fastgptPlugin';
-import type { ConfirmUploadPkgPluginBodyType } from '@fastgpt/global/openapi/core/plugin/admin/api';
+import {
+  ConfirmUploadPkgPluginBodySchema,
+  type ConfirmUploadPkgPluginBodyType
+} from '@fastgpt/global/openapi/core/plugin/admin/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
-export type ConfirmUploadBody = ConfirmUploadPkgPluginBodyType;
-
-export type ConfirmUploadResponse = {};
-
-async function handler(
-  req: ApiRequestProps<ConfirmUploadBody, {}>,
-  res: ApiResponseType<ConfirmUploadResponse>
-): Promise<ConfirmUploadResponse> {
+async function handler(req: ApiRequestProps<ConfirmUploadPkgPluginBodyType>): Promise<void> {
   await authSystemAdmin({ req });
 
-  const { toolIds } = req.body;
+  const { body } = parseApiInput({
+    req,
+    bodySchema: ConfirmUploadPkgPluginBodySchema
+  });
+  const { toolIds } = body;
 
-  if (!toolIds || toolIds.length === 0) {
-    return Promise.reject('Tool IDs are required');
+  const confirmResult = await pluginClient.confirmPlugin(
+    toolIds.map((id) => ({
+      ...id,
+      pluginId: id.pluginId.replace(/^systemTool-/, '')
+    }))
+  );
+
+  if (confirmResult.failed.length > 0) {
+    return Promise.reject(JSON.stringify(confirmResult.failed));
   }
-
-  return await pluginClient.confirmToolUpload(toolIds);
 }
 
 export default NextAPI(handler);

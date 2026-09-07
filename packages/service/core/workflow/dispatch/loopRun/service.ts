@@ -7,15 +7,12 @@ import {
   formatVariableValByType,
   getReferenceVariableValue
 } from '@fastgpt/global/core/workflow/runtime/utils';
-import type {
-  RuntimeNodeItemType,
-  WorkflowVariableStateLike
-} from '@fastgpt/global/core/workflow/runtime/type';
+import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
+import type { WorkflowVariableStateLike } from '../../types/runtime';
 import type {
   FlowNodeInputItemType,
   FlowNodeOutputItemType
 } from '@fastgpt/global/core/workflow/type/io';
-import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import { LoopRunModeEnum } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRun';
 
 export type LoopRunHistoryItem = {
@@ -37,14 +34,6 @@ export const pickCustomOutputInputs = (
     outputs.filter((o) => o.type === FlowNodeOutputTypeEnum.dynamic).map((o) => o.key)
   );
   return inputs.filter((i) => i.canEdit === true && dynamicOutputKeys.has(i.key));
-};
-
-export const extractFinishedNodeIds = (flowResponses: ChatHistoryItemResType[]): Set<string> => {
-  const ids = new Set<string>();
-  for (const r of flowResponses) {
-    if (r.nodeId) ids.add(r.nodeId);
-  }
-  return ids;
 };
 
 /**
@@ -87,8 +76,8 @@ export const readCustomOutputSnapshot = ({
         if (!nodeId) return true;
         if (nodeId === VARIABLE_NODE_ID) return true;
         // Refs to nodes outside the loop body (e.g. an outer 代码运行 whose
-        // output is being mutated via 变量更新) aren't in this iteration's
-        // flowResponses — exempt them from the skipped-branch guard.
+        // output is being mutated via 变量更新) aren't part of this iteration's
+        // finished-node summary — exempt them from the skipped-branch guard.
         if (childrenSet && !childrenSet.has(nodeId)) return true;
         return finishedNodeIds.has(nodeId);
       });
@@ -139,14 +128,11 @@ export const injectLoopRunStart = ({
       } else if (input.key === NodeInputKeyEnum.nestedStartInput) {
         input.value = mode === LoopRunModeEnum.array ? item : undefined;
       } else if (input.key === NodeInputKeyEnum.nestedStartIndex) {
-        input.value = mode === LoopRunModeEnum.array ? index ?? 0 : iteration;
+        input.value = mode === LoopRunModeEnum.array ? (index ?? 0) : iteration;
       }
     });
   });
 };
-
-export const isLoopBreakHit = (flowResponses: ChatHistoryItemResType[]): boolean =>
-  flowResponses.some((r) => r.moduleType === FlowNodeTypeEnum.loopRunBreak);
 
 export const hasLoopRunBreakChild = (
   runtimeNodes: RuntimeNodeItemType[],

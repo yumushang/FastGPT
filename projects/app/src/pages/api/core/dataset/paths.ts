@@ -3,15 +3,19 @@ import type { ParentTreePathItemType } from '@fastgpt/global/common/parentFolder
 import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import {
   GetDatasetPathsQuerySchema,
   GetDatasetPathsResponseSchema,
   type GetDatasetPathsResponse
 } from '@fastgpt/global/openapi/core/dataset/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 async function handler(req: ApiRequestProps): Promise<GetDatasetPathsResponse> {
-  const { sourceId: datasetId, type } = GetDatasetPathsQuerySchema.parse(req.query);
+  const { sourceId: datasetId, type } = parseApiInput({
+    req,
+    querySchema: GetDatasetPathsQuerySchema
+  }).query;
 
   if (!datasetId) {
     return [];
@@ -24,7 +28,9 @@ async function handler(req: ApiRequestProps): Promise<GetDatasetPathsResponse> {
     per: ReadPermissionVal
   });
 
-  const paths = await getParents(type === 'current' ? dataset._id : dataset.parentId ?? undefined);
+  const paths = await getParents(
+    type === 'current' ? dataset._id : (dataset.parentId ?? undefined)
+  );
 
   return GetDatasetPathsResponseSchema.parse(paths);
 }

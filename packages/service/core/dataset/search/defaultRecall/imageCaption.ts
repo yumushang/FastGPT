@@ -1,8 +1,8 @@
-import { getLLMModel } from '../../../ai/model';
 import { createLLMResponse } from '../../../ai/llm/request';
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { normalizeImageToBase64 } from '../utils';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
+import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.DATA);
 
@@ -27,26 +27,26 @@ const emptyImageCaptionQueries = (): ImageCaptionQueries => ({
 
 /**
  * 将图片 query 转成可参与文本召回的图片描述 query。
- * VLM 未配置、模型不支持 vision 或单张图片生成失败时都只降级图片描述召回；
+ * VLM 未配置或单张图片生成失败时只降级图片描述召回；显式配置的 VLM 不存在时由
+ * 模型解析层抛出“模型不存在”，不能静默切换到其他模型。
  * 原始图片仍可能继续走图片向量召回，所以这里不会抛出错误中断搜索。
  */
 export const getImageCaptionQueries = async ({
   vlmModel,
   imageQueries,
-  userKey
+  userKey,
+  teamId
 }: {
-  vlmModel?: string;
+  vlmModel?: LLMSystemModelDataType;
   imageQueries: string[];
   userKey?: OpenaiAccountType;
+  teamId: string;
 }): Promise<ImageCaptionQueries> => {
   if (!vlmModel || imageQueries.length === 0) {
     return emptyImageCaptionQueries();
   }
 
-  const vlmModelData = getLLMModel(vlmModel);
-  if (!vlmModelData?.vision) {
-    return emptyImageCaptionQueries();
-  }
+  const vlmModelData = vlmModel;
 
   const results = await Promise.all(
     imageQueries.map(async (url, index) => {
@@ -58,9 +58,10 @@ export const getImageCaptionQueries = async ({
           usage: { inputTokens, outputTokens, usedUserOpenAIKey }
         } = await createLLMResponse({
           userKey,
+          teamId,
+          saveLLMResponseRecord: false,
           body: {
-            model: vlmModelData.model,
-            temperature: 0.1,
+            model: vlmModelData,
             stream: true,
             useVision: true,
             messages: [

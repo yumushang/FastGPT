@@ -4,7 +4,6 @@ import { useRouter } from 'next/router';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
-import { useTranslation } from 'next-i18next';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useContextSelector } from 'use-context-selector';
 import { AppListContext } from '@/pageComponents/dashboard/agent/context';
@@ -17,9 +16,10 @@ import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import UserBox from '@fastgpt/web/components/common/UserBox';
 import { ChatPageContext } from '@/web/core/chat/context/chatPageContext';
 import { ChatSidebarPaneEnum } from '@/pageComponents/chat/constants';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 
 const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { isPc } = useSystem();
 
@@ -34,17 +34,20 @@ const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
     )
   );
   const handlePaneChange = useContextSelector(ChatPageContext, (v) => v.handlePaneChange);
+  const upsertRecentlyUsedAppPlaceholder = useContextSelector(
+    ChatPageContext,
+    (v) => v.upsertRecentlyUsedAppPlaceholder
+  );
 
   return (
     <>
       <Grid
-        py={[0, 4]}
+        pt="16px"
+        pb={[4, 6]}
         gridTemplateColumns={[
-          '1fr',
-          'repeat(2,1fr)',
-          'repeat(2,1fr)',
-          'repeat(3,1fr)',
-          'repeat(4,1fr)'
+          'minmax(0,1fr)',
+          'repeat(2,minmax(0,1fr))',
+          'repeat(3,minmax(0,1fr))'
         ]}
         gridGap={5}
         alignItems={'stretch'}
@@ -66,15 +69,14 @@ const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
                 px={5}
                 cursor={'pointer'}
                 border={'base'}
-                boxShadow={'2'}
                 bg={'white'}
                 borderRadius={'lg'}
                 position={'relative'}
                 display={'flex'}
                 flexDirection={'column'}
+                minW={0}
                 _hover={{
                   borderColor: 'primary.300',
-                  boxShadow: '1.5',
                   '& .more': {
                     display: 'flex'
                   },
@@ -91,13 +93,18 @@ const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
                       }
                     });
                   } else {
+                    upsertRecentlyUsedAppPlaceholder({
+                      appId: app._id,
+                      name: app.name,
+                      avatar: app.avatar
+                    });
                     handlePaneChange(ChatSidebarPaneEnum.RECENTLY_USED_APPS, app._id);
                   }
                 }}
               >
-                <HStack>
+                <HStack minW={0}>
                   <Avatar src={app.avatar} borderRadius={'sm'} w={'1.5rem'} />
-                  <Box flex={'1 0 0'} color={'myGray.900'}>
+                  <Box flex={'1 0 0'} color={'myGray.900'} className="textEllipsis">
                     {app.name}
                   </Box>
                   <Box mr={'-1.25rem'}>
@@ -106,7 +113,7 @@ const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
                 </HStack>
                 <Box
                   flex={['1 0 60px', '1 0 72px']}
-                  mt={3}
+                  pt={3}
                   pr={8}
                   textAlign={'justify'}
                   wordBreak={'break-all'}
@@ -130,9 +137,7 @@ const List = ({ appType }: { appType: AppTypeEnum | 'all' }) => {
                     {isPc && (
                       <HStack spacing={0.5}>
                         <MyIcon name={'history'} w={'0.85rem'} color={'myGray.400'} />
-                        <Box color={'myGray.500'}>
-                          {t(formatTimeToChatTime(app.updateTime) as any).replace('#', ':')}
-                        </Box>
+                        <Box color={'myGray.500'}>{t(formatTimeToChatTime(app.updateTime))}</Box>
                       </HStack>
                     )}
                   </HStack>

@@ -1,12 +1,11 @@
-import React, { type ReactNode, useCallback, useMemo, useRef } from 'react';
+import React, { type ReactNode, useCallback, useRef } from 'react';
 import { createContext, useContextSelector } from 'use-context-selector';
 import { type PluginRunBoxProps } from './type';
 import { type AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
-import { type FieldValues } from 'react-hook-form';
 import { PluginRunBoxTabEnum } from './constants';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
-import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatRoleEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { type generatingMessageProps } from '../type';
 import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { useTranslation } from 'next-i18next';
@@ -15,7 +14,10 @@ import { chats2GPTMessages } from '@fastgpt/global/core/chat/adapt';
 import { clientGetWorkflowToolRunUserQuery } from '@fastgpt/global/core/workflow/utils';
 import { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
 import { ChatRecordContext } from '@/web/core/chat/context/chatRecordContext';
-import { mergeChatResponseData } from '@fastgpt/global/core/chat/utils';
+import {
+  appendNodeResponseByParent,
+  mergeNodeResponseDataByIdAndParent
+} from '@fastgpt/global/core/chat/utils/mergeNode';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { WorkflowRuntimeContextProvider } from '@/components/core/chat/ChatContainer/context/workflowRuntimeContext';
 
@@ -29,7 +31,7 @@ export const PluginRunContext = createContext<
   Omit<PluginRunContextType, 'appId' | 'chatId' | 'outLinkAuthData'>
 >({
   isChatting: false,
-  onSubmit: function (e: FieldValues): Promise<any> {
+  onSubmit: function (): Promise<any> {
     throw new Error('Function not implemented.');
   },
   instruction: ''
@@ -72,9 +74,7 @@ const PluginRunContextProvider = ({
           if (event === SseResponseEventEnum.flowNodeResponse && nodeResponse) {
             return {
               ...item,
-              responseData: item.responseData
-                ? [...item.responseData, nodeResponse]
-                : [nodeResponse]
+              responseData: appendNodeResponseByParent(item.responseData, nodeResponse)
             };
           } else if (event === SseResponseEventEnum.flowNodeStatus && status) {
             return {
@@ -150,12 +150,8 @@ const PluginRunContextProvider = ({
     [setChatRecords, resetVariables]
   );
 
-  const isChatting = useMemo(
-    () =>
-      chatRecords[chatRecords.length - 1] &&
-      chatRecords[chatRecords.length - 1]?.status !== 'finish',
-    [chatRecords]
-  );
+  const isChatting =
+    chatRecords[chatRecords.length - 1] && chatRecords[chatRecords.length - 1]?.status !== 'finish';
 
   const onSubmit = useCallback(
     async ({ variables }: ChatBoxInputFormType) => {
@@ -227,7 +223,7 @@ const PluginRunContextProvider = ({
             if (index !== state.length - 1) return item;
 
             // Check node response error
-            const responseData = mergeChatResponseData(item.responseData || []);
+            const responseData = mergeNodeResponseDataByIdAndParent(item.responseData || []);
             if (responseData[responseData.length - 1]?.error) {
               toast({
                 title: t(getErrText(responseData[responseData.length - 1].error)),
@@ -243,7 +239,8 @@ const PluginRunContextProvider = ({
           })
         );
       } catch (err: any) {
-        toast({ title: err.message, status: 'error' });
+        const errorMsg = t(getErrText(err, t('common:core.chat.error.Chat error') as any));
+        toast({ title: errorMsg, status: 'error' });
         setChatRecords((state) =>
           state.map((item, index) => {
             if (index !== state.length - 1) return item;
@@ -276,9 +273,10 @@ const PluginRunContextProvider = ({
   };
   return (
     <WorkflowRuntimeContextProvider
-      appId={props.appId}
+      sourceTarget={{ sourceType: ChatSourceTypeEnum.app, sourceId: props.appId }}
       chatId={props.chatId}
       outLinkAuthData={props.outLinkAuthData || {}}
+      fileUploadMode={props.fileUploadMode ?? 'runtime'}
     >
       <PluginRunContext.Provider value={contextValue}>{children}</PluginRunContext.Provider>
     </WorkflowRuntimeContextProvider>

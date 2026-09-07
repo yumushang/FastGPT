@@ -1,17 +1,11 @@
 /* Abandoned */
 import type { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import {
-  type DispatchNodeResultType,
-  type ModuleDispatchProps
-} from '@fastgpt/global/core/workflow/runtime/type';
+import type { DispatchNodeResultType, ModuleDispatchProps } from '../../types/runtime';
 import { runWorkflow } from '..';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import {
-  type AIChatItemValueItemType,
-  type ChatHistoryItemResType
-} from '@fastgpt/global/core/chat/type';
-import { cloneDeep } from 'lodash';
+import { type AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
+import { cloneDeep } from 'lodash-es';
 import { type WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import { storeEdges2RuntimeEdges } from '@fastgpt/global/core/workflow/runtime/utils';
 import { serviceEnv } from '../../../../env';
@@ -51,9 +45,9 @@ export const dispatchLoop = async (props: Props): Promise<Response> => {
     lastInteractive?.type === 'loopInteractive' ? lastInteractive?.params : undefined;
   let lastIndex = interactiveData?.currentIndex;
 
+  // 已知问题：旧 Loop 恢复时会继续写入历史 loopResult；为保持旧流程行为暂不复制。
   const outputValueArr = interactiveData ? interactiveData.loopResult : [];
-  const loopResponseDetail: ChatHistoryItemResType[] = [];
-  let assistantResponses: AIChatItemValueItemType[] = [];
+  const assistantResponses: AIChatItemValueItemType[] = [];
   const customFeedbacks: string[] = [];
   let totalPoints = 0;
   let interactiveResponse: WorkflowInteractiveResponseType | undefined = undefined;
@@ -74,6 +68,7 @@ export const dispatchLoop = async (props: Props): Promise<Response> => {
 
     // Init entry
     if (isInteractiveResponseIndex) {
+      // 已知问题：旧 Loop 会直接修改并传递父级 runtimeNodes；该弃用节点暂时保留兼容行为。
       runtimeNodes.forEach((node) => {
         if (interactiveData?.childrenResponse?.entryNodeIds.includes(node.nodeId)) {
           node.isEntry = true;
@@ -98,7 +93,6 @@ export const dispatchLoop = async (props: Props): Promise<Response> => {
     if (!response.workflowInteractiveResponse) {
       outputValueArr.push(getNestedEndOutputValue(response));
     }
-    loopResponseDetail.push(...response.flowResponses);
     assistantResponses.push(...response.assistantResponses);
 
     totalPoints += pushSubWorkflowUsage({
@@ -139,9 +133,7 @@ export const dispatchLoop = async (props: Props): Promise<Response> => {
     [DispatchNodeResponseKeyEnum.nodeResponse]: {
       totalPoints,
       loopInput: loopInputArray,
-      loopResult: outputValueArr,
-      loopDetail: loopResponseDetail,
-      mergeSignId: props.node.nodeId
+      loopResult: outputValueArr
     },
     [DispatchNodeResponseKeyEnum.customFeedbacks]:
       customFeedbacks.length > 0 ? customFeedbacks : undefined

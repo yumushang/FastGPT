@@ -1,13 +1,11 @@
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
-import { Box, Button, Flex, ModalBody, useDisclosure, Image, HStack } from '@chakra-ui/react';
+import { Box, Button, Flex, useDisclosure, HStack } from '@chakra-ui/react';
 import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'next-i18next';
 import { TTSTypeEnum } from '@/web/core/app/constants';
 import type { AppTTSConfigType } from '@fastgpt/global/core/app/type';
 import { useAudioPlay } from '@/web/common/utils/voice';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import MyModal from '@fastgpt/web/components/common/MyModal';
+import MyModal from '@fastgpt/web/components/v2/common/MyModal';
 import MySlider from '@/components/Slider';
 import { defaultTTSConfig } from '@fastgpt/global/core/app/constants';
 import ChatFunctionTip from './Tip';
@@ -17,6 +15,21 @@ import { useContextSelector } from 'use-context-selector';
 import { AppContext } from '@/pageComponents/app/detail/context';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MultipleRowSelect from '@fastgpt/web/components/common/MySelect/MultipleRowSelect';
+import AppConfigItem, { AppConfigItemAction } from './AppConfigItem';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
+
+type TTSSelectorItemType = {
+  alias: string;
+  avatar?: string;
+  label: string | React.ReactNode;
+  value: string;
+  children: {
+    label: string;
+    value: string;
+  }[];
+};
 
 const TTSSelect = ({
   value = defaultTTSConfig,
@@ -26,34 +39,50 @@ const TTSSelect = ({
   onChange: (e: AppTTSConfigType) => void;
 }) => {
   const { t, i18n } = useTranslation();
-  const { ttsModelList, getModelProvider } = useSystemStore();
+  const { getModelProvider } = useUserModelStore();
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const { ttsModelList: ttsModels } = useUserModelLists();
 
   const appId = useContextSelector(AppContext, (v) => v.appId);
 
   const selectorList = useMemo(
-    () => [
-      { label: t('app:tts_close'), value: TTSTypeEnum.none, children: [] },
-      { label: t('app:tts_browser'), value: TTSTypeEnum.web, children: [] },
-      ...ttsModelList.map((model) => {
+    (): TTSSelectorItemType[] => [
+      {
+        alias: t('app:tts_close'),
+        label: t('app:tts_close'),
+        value: TTSTypeEnum.none,
+        children: []
+      },
+      {
+        alias: t('app:tts_browser'),
+        label: t('app:tts_browser'),
+        value: TTSTypeEnum.web,
+        children: []
+      },
+      ...ttsModels.map((model) => {
         const providerData = getModelProvider(model.provider, i18n.language);
+        const modelName = t(model.name as any);
         return {
+          alias: modelName,
+          avatar: providerData.avatar,
           label: (
-            <HStack>
-              <Avatar borderRadius={'0'} w={'1.25rem'} src={providerData.avatar} />
-              <Box>{t(model.name as any)}</Box>
+            <HStack minW={0} maxW={'100%'}>
+              <Avatar borderRadius={'0'} w={'1.25rem'} flexShrink={0} src={providerData.avatar} />
+              <Box minW={0} className={'textEllipsis'}>
+                {modelName}
+              </Box>
             </HStack>
           ),
-          value: model.model,
+          value: model.modelId,
           children:
-            model.voices?.map((voice) => ({
+            (model.type === ModelTypeEnum.tts ? model.config.voices : []).map((voice) => ({
               label: voice.label,
               value: voice.value
             })) || []
         };
       })
     ],
-    [ttsModelList, t]
+    [getModelProvider, i18n.language, t, ttsModels]
   );
 
   const formatValue = useMemo(() => {
@@ -64,25 +93,44 @@ const TTSSelect = ({
       return [value.type, undefined];
     }
 
-    return [value.model, value.voice];
-  }, [value]);
+    const selectedModel =
+      value.modelId !== undefined
+        ? value.modelId
+        : (ttsModels.find((model) => model.model === value.model)?.modelId ?? value.model);
+    return [selectedModel, value.voice];
+  }, [ttsModels, value]);
   const formLabel = useMemo(() => {
-    const provider = selectorList.find((item) => item.value === formatValue[0]) || selectorList[0];
-    const voice = provider.children.find((item) => item.value === formatValue[1]);
+    const provider = selectorList.find((item) => item.value === formatValue[0]);
+    const voice = provider?.children.find((item) => item.value === formatValue[1]);
+
+    if (!provider) {
+      const modelLabel =
+        value.modelId !== undefined
+          ? value.modelId || t('common:not_model_config')
+          : value.model || t('common:not_model_config');
+      return <Box color={'red.500'}>{t('common:model_disabled', { model: modelLabel })}</Box>;
+    }
+
     return (
-      <Box>
+      <Box w={'100%'} minW={0}>
         {voice ? (
-          <Flex maxW={['200px', '250px']} overflow={'hidden'} alignItems={'center'}>
-            <Box>{provider.label}</Box>
-            <Box>/</Box>
-            <Box>{voice.label}</Box>
+          <Flex maxW={['180px', '250px']} minW={0} overflow={'hidden'} alignItems={'center'}>
+            <Box minW={0} flex={'1 1 auto'} overflow={'hidden'}>
+              {provider.label}
+            </Box>
+            <Box px={1} flexShrink={0}>
+              /
+            </Box>
+            <Box minW={0} flex={'1 1 auto'} className={'textEllipsis'}>
+              {voice.label}
+            </Box>
           </Flex>
         ) : (
           provider.label
         )}
       </Box>
     );
-  }, [formatValue, selectorList]);
+  }, [formatValue, selectorList, t, value.model, value.modelId]);
 
   const { playAudioByText, cancelAudio, audioLoading, audioPlaying } = useAudioPlay({
     appId,
@@ -91,19 +139,18 @@ const TTSSelect = ({
 
   const onclickChange = useCallback(
     (e: string[]) => {
-      console.log(e, '-=');
       if (e[0] === TTSTypeEnum.none || e[0] === TTSTypeEnum.web) {
         onChange({ type: e[0] });
       } else {
         onChange({
           ...value,
           type: TTSTypeEnum.model,
-          model: e[0],
+          modelId: e[0],
           voice: e[1]
         });
       }
     },
-    [ttsModelList, onChange, value]
+    [onChange, value]
   );
 
   const onCloseTTSModal = useCallback(() => {
@@ -112,64 +159,32 @@ const TTSSelect = ({
   }, [cancelAudio, onClose]);
 
   return (
-    <Flex alignItems={'center'}>
-      <MyIcon name={'core/app/simpleMode/tts'} mr={2} w={'20px'} />
-      <FormLabel>{t('common:core.app.TTS')}</FormLabel>
-      <ChatFunctionTip type={'tts'} />
-      <Box flex={1} />
-      <MyTooltip label={t('common:core.app.Select TTS')}>
-        <Button
-          variant={'transparentBase'}
-          iconSpacing={1}
-          size={'sm'}
-          mr={'-5px'}
-          onClick={onOpen}
-          color={'myGray.600'}
-        >
-          {formLabel}
-        </Button>
-      </MyTooltip>
+    <>
+      <AppConfigItem
+        icon={'core/app/simpleMode/tts'}
+        label={t('common:core.app.TTS')}
+        tip={<ChatFunctionTip type={'tts'} />}
+        action={
+          <AppConfigItemAction
+            tooltip={t('common:core.app.Select TTS')}
+            minW={0}
+            maxW={['180px', '260px']}
+            onClick={onOpen}
+          >
+            {formLabel}
+          </AppConfigItemAction>
+        }
+      />
       <MyModal
-        iconSrc="core/app/simpleMode/tts"
         title={t('common:core.app.TTS')}
         isOpen={isOpen}
         onClose={onCloseTTSModal}
         w={'500px'}
-      >
-        <ModalBody px={[5, 16]} py={[4, 8]}>
-          <Flex justifyContent={'space-between'} alignItems={'center'}>
-            <FormLabel>{t('common:core.app.tts.Speech model')}</FormLabel>
-            <MultipleRowSelect
-              rowMinWidth="160px"
-              label={<Box minW={'150px'}>{formLabel}</Box>}
-              value={formatValue}
-              list={selectorList}
-              onSelect={onclickChange}
-            />
-          </Flex>
-          <Flex mt={8} justifyContent={'space-between'}>
-            <FormLabel>{t('common:core.app.tts.Speech speed')}</FormLabel>
-            <MySlider
-              markList={[
-                { label: '0.3', value: 0.3 },
-                { label: '2', value: 2 }
-              ]}
-              width={'220px'}
-              min={0.3}
-              max={2}
-              step={0.1}
-              value={value.speed || 1}
-              onChange={(e) => {
-                onChange({
-                  ...value,
-                  speed: e
-                });
-              }}
-            />
-          </Flex>
-          {formatValue[0] !== TTSTypeEnum.none && (
-            <Flex mt={10} justifyContent={'end'}>
-              {audioPlaying ? (
+        isCentered
+        footer={
+          <>
+            {formatValue[0] !== TTSTypeEnum.none &&
+              (audioPlaying ? (
                 <Flex>
                   <MyImage src="/icon/speaking.gif" w={'24px'} alt={''} />
                   <Button
@@ -185,6 +200,7 @@ const TTSSelect = ({
                 </Flex>
               ) : (
                 <Button
+                  variant={'whiteBase'}
                   isLoading={audioLoading}
                   leftIcon={<MyIcon name={'core/app/headphones'} w={'16px'} />}
                   onClick={() => {
@@ -195,12 +211,43 @@ const TTSSelect = ({
                 >
                   {t('common:core.app.tts.Test Listen')}
                 </Button>
-              )}
-            </Flex>
-          )}
-        </ModalBody>
+              ))}
+            <Button onClick={onCloseTTSModal}>{t('common:Confirm')}</Button>
+          </>
+        }
+      >
+        <Flex justifyContent={'space-between'} alignItems={'center'}>
+          <FormLabel>{t('common:core.app.tts.Speech model')}</FormLabel>
+          <MultipleRowSelect
+            rowMinWidth="160px"
+            label={<Box minW={'150px'}>{formLabel}</Box>}
+            value={formatValue}
+            list={selectorList}
+            onSelect={onclickChange}
+          />
+        </Flex>
+        <Flex mt={8} justifyContent={'space-between'}>
+          <FormLabel>{t('common:core.app.tts.Speech speed')}</FormLabel>
+          <MySlider
+            markList={[
+              { label: '0.3', value: 0.3 },
+              { label: '2', value: 2 }
+            ]}
+            width={'220px'}
+            min={0.3}
+            max={2}
+            step={0.1}
+            value={value.speed || 1}
+            onChange={(e) => {
+              onChange({
+                ...value,
+                speed: e
+              });
+            }}
+          />
+        </Flex>
       </MyModal>
-    </Flex>
+    </>
   );
 };
 

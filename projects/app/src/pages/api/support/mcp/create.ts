@@ -1,4 +1,4 @@
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { authUserPer } from '@fastgpt/service/support/permission/user/auth';
 import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
@@ -12,10 +12,7 @@ import {
   type McpCreateResponseType
 } from '@fastgpt/global/openapi/support/mcpServer/api';
 
-async function handler(
-  req: ApiRequestProps,
-  res: ApiResponseType<any>
-): Promise<McpCreateResponseType> {
+async function handler(req: ApiRequestProps): Promise<McpCreateResponseType> {
   const { teamId, tmbId, permission } = await authUserPer({
     req,
     authToken: true,
@@ -26,10 +23,14 @@ async function handler(
     return Promise.reject(TeamErrEnum.unPermission);
   }
 
-  const { name, apps } = parseApiInput({ req, bodySchema: McpCreateBodySchema }).body;
+  const { name, apps, authProxy } = parseApiInput({ req, bodySchema: McpCreateBodySchema }).body;
+
+  if (authProxy && !permission.isOwner) {
+    return Promise.reject(TeamErrEnum.unPermission);
+  }
 
   // Count mcp length
-  const totalMcp = await MongoMcpKey.countDocuments({ teamId });
+  const totalMcp = await MongoMcpKey.countDocuments({ teamId, tmbId });
   if (totalMcp >= 100) {
     return Promise.reject('暂时只支持100个MCP服务');
   }
@@ -59,10 +60,11 @@ async function handler(
     teamId,
     tmbId,
     name,
+    authProxy,
     apps: uniqueApps
   });
 
-  return McpCreateResponseSchema.parse({});
+  return McpCreateResponseSchema.parse(undefined);
 }
 
 export default NextAPI(handler);

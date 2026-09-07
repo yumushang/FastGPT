@@ -1,11 +1,12 @@
 import type { OpenAPIPath } from '../../../type';
-import { TagsMap } from '../../../tag';
+import { DevApiTagsMap } from '../../../tag';
+import { CreateAppResponseSchema } from '../common/api';
 import {
   CreateMcpToolsBodySchema,
-  CreateMcpToolsResponseSchema,
   GetMcpChildrenQuerySchema,
   GetMcpChildrenResponseSchema,
   UpdateMcpToolsBodySchema,
+  UpdateMcpToolsResponseSchema,
   GetMcpToolsBodySchema,
   GetMcpToolsResponseSchema,
   RunMcpToolBodySchema,
@@ -17,7 +18,7 @@ export const McpToolsPath: OpenAPIPath = {
     post: {
       summary: '解析 MCP 工具列表',
       description: '解析 MCP 工具列表',
-      tags: [TagsMap.mcpTools],
+      tags: [DevApiTagsMap.mcpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -41,7 +42,7 @@ export const McpToolsPath: OpenAPIPath = {
     post: {
       summary: '运行 MCP 工具',
       description: '运行 MCP 工具',
-      tags: [TagsMap.mcpTools],
+      tags: [DevApiTagsMap.mcpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -65,7 +66,7 @@ export const McpToolsPath: OpenAPIPath = {
     post: {
       summary: '创建 MCP 工具集',
       description: '创建 MCP 工具集应用',
-      tags: [TagsMap.mcpTools],
+      tags: [DevApiTagsMap.mcpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -78,7 +79,7 @@ export const McpToolsPath: OpenAPIPath = {
           description: '成功创建 MCP 工具集',
           content: {
             'application/json': {
-              schema: CreateMcpToolsResponseSchema
+              schema: CreateAppResponseSchema
             }
           }
         }
@@ -86,10 +87,10 @@ export const McpToolsPath: OpenAPIPath = {
     }
   },
   '/core/app/mcpTools/update': {
-    post: {
+    put: {
       summary: '更新 MCP 工具集',
       description: '更新 MCP 工具集配置',
-      tags: [TagsMap.mcpTools],
+      tags: [DevApiTagsMap.mcpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -99,7 +100,12 @@ export const McpToolsPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '成功更新 MCP 工具集'
+          description: '成功更新 MCP 工具集',
+          content: {
+            'application/json': {
+              schema: UpdateMcpToolsResponseSchema
+            }
+          }
         }
       }
     }
@@ -108,7 +114,7 @@ export const McpToolsPath: OpenAPIPath = {
     get: {
       summary: '获取 MCP 工具列表',
       description: '获取 MCP 工具集下的工具列表',
-      tags: [TagsMap.mcpTools],
+      tags: [DevApiTagsMap.mcpTools],
       requestParams: {
         query: GetMcpChildrenQuerySchema
       },

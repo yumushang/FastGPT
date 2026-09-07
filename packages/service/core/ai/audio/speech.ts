@@ -1,6 +1,7 @@
-import type { NextApiResponse } from 'next';
+import type { NodeHttpResponse } from '../../../types/http';
 import { getAIApi } from '../config';
-import { getTTSModel } from '../model';
+import { Readable } from 'stream';
+import type { TTSSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 
 export async function text2Speech({
   res,
@@ -11,36 +12,39 @@ export async function text2Speech({
   voice,
   speed = 1
 }: {
-  res: NextApiResponse;
-  onSuccess: (e: { model: string; buffer: Buffer }) => void;
+  res: NodeHttpResponse;
+  onSuccess: (e: { model: TTSSystemModelDataType; buffer: Buffer }) => void;
   onError: (e: any) => void;
   input: string;
-  model: string;
+  model: TTSSystemModelDataType;
   voice: string;
   speed?: number;
 }) {
-  const modelData = getTTSModel(model)!;
   const { ai } = getAIApi();
   const response = await ai.audio.speech.create(
     {
-      model,
+      model: model.model,
       // @ts-ignore
       voice,
       input,
       response_format: 'mp3',
       speed
     },
-    modelData.requestUrl
+    model.requestUrl
       ? {
-          path: modelData.requestUrl,
+          path: model.requestUrl,
           headers: {
-            ...(modelData.requestAuth ? { Authorization: `Bearer ${modelData.requestAuth}` } : {})
+            ...(model.requestAuth ? { Authorization: `Bearer ${model.requestAuth}` } : {})
           }
         }
       : {}
   );
 
-  const readableStream = response.body as unknown as NodeJS.ReadableStream;
+  if (!response.body) {
+    throw new Error('Response body is empty');
+  }
+
+  const readableStream = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
   readableStream.pipe(res);
 
   const chunks: Uint8Array[] = [];

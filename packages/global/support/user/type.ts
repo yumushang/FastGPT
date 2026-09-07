@@ -1,12 +1,16 @@
+import { AccountCancellationSummarySchema } from './account/cancellation/type';
 import z from 'zod';
+import { ObjectIdSchema } from '../../common/type/mongo';
 import { LanguageSchema, type LangEnum } from '../../common/i18n/type';
 import { TeamPermission } from '../permission/user/controller';
 import type { UserStatusEnum } from './constant';
 import { TeamMemberStatusEnum } from './team/constant';
 import { TeamTmbItemSchema } from './team/type';
+import type { FastGPTSemType } from '../marketing/type';
 
-export const UserTagsEnum = z.enum(['wecom']);
-export type UserTagsEnum = z.infer<typeof UserTagsEnum>;
+export const UserTagsSchema = z.enum(['wecom']);
+export const UserTagsEnum = UserTagsSchema.enum;
+export type UserTagsType = z.infer<typeof UserTagsSchema>;
 
 export type UserMetaType = {
   isActivatedWecomLicense?: boolean;
@@ -16,8 +20,6 @@ export type UserModelSchema = {
   _id: string;
   username: string;
   password: string;
-  promotionRate: number;
-  inviterId?: string;
   openaiKey: string;
   createTime: number;
   timezone: string;
@@ -25,25 +27,23 @@ export type UserModelSchema = {
   status: `${UserStatusEnum}`;
   lastLoginTmbId?: string;
   passwordUpdateTime?: Date;
-  fastgpt_sem?: {
-    keyword: string;
-  };
-  contact?: string;
-  tags: UserTagsEnum[];
+  fastgpt_sem?: FastGPTSemType;
+  contact?: string | null;
+  tags: UserTagsType[];
   meta?: UserMetaType;
 };
 
 export const UserSchema = z.object({
-  _id: z.string(),
+  _id: ObjectIdSchema,
   username: z.string(),
-  avatar: z.string(),
+  avatar: z.string().nullish(),
   timezone: z.string(),
   language: LanguageSchema.optional(),
-  promotionRate: z.number(),
+  accountCancellation: AccountCancellationSummarySchema.optional(),
   team: TeamTmbItemSchema,
   permission: z.instanceof(TeamPermission),
-  contact: z.string().optional(),
-  tags: z.array(UserTagsEnum).optional()
+  contact: z.string().nullish(),
+  tags: z.array(UserTagsSchema).optional()
 });
 export type UserType = z.infer<typeof UserSchema>;
 
@@ -60,7 +60,8 @@ export const TeamMetaSchema = z.object({
   wecom: z
     .object({
       permanentCode: z.string(),
-      corpId: z.string()
+      corpId: z.string(),
+      licenseCapacity: z.int().min(0).default(0)
     })
     .optional()
 });

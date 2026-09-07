@@ -6,15 +6,16 @@ import type {
 } from '@fastgpt/global/common/parentFolder/type';
 import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection/schema';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import {
   GetCollectionPathsQuerySchema,
   GetCollectionPathsResponseSchema,
   type GetCollectionPathsResponseType
 } from '@fastgpt/global/openapi/core/dataset/collection/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 export async function handler(req: ApiRequestProps): Promise<GetCollectionPathsResponseType> {
-  const { sourceId } = GetCollectionPathsQuerySchema.parse(req.query);
+  const { sourceId } = parseApiInput({ req, querySchema: GetCollectionPathsQuerySchema }).query;
 
   if (!sourceId) {
     return [];

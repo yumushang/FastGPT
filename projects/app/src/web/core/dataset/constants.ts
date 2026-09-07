@@ -1,5 +1,6 @@
 import { defaultQAModels, defaultVectorModels } from '@fastgpt/global/core/ai/constants';
 import {
+  CollectionTrainingStatusEnum,
   DatasetCollectionDataProcessModeEnum,
   DatasetCollectionTypeEnum,
   DatasetTypeEnum,
@@ -15,6 +16,7 @@ export const defaultDatasetDetail: DatasetItemType = {
   userId: '',
   teamId: '',
   tmbId: '',
+  createTime: new Date(),
   updateTime: new Date(),
   type: DatasetTypeEnum.dataset,
   avatar: '/icon/logo.svg',
@@ -24,7 +26,6 @@ export const defaultDatasetDetail: DatasetItemType = {
   permission: new DatasetPermission(),
   vectorModel: defaultVectorModels[0],
   agentModel: defaultQAModels[0],
-  vlmModel: defaultQAModels[0],
   inheritPermission: true
 };
 
@@ -39,6 +40,7 @@ export const defaultCollectionDetail: DatasetCollectionItemType = {
     userId: '',
     teamId: '',
     tmbId: '',
+    createTime: new Date(),
     updateTime: new Date(),
     type: DatasetTypeEnum.dataset,
     avatar: '/icon/logo.svg',
@@ -60,7 +62,12 @@ export const defaultCollectionDetail: DatasetCollectionItemType = {
   chunkSize: 0,
   indexSize: 512,
   permission: new DatasetPermission(),
-  indexAmount: 0
+  indexAmount: 0,
+  trainingAmount: 0,
+  activeTrainingAmount: 0,
+  finalErrorAmount: 0,
+  hasError: false,
+  slowestTrainingStatus: CollectionTrainingStatusEnum.ready
 };
 
 export const TrainingProcess = {

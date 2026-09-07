@@ -1,6 +1,6 @@
 import { getApiDatasetRequest } from '@fastgpt/service/core/dataset/apiDataset';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { authCert } from '@fastgpt/service/support/permission/auth/common';
 import {
   GetApiDatasetCatalogBodySchema,
@@ -8,15 +8,13 @@ import {
   type GetApiDatasetCatalogBody,
   type GetApiDatasetCatalogResponse
 } from '@fastgpt/global/openapi/core/dataset/apiDataset/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 async function handler(
   req: ApiRequestProps<GetApiDatasetCatalogBody>
 ): Promise<GetApiDatasetCatalogResponse> {
-  const {
-    parentId,
-    searchKey = '',
-    apiDatasetServer
-  } = GetApiDatasetCatalogBodySchema.parse(req.body);
+  const { body } = parseApiInput({ req, bodySchema: GetApiDatasetCatalogBodySchema });
+  const { parentId, searchKey = '', apiDatasetServer } = body;
 
   await authCert({ req, authToken: true });
 

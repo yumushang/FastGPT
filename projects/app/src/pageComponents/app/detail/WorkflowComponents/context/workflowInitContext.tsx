@@ -1,8 +1,7 @@
 import { createContext } from 'use-context-selector';
 import type {
   FlowNodeTemplateType,
-  FlowNodeItemType,
-  StoreNodeItemType
+  FlowNodeItemType
 } from '@fastgpt/global/core/workflow/type/node';
 
 import { useDeepCompareEffect, useMemoizedFn } from 'ahooks';
@@ -26,6 +25,7 @@ import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { getWebLLMModel } from '@/web/common/system/utils';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
 
 type OnChange<ChangesType> = (changes: ChangesType[]) => void;
 
@@ -56,7 +56,6 @@ export const WorkflowNodeDataContext = createContext<WorkflowNodeDataType>({
 export type WorkflowDataContextType = {
   basicNodeTemplates: FlowNodeTemplateType[];
   workflowStartNode: FlowNodeItemType | undefined;
-  systemConfigNode: StoreNodeItemType | undefined;
   allNodeFolded: boolean;
   hasToolNode: boolean;
   hasLoopRunNode: boolean;
@@ -82,7 +81,6 @@ export type WorkflowDataContextType = {
 export const WorkflowBufferDataContext = createContext<WorkflowDataContextType>({
   basicNodeTemplates: [],
   workflowStartNode: undefined,
-  systemConfigNode: undefined,
   allNodeFolded: false,
   hasToolNode: false,
   hasLoopRunNode: false,
@@ -126,6 +124,7 @@ const WorkflowInitContextProvider = ({
   children: ReactNode;
   basicNodeTemplates: FlowNodeTemplateType[];
 }) => {
+  const { llmModelList } = useUserModelLists();
   // Nodes
   const [nodes = [], setNodes, onNodesChange] = useNodesState<FlowNodeItemType>([]);
   const getNodes = useMemoizedFn(() => nodes);
@@ -139,7 +138,6 @@ const WorkflowInitContextProvider = ({
     const foldedNodesMap: Record<string, boolean> = {};
     const compareNodeList: any[] = [];
     let workflowStartNode: FlowNodeItemType | undefined = undefined;
-    let systemConfigNode: StoreNodeItemType | undefined = undefined;
     let allNodeFolded = true;
     let hasToolNode = false;
     let hasLoopRunNode = false;
@@ -170,11 +168,14 @@ const WorkflowInitContextProvider = ({
         outputs: node.data.outputs.map((output) => {
           return {
             key: output.key,
+            id: output.id,
             label: output.label,
+            type: output.type,
             valueType: output.valueType,
             invalid: output.invalid
           };
-        })
+        }),
+        catchError: node.data.catchError
       });
 
       if (node.data.parentNodeId) {
@@ -194,9 +195,6 @@ const WorkflowInitContextProvider = ({
       if (flowNodeType === FlowNodeTypeEnum.workflowStart) {
         workflowStartNode = node.data;
       }
-      if (flowNodeType === FlowNodeTypeEnum.systemConfig) {
-        systemConfigNode = node.data;
-      }
       // Max context computed
       const map: Record<string, boolean> = {
         [FlowNodeTypeEnum.chatNode]: true,
@@ -204,8 +202,10 @@ const WorkflowInitContextProvider = ({
       };
       if (map[flowNodeType]) {
         const model =
-          node.data.inputs.find((item) => item.key === NodeInputKeyEnum.aiModel)?.value || '';
-        const quoteMaxToken = getWebLLMModel(model)?.quoteMaxToken || 0;
+          node.data.inputs.find((item) => item.key === NodeInputKeyEnum.aiModelId)?.value ||
+          node.data.inputs.find((item) => item.key === NodeInputKeyEnum.aiModel)?.value ||
+          '';
+        const quoteMaxToken = getWebLLMModel(model, llmModelList)?.config.quoteMaxToken ?? 0;
         llmMaxQuoteContext = Math.max(llmMaxQuoteContext, quoteMaxToken);
       }
 
@@ -228,7 +228,6 @@ const WorkflowInitContextProvider = ({
       childrenNodeIdListMap,
       selectedNodesMap,
       workflowStartNode,
-      systemConfigNode,
       allNodeFolded,
       hasToolNode,
       hasLoopRunNode,
@@ -236,7 +235,7 @@ const WorkflowInitContextProvider = ({
       foldedNodesMap,
       compareNodeList
     };
-  }, [nodes]);
+  }, [llmModelList, nodes]);
 
   // 拆解出常用的数据，避免重复计算
   const nodeIds = useMemoEnhance(() => nodeFormat.nodeIds, [nodeFormat.nodeIds]);
@@ -257,10 +256,6 @@ const WorkflowInitContextProvider = ({
   const workflowStartNode = useMemoEnhance(
     () => nodeFormat.workflowStartNode,
     [nodeFormat.workflowStartNode]
-  );
-  const systemConfigNode = useMemoEnhance(
-    () => nodeFormat.systemConfigNode,
-    [nodeFormat.systemConfigNode]
   );
   const foldedNodesMap = useMemoEnhance(
     () => nodeFormat.foldedNodesMap,
@@ -370,7 +365,6 @@ const WorkflowInitContextProvider = ({
       nodeIds,
       basicNodeTemplates,
       workflowStartNode,
-      systemConfigNode,
       allNodeFolded,
       hasToolNode,
       hasLoopRunNode,
@@ -393,7 +387,6 @@ const WorkflowInitContextProvider = ({
     nodeIds,
     basicNodeTemplates,
     workflowStartNode,
-    systemConfigNode,
     allNodeFolded,
     hasToolNode,
     hasLoopRunNode,

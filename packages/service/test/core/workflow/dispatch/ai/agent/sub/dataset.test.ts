@@ -6,12 +6,14 @@ const {
   countPromptTokensMock,
   createLLMResponseMock,
   defaultSearchDatasetDataMock,
+  filterDatasetsByTmbIdMock,
   findDatasetByIdMock,
   formatModelChars2PointsMock
 } = vi.hoisted(() => ({
   countPromptTokensMock: vi.fn(),
   createLLMResponseMock: vi.fn(),
   defaultSearchDatasetDataMock: vi.fn(),
+  filterDatasetsByTmbIdMock: vi.fn(),
   findDatasetByIdMock: vi.fn(),
   formatModelChars2PointsMock: vi.fn()
 }));
@@ -20,23 +22,45 @@ vi.mock('@fastgpt/service/core/dataset/search', () => ({
   defaultSearchDatasetData: defaultSearchDatasetDataMock
 }));
 
-vi.mock('@fastgpt/service/core/dataset/schema', () => ({
+vi.mock('@fastgpt/service/core/dataset/schema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/core/dataset/schema')>()),
   MongoDataset: {
     findById: findDatasetByIdMock
   }
 }));
 
+vi.mock('@fastgpt/service/core/dataset/utils', () => ({
+  filterDatasetsByTmbId: filterDatasetsByTmbIdMock
+}));
+
 vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getEmbeddingModel: vi.fn(() => ({
+  getEmbeddingModelData: vi.fn(() => ({
     model: 'embedding-model',
-    name: 'Embedding Model'
+    name: 'Embedding Model',
+    config: {}
   })),
-  getLLMModel: vi.fn((model: string) => ({
+  getLLMModelData: vi.fn(({ model }: { model: string }) => ({
+    modelId: '68ad85a7463006c963799a43',
     model,
     name: `${model} name`,
-    maxContext: 1000
+    config: { maxContext: 1000 }
   })),
-  getRerankModel: vi.fn(() => undefined)
+  getRerankModelData: vi.fn(() => undefined),
+  getVlmModelData: vi.fn(({ model }: { model: string }) => ({
+    model,
+    name: `${model} name`,
+    config: { vision: true }
+  })),
+  getOptionalVlmModelData: vi.fn(({ modelId, model }: { modelId?: string; model?: string }) =>
+    modelId || model
+      ? {
+          modelId,
+          model,
+          name: `${model ?? modelId} name`,
+          config: { vision: true }
+        }
+      : undefined
+  )
 }));
 
 vi.mock('@fastgpt/service/core/ai/llm/request', () => ({
@@ -59,14 +83,24 @@ vi.mock('@fastgpt/service/support/wallet/usage/utils', () => ({
 
 import { dispatchAgentDatasetSearch } from '../../../../../../../core/workflow/dispatch/ai/agent/sub/dataset';
 
+const llmModelData = (model: string) =>
+  ({
+    modelId: '68ad85a7463006c963799a43',
+    model,
+    name: `${model} name`,
+    config: { maxContext: 1000 }
+  }) as any;
+
 describe('dispatchAgentDatasetSearch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findDatasetByIdMock.mockReturnValue({
       lean: vi.fn().mockResolvedValue({
-        vectorModel: 'embedding-model'
+        vectorModel: 'embedding-model',
+        vlmModel: 'vlm-model'
       })
     });
+    filterDatasetsByTmbIdMock.mockImplementation(async ({ datasetIds }) => datasetIds);
     countPromptTokensMock.mockResolvedValue(100);
     createLLMResponseMock.mockResolvedValue({
       answerText: '[chunk_2]',
@@ -116,7 +150,7 @@ describe('dispatchAgentDatasetSearch', () => {
       usingSimilarityFilter: true,
       usingReRank: false,
       queryExtensionResult: {
-        llmModel: 'gpt-query',
+        llmModel: llmModelData('gpt-query'),
         requestId: 'req_query_extension',
         seconds: 1.2,
         inputTokens: 10,
@@ -129,10 +163,10 @@ describe('dispatchAgentDatasetSearch', () => {
     });
 
     const result = await dispatchAgentDatasetSearch({
-      args: JSON.stringify({ query: 'origin' }),
+      args: JSON.stringify({ query: ['origin'] }),
       teamId: 'team_1',
       tmbId: 'tmb_1',
-      llmModel: 'gpt-main',
+      llmModel: llmModelData('gpt-main'),
       datasetParams: {
         datasets: [{ datasetId: 'dataset_1' }],
         similarity: 0.4,
@@ -147,6 +181,13 @@ describe('dispatchAgentDatasetSearch', () => {
 
     expect(result.nodeResponse).not.toHaveProperty('llmRequestIds');
     expect(result.nodeResponse).not.toHaveProperty('queryExtensionResult');
+    expect(result.nodeResponse).not.toHaveProperty('query');
+    expect(result.nodeResponse?.datasetQueries).toEqual(['origin']);
+    expect(defaultSearchDatasetDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        textQueries: ['origin']
+      })
+    );
     expect(result.nodeResponse?.childrenResponses).toEqual([
       expect.objectContaining({
         id: 'req_query_extension',
@@ -155,7 +196,7 @@ describe('dispatchAgentDatasetSearch', () => {
         moduleName: 'common:core.module.template.Query extension',
         moduleLogo: 'core/workflow/template/datasetSearch',
         runningTime: 1.2,
-        model: 'gpt-query name',
+        modelId: '68ad85a7463006c963799a43',
         llmRequestIds: ['req_query_extension'],
         inputTokens: 10,
         outputTokens: 5,
@@ -168,7 +209,7 @@ describe('dispatchAgentDatasetSearch', () => {
         moduleType: FlowNodeTypeEnum.datasetSearchNode,
         moduleName: 'account_usage:dataset_chunk_selection',
         moduleLogo: 'core/workflow/template/datasetSearch',
-        model: 'gpt-main name',
+        modelId: '68ad85a7463006c963799a43',
         llmRequestIds: ['req_chunk_selection'],
         inputTokens: 7,
         outputTokens: 2,
@@ -216,7 +257,7 @@ describe('dispatchAgentDatasetSearch', () => {
       usingSimilarityFilter: true,
       usingReRank: false,
       queryExtensionResult: {
-        llmModel: 'gpt-query',
+        llmModel: llmModelData('gpt-query'),
         requestId: 'req_query_extension',
         seconds: 1.2,
         inputTokens: 10,
@@ -242,10 +283,10 @@ describe('dispatchAgentDatasetSearch', () => {
     });
 
     const result = await dispatchAgentDatasetSearch({
-      args: JSON.stringify({ query: 'origin' }),
+      args: JSON.stringify({ query: ['origin'] }),
       teamId: 'team_1',
       tmbId: 'tmb_1',
-      llmModel: 'gpt-main',
+      llmModel: llmModelData('gpt-main'),
       userKey,
       datasetParams: {
         datasets: [{ datasetId: 'dataset_1' }],
@@ -292,6 +333,156 @@ describe('dispatchAgentDatasetSearch', () => {
         expect.objectContaining({
           moduleName: 'account_usage:ai.query_extension_embedding',
           totalPoints: 0.06
+        })
+      ])
+    );
+  });
+
+  it('keeps compatibility with legacy string query params', async () => {
+    defaultSearchDatasetDataMock.mockResolvedValue({
+      searchRes: [],
+      embeddingTokens: 0,
+      reRankInputTokens: 0,
+      usingSimilarityFilter: true,
+      usingReRank: false
+    });
+
+    const result = await dispatchAgentDatasetSearch({
+      args: JSON.stringify({ query: 'legacy query' }),
+      teamId: 'team_1',
+      tmbId: 'tmb_1',
+      llmModel: llmModelData('gpt-main'),
+      datasetParams: {
+        datasets: [{ datasetId: 'dataset_1' }],
+        searchMode: DatasetSearchModeEnum.embedding
+      } as any
+    });
+
+    expect(defaultSearchDatasetDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        textQueries: ['legacy query']
+      })
+    );
+    expect(result.nodeResponse?.datasetQueries).toEqual(['legacy query']);
+  });
+
+  it('filters dataset ids by tmbId when dataset auth is enabled', async () => {
+    filterDatasetsByTmbIdMock.mockResolvedValueOnce(['dataset_2']);
+    defaultSearchDatasetDataMock.mockResolvedValue({
+      searchRes: [],
+      embeddingTokens: 0,
+      reRankInputTokens: 0,
+      usingSimilarityFilter: true,
+      usingReRank: false
+    });
+
+    await dispatchAgentDatasetSearch({
+      args: JSON.stringify({ query: ['origin'] }),
+      teamId: 'team_1',
+      tmbId: 'tmb_1',
+      llmModel: llmModelData('gpt-main'),
+      datasetParams: {
+        datasets: [{ datasetId: 'dataset_1' }, { datasetId: 'dataset_2' }],
+        searchMode: DatasetSearchModeEnum.embedding,
+        authTmbId: true
+      } as any
+    });
+
+    expect(filterDatasetsByTmbIdMock).toHaveBeenCalledWith({
+      datasetIds: ['dataset_1', 'dataset_2'],
+      tmbId: 'tmb_1'
+    });
+    expect(defaultSearchDatasetDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        datasetIds: ['dataset_2']
+      })
+    );
+  });
+
+  it('stops dataset search when auth filtering removes all datasets', async () => {
+    filterDatasetsByTmbIdMock.mockResolvedValueOnce([]);
+
+    const result = await dispatchAgentDatasetSearch({
+      args: JSON.stringify({ query: ['origin'] }),
+      teamId: 'team_1',
+      tmbId: 'tmb_1',
+      llmModel: llmModelData('gpt-main'),
+      datasetParams: {
+        datasets: [{ datasetId: 'dataset_1' }],
+        searchMode: DatasetSearchModeEnum.embedding,
+        authTmbId: true
+      } as any
+    });
+
+    expect(result).toEqual({
+      response: 'No authorized dataset selected'
+    });
+    expect(findDatasetByIdMock).not.toHaveBeenCalled();
+    expect(defaultSearchDatasetDataMock).not.toHaveBeenCalled();
+  });
+
+  it('splits image urls from dataset search input and records image caption child response', async () => {
+    defaultSearchDatasetDataMock.mockResolvedValue({
+      searchRes: [],
+      embeddingTokens: 3,
+      reRankInputTokens: 0,
+      usingSimilarityFilter: true,
+      usingReRank: false,
+      imageCaptionResult: {
+        model: 'vlm-model',
+        inputTokens: 8,
+        outputTokens: 4,
+        requestIds: ['req_image_caption'],
+        seconds: 0.7,
+        usedUserOpenAIKey: false,
+        queries: ['image caption']
+      }
+    });
+
+    const result = await dispatchAgentDatasetSearch({
+      args: JSON.stringify({
+        query: ['red shoes', 'https://files.example.com/product.png']
+      }),
+      teamId: 'team_1',
+      tmbId: 'tmb_1',
+      llmModel: llmModelData('gpt-main'),
+      datasetParams: {
+        datasets: [{ datasetId: 'dataset_1' }],
+        searchMode: DatasetSearchModeEnum.embedding
+      } as any
+    });
+
+    expect(defaultSearchDatasetDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        textQueries: ['red shoes'],
+        imageQueries: ['https://files.example.com/product.png'],
+        vlmModel: expect.objectContaining({ model: 'vlm-model' })
+      })
+    );
+    expect(result.nodeResponse?.datasetQueries).toEqual([
+      'red shoes',
+      'https://files.example.com/product.png'
+    ]);
+    expect(result.nodeResponse?.childrenResponses).toEqual([
+      expect.objectContaining({
+        id: 'req_image_caption',
+        moduleName: 'chat:image_parse',
+        llmRequestIds: ['req_image_caption'],
+        totalPoints: 0.12,
+        textOutput: 'image caption'
+      }),
+      expect.objectContaining({
+        id: 'req_chunk_selection',
+        moduleName: 'account_usage:dataset_chunk_selection',
+        llmRequestIds: ['req_chunk_selection'],
+        totalPoints: 0.09
+      })
+    ]);
+    expect(result.usages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          moduleName: 'account_usage:image_parse',
+          totalPoints: 0.12
         })
       ])
     );

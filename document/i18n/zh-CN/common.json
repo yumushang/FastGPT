@@ -1,8 +1,7 @@
 {
   "guide": "使用指南",
-  "version": "版本介绍",
+  "pluginSystem": "插件系统",
   "api_reference": "API 文档",
   "selfHost": "自部署",
-  "businessConsultation": "商业咨询",
-  "faq": "常见问题"
+  "businessConsultation": "商业咨询"
 }

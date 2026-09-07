@@ -1,5 +1,518 @@
-import { describe, it, expect } from 'vitest';
-import { parseToolId } from '@fastgpt/service/core/workflow/dispatch/child/runTool';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import {
+  dispatchRunTool,
+  parseToolId
+} from '@fastgpt/service/core/workflow/dispatch/child/runTool';
+import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
+import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
+import { SystemToolSecretInputTypeEnum } from '@fastgpt/global/core/app/tool/systemTool/constants';
+import { MCPClient } from '@fastgpt/service/core/app/mcp';
+
+const {
+  authAppByTmbIdMock,
+  getAppVersionByIdMock,
+  getHTTPToolListMock,
+  getMCPChildrenMock,
+  runHTTPToolMock,
+  mcpToolCallMock,
+  runToolStreamMock,
+  getSystemToolRuntimeMock,
+  getSystemToolDetailMock
+} = vi.hoisted(() => ({
+  authAppByTmbIdMock: vi.fn(),
+  getAppVersionByIdMock: vi.fn(),
+  getHTTPToolListMock: vi.fn(),
+  getMCPChildrenMock: vi.fn(),
+  runHTTPToolMock: vi.fn(),
+  mcpToolCallMock: vi.fn(),
+  runToolStreamMock: vi.fn(),
+  getSystemToolRuntimeMock: vi.fn(),
+  getSystemToolDetailMock: vi.fn()
+}));
+
+vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
+  authAppByTmbId: authAppByTmbIdMock
+}));
+
+vi.mock('@fastgpt/service/core/app/version/controller', () => ({
+  getAppVersionById: getAppVersionByIdMock
+}));
+
+vi.mock('@fastgpt/service/core/app/http', () => ({
+  getHTTPToolList: getHTTPToolListMock,
+  runHTTPTool: runHTTPToolMock
+}));
+
+vi.mock('@fastgpt/service/core/app/mcp', () => ({
+  assertMCPUrlNotInternal: vi.fn(),
+  getMCPChildren: getMCPChildrenMock,
+  MCPClient: vi.fn(function () {
+    return { toolCall: mcpToolCallMock };
+  })
+}));
+
+vi.mock('@fastgpt/service/common/logger', () => ({
+  LogCategories: {
+    MODULE: {
+      APP: {
+        TOOL: 'tool'
+      },
+      AI: {
+        LLM: 'llm'
+      }
+    }
+  },
+  getLogger: vi.fn(() => ({
+    error: vi.fn()
+  }))
+}));
+
+vi.mock('@fastgpt/service/common/middle/tracks/utils', () => ({
+  pushTrack: {
+    runSystemTool: vi.fn()
+  }
+}));
+
+vi.mock('@fastgpt/service/thirdProvider/fastgptPlugin', () => ({
+  pluginClient: {
+    runToolStream: runToolStreamMock
+  }
+}));
+
+vi.mock('@fastgpt/service/core/app/tool/systemTool/systemTool.repo', () => ({
+  SystemToolRepo: {
+    getInstance: vi.fn(() => ({
+      getSystemToolRuntime: getSystemToolRuntimeMock,
+      getSystemToolDetail: getSystemToolDetailMock
+    }))
+  }
+}));
+
+vi.mock('@fastgpt/service/core/workflow/utils/context', () => ({
+  getWorkflowContext: vi.fn(() => ({ mcpClientMemory: {} }))
+}));
+
+const createRunToolProps = (
+  toolConfig: Record<string, any>,
+  params: Record<string, any> = { keyword: 'fastgpt' }
+) =>
+  ({
+    params,
+    runningAppInfo: {
+      id: 'attacker-app',
+      teamId: 'attacker-team',
+      tmbId: 'attacker-tmb',
+      name: 'Attacker workflow'
+    },
+    runningUserInfo: {
+      username: 'attacker',
+      teamName: 'Attacker team',
+      memberName: 'Attacker member',
+      contact: '',
+      teamId: 'attacker-team',
+      // 调用者与应用创建者不同；工具引用仍应按应用创建者鉴权。
+      tmbId: 'caller-without-toolset-permission'
+    },
+    variableState: {
+      get: vi.fn()
+    },
+    node: {
+      nodeId: 'tool-node',
+      flowNodeType: FlowNodeTypeEnum.tool,
+      name: 'Tool node',
+      avatar: '',
+      toolConfig,
+      inputs: [],
+      outputs: []
+    },
+    uid: 'uid',
+    chatId: 'chat',
+    responseChatItemId: 'response',
+    usagePush: vi.fn()
+  }) as any;
+
+describe('dispatchRunTool runtime toolset auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authAppByTmbIdMock.mockResolvedValue({
+      app: {
+        _id: 'victim-toolset',
+        modules: []
+      }
+    });
+    getHTTPToolListMock.mockResolvedValue([]);
+    getMCPChildrenMock.mockResolvedValue([]);
+    getSystemToolRuntimeMock.mockResolvedValue({
+      id: 'search',
+      version: '1.0.0',
+      currentCost: 0,
+      systemKeyCost: 0
+    });
+    getSystemToolDetailMock.mockResolvedValue({ inputSchema: undefined });
+    runToolStreamMock.mockResolvedValue({ output: { ok: true } });
+  });
+
+  it.each([
+    {
+      keyType: SystemToolSecretInputTypeEnum.system,
+      expectedPoints: 5,
+      title: 'system key'
+    },
+    {
+      keyType: SystemToolSecretInputTypeEnum.manual,
+      expectedPoints: 2,
+      title: 'manual key'
+    }
+  ])('charges call cost and key-dependent cost for $title', async ({ keyType, expectedPoints }) => {
+    getSystemToolRuntimeMock.mockResolvedValueOnce({
+      id: 'search',
+      version: '1.0.0',
+      currentCost: 2,
+      systemKeyCost: 3,
+      secretsVal: {}
+    });
+    const props = createRunToolProps(
+      {
+        systemTool: {
+          toolId: 'systemTool-search'
+        }
+      },
+      {
+        keyword: 'fastgpt',
+        system_input_config: {
+          type: keyType,
+          value: {}
+        }
+      }
+    );
+
+    await dispatchRunTool(props);
+
+    expect(props.usagePush).toHaveBeenCalledWith([
+      {
+        moduleName: 'Tool node',
+        totalPoints: expectedPoints
+      }
+    ]);
+  });
+
+  it('should reject HTTP tool execution when running app tmb has no parent toolset permission', async () => {
+    authAppByTmbIdMock.mockRejectedValueOnce(new Error('unAuthApp'));
+
+    const result = await dispatchRunTool(
+      createRunToolProps({
+        httpTool: {
+          toolId: 'http-victim-toolset/sandbox_echo'
+        }
+      })
+    );
+
+    expect(authAppByTmbIdMock).toHaveBeenCalledWith({
+      tmbId: 'attacker-tmb',
+      appId: 'victim-toolset',
+      per: ReadPermissionVal
+    });
+    expect(getAppVersionByIdMock).not.toHaveBeenCalled();
+    expect(runHTTPToolMock).not.toHaveBeenCalled();
+    expect(result.error?.[NodeOutputKeyEnum.errorText]).toBeTruthy();
+  });
+
+  it('should authorize HTTP parent toolset before loading version and running tool', async () => {
+    authAppByTmbIdMock.mockResolvedValueOnce({
+      app: {
+        _id: 'victim-toolset',
+        modules: [
+          {
+            toolConfig: {
+              httpToolSet: {
+                baseUrl: 'https://example.com',
+                toolList: [
+                  {
+                    name: 'sandbox_echo',
+                    description: 'Sandbox echo',
+                    path: '/echo',
+                    method: 'post'
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+    getHTTPToolListMock.mockResolvedValueOnce([
+      {
+        name: 'sandbox_echo',
+        path: '/echo',
+        method: 'post'
+      }
+    ]);
+    runHTTPToolMock.mockResolvedValueOnce({
+      data: {
+        ok: true
+      }
+    });
+
+    const result = await dispatchRunTool(
+      createRunToolProps({
+        httpTool: {
+          toolId: 'http-victim-toolset/sandbox_echo'
+        }
+      })
+    );
+
+    expect(authAppByTmbIdMock).toHaveBeenCalledWith({
+      tmbId: 'attacker-tmb',
+      appId: 'victim-toolset',
+      per: ReadPermissionVal
+    });
+    expect(getAppVersionByIdMock).not.toHaveBeenCalled();
+    expect(runHTTPToolMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://example.com',
+        toolPath: '/echo',
+        method: 'post'
+      })
+    );
+    expect(result.data).toEqual({
+      [NodeOutputKeyEnum.rawResponse]: {
+        ok: true
+      },
+      ok: true
+    });
+  });
+
+  it.each([
+    { name: 'scalar string', requestSchema: { type: 'string' } },
+    { name: 'scalar number', requestSchema: { type: 'number' } },
+    { name: 'missing', requestSchema: undefined },
+    { name: 'empty object', requestSchema: { type: 'object', properties: {} } }
+  ])('normalizes a $name HTTP requestSchema before final execution', async ({ requestSchema }) => {
+    const tool = {
+      name: 'legacy_search',
+      description: 'Legacy search',
+      path: '/search',
+      method: 'GET',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string', pattern: '^allowed$' } },
+        required: ['query']
+      },
+      requestSchema
+    };
+    const original = structuredClone(tool);
+    authAppByTmbIdMock.mockResolvedValue({
+      app: {
+        _id: 'victim-toolset',
+        modules: [
+          {
+            toolConfig: {
+              httpToolSet: { baseUrl: 'https://example.com', toolList: [tool] }
+            }
+          }
+        ]
+      }
+    });
+    getHTTPToolListMock.mockResolvedValue([tool]);
+    runHTTPToolMock.mockResolvedValue({ data: { ok: true } });
+    const toolConfig = { httpTool: { toolId: 'http-victim-toolset/legacy_search' } };
+
+    const accepted = await dispatchRunTool(createRunToolProps(toolConfig, { query: 'allowed' }));
+    expect(accepted.error).toBeUndefined();
+    expect(runHTTPToolMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        toolPath: '/search',
+        method: 'GET',
+        params: { query: 'allowed' }
+      })
+    );
+
+    runHTTPToolMock.mockClear();
+    for (const params of [{}, { query: 123 }, { query: 'blocked' }]) {
+      const rejected = await dispatchRunTool(createRunToolProps(toolConfig, params));
+      expect(rejected.error?.[NodeOutputKeyEnum.errorText]).toContain('validation failed');
+    }
+    expect(runHTTPToolMock).not.toHaveBeenCalled();
+    expect(getAppVersionByIdMock).not.toHaveBeenCalled();
+    expect(tool).toEqual(original);
+  });
+
+  it('should validate HTTP params with the latest toolset schema instead of a saved snapshot', async () => {
+    authAppByTmbIdMock.mockResolvedValueOnce({
+      app: {
+        _id: 'victim-toolset',
+        modules: [
+          {
+            toolConfig: {
+              httpToolSet: {
+                baseUrl: 'https://example.com',
+                toolList: [
+                  {
+                    name: 'sandbox_echo',
+                    description: 'Sandbox echo',
+                    path: '/echo',
+                    method: 'post',
+                    requestSchema: {
+                      type: 'object',
+                      properties: { keyword: { type: 'string', pattern: '^allowed$' } },
+                      required: ['keyword']
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+    getHTTPToolListMock.mockResolvedValueOnce([
+      {
+        name: 'sandbox_echo',
+        path: '/echo',
+        method: 'post',
+        requestSchema: {
+          type: 'object',
+          properties: { keyword: { type: 'string', pattern: '^allowed$' } },
+          required: ['keyword']
+        }
+      }
+    ]);
+    runHTTPToolMock.mockResolvedValueOnce({ data: { ok: true } });
+
+    const props = createRunToolProps(
+      { httpTool: { toolId: 'http-victim-toolset/sandbox_echo' } },
+      { keyword: 'blocked' }
+    );
+    props.node.jsonSchema = {
+      type: 'object',
+      properties: { keyword: { type: 'string' } },
+      required: ['keyword']
+    };
+
+    const result = await dispatchRunTool(props);
+
+    expect(runHTTPToolMock).not.toHaveBeenCalled();
+    expect(result.error?.[NodeOutputKeyEnum.errorText]).toContain('validation failed');
+  });
+
+  it('should reject MCP tool execution when running app tmb has no parent toolset permission', async () => {
+    authAppByTmbIdMock.mockRejectedValueOnce(new Error('unAuthApp'));
+
+    const result = await dispatchRunTool(
+      createRunToolProps({
+        mcpTool: {
+          toolId: 'mcp-victim-toolset/search'
+        }
+      })
+    );
+
+    expect(authAppByTmbIdMock).toHaveBeenCalledWith({
+      tmbId: 'attacker-tmb',
+      appId: 'victim-toolset',
+      per: ReadPermissionVal
+    });
+    expect(getAppVersionByIdMock).not.toHaveBeenCalled();
+    expect(mcpToolCallMock).not.toHaveBeenCalled();
+    expect(result.error?.[NodeOutputKeyEnum.errorText]).toBeTruthy();
+  });
+
+  it('should reject invalid MCP params before invoking the external tool', async () => {
+    authAppByTmbIdMock.mockResolvedValueOnce({
+      app: {
+        _id: 'victim-toolset',
+        modules: [
+          {
+            toolConfig: {
+              mcpToolSet: {
+                url: 'https://mcp.example.com',
+                toolList: [
+                  {
+                    name: 'search',
+                    description: 'Search',
+                    inputSchema: {
+                      type: 'object',
+                      properties: { query: { type: 'string' } },
+                      required: ['query']
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+    getMCPChildrenMock.mockResolvedValueOnce([
+      {
+        name: 'search',
+        description: 'Search',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query']
+        }
+      }
+    ]);
+
+    const result = await dispatchRunTool(
+      createRunToolProps({
+        mcpTool: { toolId: 'mcp-victim-toolset/search' }
+      })
+    );
+
+    expect(mcpToolCallMock).not.toHaveBeenCalled();
+    expect(result.error?.[NodeOutputKeyEnum.errorText]).toContain('validation failed');
+  });
+
+  it.each(['toolData', 'system_toolData'] as const)(
+    'should keep the baseline fallback for legacy single MCP tool params (%s)',
+    async (legacyKey) => {
+      const props = createRunToolProps({});
+      props.params = {
+        query: 'fastgpt',
+        [legacyKey]: {
+          name: 'search',
+          url: 'https://mcp.example.com',
+          headerSecret: { Authorization: { value: 'legacy-token' }, 'X-Key': { value: 'api-key' } },
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query']
+          }
+        }
+      };
+      mcpToolCallMock.mockResolvedValueOnce({ ok: true });
+
+      const result = await dispatchRunTool(props);
+
+      expect(result.error).toBeUndefined();
+      expect(MCPClient).toHaveBeenCalledWith({
+        url: 'https://mcp.example.com',
+        headers: { Authorization: 'legacy-token', 'X-Key': 'api-key' }
+      });
+      expect(mcpToolCallMock).toHaveBeenCalledWith({
+        toolName: 'search',
+        params: { query: 'fastgpt' }
+      });
+    }
+  );
+
+  it('should reject invalid system tool params before invoking the plugin runtime', async () => {
+    getSystemToolDetailMock.mockResolvedValueOnce({
+      inputSchema: {
+        type: 'object',
+        properties: { keyword: { type: 'string', minLength: 20 } },
+        required: ['keyword']
+      }
+    });
+
+    const result = await dispatchRunTool(createRunToolProps({ systemTool: { toolId: 'search' } }));
+
+    expect(runToolStreamMock).not.toHaveBeenCalled();
+    expect(result.error?.[NodeOutputKeyEnum.errorText]).toContain('validation failed');
+  });
+});
 
 describe('parseToolId', () => {
   describe('新版格式: source-appId/toolName', () => {
@@ -45,7 +558,6 @@ describe('parseToolId', () => {
       const result = parseToolId('mcp-507f1f77bcf86cd799439011/ignoredToolset/actualTool');
       expect(result.parentId).toBe('507f1f77bcf86cd799439011');
       expect(result.toolName).toBe('actualTool');
-      // toolsetName 应该被忽略
     });
 
     it('should handle toolset names with special characters', () => {
@@ -69,16 +581,15 @@ describe('parseToolId', () => {
     });
 
     it('should handle tool names with slashes in old format', () => {
-      // 注意: split('/') 只会分割成三个部分,所以第三个部分是 'tool'
       const result = parseToolId('mcp-507f1f77bcf86cd799439011/toolset/tool/extra');
       expect(result.parentId).toBe('507f1f77bcf86cd799439011');
-      // 实际上 split('/') 会得到 ['507f1f77bcf86cd799439011', 'toolset', 'tool/extra']
-      // 但由于解构赋值,legacyToolName 会是 'tool/extra'
-      // 等等,让我重新理解代码逻辑...
-      // formatId.split('/') 会得到 ['507f1f77bcf86cd799439011', 'toolset', 'tool', 'extra']
-      // 解构赋值只取前三个: parentId='507f1f77bcf86cd799439011', toolsetNameOrToolName='toolset', legacyToolName='tool'
-      // 所以 toolName 应该是 'tool',而不是 'tool/extra'
-      expect(result.toolName).toBe('tool');
+      expect(result.toolName).toBe('tool/extra');
+    });
+
+    it('should preserve leading slash in tool name', () => {
+      const result = parseToolId('http-69e20f48dbec7c6ece77556b//test');
+      expect(result.parentId).toBe('69e20f48dbec7c6ece77556b');
+      expect(result.toolName).toBe('/test');
     });
 
     it('should handle empty tool name', () => {
@@ -90,7 +601,7 @@ describe('parseToolId', () => {
     it('should handle empty toolset and tool name in old format', () => {
       const result = parseToolId('mcp-507f1f77bcf86cd799439011//');
       expect(result.parentId).toBe('507f1f77bcf86cd799439011');
-      expect(result.toolName).toBe('');
+      expect(result.toolName).toBe('/');
     });
   });
 
@@ -115,7 +626,6 @@ describe('parseToolId', () => {
       const oldResult = parseToolId(oldId);
       const newResult = parseToolId(newId);
 
-      // 两种格式应该解析出相同的 parentId 和 toolName
       expect(oldResult.parentId).toBe(newResult.parentId);
       expect(oldResult.toolName).toBe(newResult.toolName);
     });

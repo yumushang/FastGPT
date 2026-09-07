@@ -1,10 +1,10 @@
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
 import { DatasetCollectionTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { DatasetErrEnum } from '@fastgpt/global/common/error/code/dataset';
-import { authChatCrud, authCollectionInChat } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud, authCollectionInChat } from '@/service/support/permission/auth/chat';
 import { getCollectionWithDataset } from '@fastgpt/service/core/dataset/controller';
 import { getApiDatasetRequest } from '@fastgpt/service/core/dataset/apiDataset';
 import { isS3ObjectKey } from '@fastgpt/service/common/s3/utils';
@@ -17,16 +17,19 @@ import {
 } from '@fastgpt/global/openapi/core/dataset/collection/api';
 
 async function handler(req: ApiRequestProps): Promise<ReadCollectionSourceResponseType> {
-  const { collectionId, appId, chatId, chatItemDataId, shareId, outLinkUid, teamId, teamToken } =
-    parseApiInput({ req, bodySchema: ReadCollectionSourceBodySchema }).body;
+  const { collectionId, sourceType, sourceId, chatId, chatItemDataId, outLinkAuthData } =
+    parseApiInput({
+      req,
+      bodySchema: ReadCollectionSourceBodySchema
+    }).body;
 
   const { collection } = await (async () => {
-    if (!appId || !chatId || !chatItemDataId) {
+    if (!sourceType || !chatId || !chatItemDataId) {
       return authDatasetCollection({
         req,
         authToken: true,
         authApiKey: true,
-        collectionId: req.body.collectionId,
+        collectionId,
         per: ReadPermissionVal
       });
     }
@@ -36,20 +39,23 @@ async function handler(req: ApiRequestProps): Promise<ReadCollectionSourceRespon
       2. auth collection quote in chat
       3. auth outlink open show quote
     */
-    const [authRes, collection] = await Promise.all([
-      authChatCrud({
-        req,
-        authToken: true,
-        appId,
-        chatId,
-        shareId,
-        outLinkUid,
-        teamId,
-        teamToken
-      }),
-      getCollectionWithDataset(collectionId),
-      authCollectionInChat({ appId, chatId, chatItemDataId, collectionIds: [collectionId] })
-    ]);
+    const authRes = await authChatTargetCrud({
+      req,
+      authToken: true,
+      sourceType,
+      sourceId,
+      chatId,
+      outLinkAuthData
+    });
+    const resolvedSourceId = authRes.sourceId;
+
+    const collection = await getCollectionWithDataset(collectionId);
+    await authCollectionInChat({
+      sourceType,
+      sourceId: resolvedSourceId,
+      chatId,
+      collectionIds: [collectionId]
+    });
 
     if (!authRes.canDownloadSource) {
       return Promise.reject(DatasetErrEnum.unAuthDatasetFile);

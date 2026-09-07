@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   getHTTPToolSetRuntimeNode,
   getHTTPToolRuntimeNode,
+  isHttpToolInputAgentGenerated,
+  isLegacyManualHttpToolArrayType,
+  jsonSchemaProperty2ManualHttpToolValueType,
+  manualHttpToolValueType2JsonSchema,
   parseHttpToolConfig,
-  pathData2ToolList
+  pathData2ToolList,
+  updateHttpToolInputProperty
 } from '@fastgpt/global/core/app/tool/httpTool/utils';
 import {
   FlowNodeTypeEnum,
@@ -17,6 +22,119 @@ import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import type { HttpToolConfigType, PathDataType } from '@fastgpt/global/core/app/tool/httpTool/type';
 
 describe('httpTool utils', () => {
+  describe('HTTP tool input mode', () => {
+    it.each([
+      {
+        name: 'explicitly disabled input',
+        property: {
+          type: 'string',
+          description: 'Query',
+          'x-tool-description': 'Query',
+          isToolParam: false
+        },
+        expected: false
+      },
+      {
+        name: 'explicitly enabled input',
+        property: {
+          type: 'string',
+          'x-tool-description': '',
+          isToolParam: true
+        },
+        expected: true
+      },
+      {
+        name: 'legacy manual input',
+        property: { type: 'string', 'x-tool-description': '' },
+        expected: false
+      },
+      {
+        name: 'legacy agent input',
+        property: { type: 'string', 'x-tool-description': 'Query' },
+        expected: true
+      }
+    ])('$name', ({ property, expected }) => {
+      expect(isHttpToolInputAgentGenerated(property)).toBe(expected);
+    });
+
+    it.each([
+      { enabled: true, expectedDescription: 'Query' },
+      { enabled: false, expectedDescription: '' }
+    ])('persists the enabled state ($enabled)', ({ enabled, expectedDescription }) => {
+      const property = updateHttpToolInputProperty({
+        key: 'query',
+        property: {
+          type: 'string',
+          description: 'Query',
+          pattern: '^[a-z]+$',
+          'x-tool-description': 'Old description',
+          isToolParam: !enabled
+        },
+        enabled
+      });
+
+      expect(property).toMatchObject({
+        type: 'string',
+        description: 'Query',
+        pattern: '^[a-z]+$',
+        'x-tool-description': expectedDescription,
+        isToolParam: enabled
+      });
+    });
+
+    it('uses the parameter key when an enabled input has no description', () => {
+      expect(
+        updateHttpToolInputProperty({
+          key: 'query',
+          property: { type: 'string', description: '' },
+          enabled: true
+        })
+      ).toMatchObject({
+        'x-tool-description': 'query',
+        isToolParam: true
+      });
+    });
+  });
+
+  describe('manual HTTP tool schema conversion', () => {
+    it.each([
+      [
+        WorkflowIOValueTypeEnum.arrayString,
+        {
+          type: 'array',
+          items: { type: 'string' }
+        }
+      ],
+      [
+        WorkflowIOValueTypeEnum.arrayNumber,
+        {
+          type: 'array',
+          items: { type: 'number' }
+        }
+      ],
+      [
+        WorkflowIOValueTypeEnum.arrayBoolean,
+        {
+          type: 'array',
+          items: { type: 'boolean' }
+        }
+      ]
+    ] as const)('converts %s to a standard JSON Schema array', (valueType, expectedSchema) => {
+      expect(manualHttpToolValueType2JsonSchema(valueType)).toEqual(expectedSchema);
+      expect(jsonSchemaProperty2ManualHttpToolValueType(expectedSchema)).toBe(valueType);
+    });
+
+    it('keeps legacy array value types available for editing before migration', () => {
+      expect(isLegacyManualHttpToolArrayType('arrayString')).toBe(true);
+      expect(isLegacyManualHttpToolArrayType('array')).toBe(false);
+      expect(
+        jsonSchemaProperty2ManualHttpToolValueType({
+          type: WorkflowIOValueTypeEnum.arrayString
+        })
+      ).toBe(WorkflowIOValueTypeEnum.arrayString);
+    });
+  });
+
   describe('getHTTPToolSetRuntimeNode', () => {
     it('should create runtime node with minimal params', () => {
       const result = getHTTPToolSetRuntimeNode({});
@@ -158,6 +276,98 @@ describe('httpTool utils', () => {
       expect(rawResponseOutput?.type).toBe(FlowNodeOutputTypeEnum.static);
       expect(rawResponseOutput?.required).toBe(true);
     });
+
+    it('should preserve legacy manual HTTP params and fall back from empty request schemas', () => {
+      const result = getHTTPToolRuntimeNode({
+        tool: {
+          name: 'legacyTool',
+          description: 'Legacy tool',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', 'x-tool-description': '' }
+            },
+            required: ['query']
+          },
+          requestSchema: { type: 'object' },
+          outputSchema: { type: 'object', properties: {} }
+        },
+        nodeId: 'node-legacy',
+        toolSetId: 'toolset-legacy',
+        toolsetName: 'toolsetName'
+      });
+
+      expect(result.inputs[0]).toMatchObject({
+        key: 'query',
+        defaultToAgentGenerated: false
+      });
+      expect(result.jsonSchema).toEqual({
+        type: 'object',
+        properties: {
+          query: { type: 'string', 'x-tool-description': '' }
+        },
+        required: ['query']
+      });
+    });
+
+    it('should honor an explicit disabled mode for HTTP input properties', () => {
+      const result = getHTTPToolRuntimeNode({
+        tool: {
+          name: 'openApiTool',
+          description: 'OpenAPI tool',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Query',
+                'x-tool-description': 'Query',
+                isToolParam: false
+              }
+            },
+            required: ['query']
+          },
+          outputSchema: { type: 'object', properties: {} }
+        },
+        nodeId: 'node-openapi-disabled',
+        toolSetId: 'toolset-openapi',
+        toolsetName: 'toolsetName'
+      });
+
+      expect(result.inputs[0]).toMatchObject({
+        key: 'query',
+        defaultToAgentGenerated: false
+      });
+    });
+
+    it('should use request schema properties when the input schema is empty', () => {
+      const result = getHTTPToolRuntimeNode({
+        tool: {
+          name: 'legacyTool',
+          description: 'Legacy tool',
+          inputSchema: { type: 'object' },
+          requestSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Query', isToolParam: true }
+            },
+            required: ['query']
+          },
+          outputSchema: { type: 'object', properties: {} }
+        },
+        nodeId: 'node-legacy-request',
+        toolSetId: 'toolset-legacy',
+        toolsetName: 'toolsetName'
+      });
+
+      expect(result.inputs).toEqual([
+        expect.objectContaining({
+          key: 'query',
+          defaultToAgentGenerated: true,
+          required: true
+        })
+      ]);
+    });
   });
 
   describe('parseHttpToolConfig', () => {
@@ -224,6 +434,17 @@ describe('httpTool utils', () => {
 
       expect(result).toEqual({ toolsetId: 'toolset-xyz', toolName: 'a/b/c/d' });
     });
+
+    it('should preserve leading slash in tool name', () => {
+      const result = parseHttpToolConfig({
+        toolId: 'http-69e20f48dbec7c6ece77556b//test'
+      });
+
+      expect(result).toEqual({
+        toolsetId: '69e20f48dbec7c6ece77556b',
+        toolName: '/test'
+      });
+    });
   });
 
   describe('pathData2ToolList', () => {
@@ -286,6 +507,14 @@ describe('httpTool utils', () => {
       );
       expect(result[0].inputSchema.required).toContain('id');
       expect(result[0].inputSchema.required).not.toContain('fields');
+      expect(result[0].requestSchema).toEqual({
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'User ID', isToolParam: true },
+          fields: { type: 'string', description: 'Fields to return', isToolParam: true }
+        },
+        required: ['id']
+      });
     });
 
     it('should fallback x-tool-description to param name when description missing', async () => {

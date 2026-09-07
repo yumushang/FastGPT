@@ -1,4 +1,4 @@
-import { connectionMongo, getMongoModel } from '../../../common/mongo';
+import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo';
 const { Schema, model, models } = connectionMongo;
 import { type DatasetDataSchemaType } from '@fastgpt/global/core/dataset/type';
 import {
@@ -8,7 +8,7 @@ import {
 import { DatasetCollectionName } from '../schema';
 import { DatasetColCollectionName } from '../collection/schema';
 import { DatasetDataIndexTypeEnum } from '@fastgpt/global/core/dataset/data/constants';
-import { getLogger, LogCategories } from '../../../common/logger';
+import { serviceEnv } from '../../../env';
 
 export const DatasetDataCollectionName = 'dataset_datas';
 
@@ -39,6 +39,9 @@ const DatasetDataSchema = new Schema({
   },
   imageId: String,
   imageDescMap: Object,
+  metadata: {
+    type: Object
+  },
   history: {
     type: [
       {
@@ -72,7 +75,6 @@ const DatasetDataSchema = new Schema({
     ],
     default: []
   },
-
   updateTime: {
     type: Date,
     default: () => new Date()
@@ -82,6 +84,8 @@ const DatasetDataSchema = new Schema({
     default: 0
   },
   rebuilding: Boolean,
+  synonymVersion: Number,
+  synonymRebuildingVersion: Number,
 
   // Abandon
   fullTextToken: String,
@@ -89,26 +93,32 @@ const DatasetDataSchema = new Schema({
   initJieba: Boolean
 });
 
-try {
-  // list collection and count data; list data; delete collection(relate data)
-  DatasetDataSchema.index({
+// list collection and count data; list data; delete collection(relate data)
+defineIndex(DatasetDataSchema, {
+  key: {
     teamId: 1,
     datasetId: 1,
     collectionId: 1,
     chunkIndex: 1,
     updateTime: -1
+  }
+});
+// Recall vectors after data matching
+defineIndex(DatasetDataSchema, {
+  key: { teamId: 1, datasetId: 1, collectionId: 1, 'indexes.dataId': 1 }
+});
+// rebuild data
+defineIndex(DatasetDataSchema, {
+  key: { rebuilding: 1, teamId: 1, datasetId: 1 }
+});
+if (serviceEnv.DATASET_SYNONYM_ENABLED) {
+  defineIndex(DatasetDataSchema, {
+    key: { teamId: 1, datasetId: 1, synonymVersion: 1, synonymRebuildingVersion: 1 }
   });
-  // Recall vectors after data matching
-  DatasetDataSchema.index({ teamId: 1, datasetId: 1, collectionId: 1, 'indexes.dataId': 1 });
-  // rebuild data
-  DatasetDataSchema.index({ rebuilding: 1, teamId: 1, datasetId: 1 });
-
-  // Cron clear invalid data
-  DatasetDataSchema.index({ updateTime: 1 });
-} catch (error) {
-  const logger = getLogger(LogCategories.INFRA.MONGO);
-  logger.error('Failed to build dataset data indexes', { error });
 }
+
+// Cron clear invalid data
+defineIndex(DatasetDataSchema, { key: { updateTime: 1 } });
 
 export const MongoDatasetData = getMongoModel<DatasetDataSchemaType>(
   DatasetDataCollectionName,

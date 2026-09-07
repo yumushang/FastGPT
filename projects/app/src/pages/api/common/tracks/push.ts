@@ -1,24 +1,14 @@
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
-import { TrackEnum } from '@fastgpt/global/common/middle/tracks/constants';
 import { TrackModel } from '@fastgpt/service/common/middle/tracks/schema';
 import { authCert } from '@fastgpt/service/support/permission/auth/common';
-import { useIPFrequencyLimit } from '@fastgpt/service/common/middle/reqFrequencyLimit';
-import z from 'zod';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { PushTrackBodySchema } from '@fastgpt/global/openapi/common/other/api';
 
-export type pushQuery = {};
+async function handler(req: ApiRequestProps): Promise<undefined> {
+  if (!global.feConfigs?.isPlus) return;
 
-const pushBodySchema = z.object({
-  event: z.enum(TrackEnum),
-  data: z.any()
-});
-
-export type pushResponse = {};
-
-async function handler(req: ApiRequestProps, res: ApiResponseType<any>): Promise<pushResponse> {
-  if (!global.feConfigs?.isPlus) return {};
-
-  const body = pushBodySchema.parse(req.body);
+  const body = parseApiInput({ req, bodySchema: PushTrackBodySchema }).body;
   const { teamId, tmbId, userId } = await authCert({
     req,
     authToken: true
@@ -32,7 +22,7 @@ async function handler(req: ApiRequestProps, res: ApiResponseType<any>): Promise
     data: body.data
   };
 
-  return TrackModel.create(data);
+  await TrackModel.create(data);
 }
 
-export default NextAPI(useIPFrequencyLimit({ id: 'push-tracks', seconds: 1, limit: 5 }), handler);
+export default NextAPI(handler);

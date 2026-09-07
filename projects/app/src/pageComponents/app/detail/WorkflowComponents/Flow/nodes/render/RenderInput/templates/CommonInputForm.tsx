@@ -7,43 +7,49 @@ import { nodeInputTypeToInputType } from '@/components/core/app/formRender/utils
 import { WorkflowBufferDataContext } from '@/pageComponents/app/detail/WorkflowComponents/context/workflowInitContext';
 import { AppContext } from '@/pageComponents/app/detail/context';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
 import { getEditorVariables } from '@/pageComponents/app/detail/WorkflowComponents/utils';
 import { InputTypeEnum } from '@/components/core/app/formRender/constant';
-import { getWebDefaultLLMModel } from '@/web/common/system/utils';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { isNestedParentNodeType } from '@fastgpt/global/core/workflow/node/constant';
 import OptimizerPopover from '@/components/common/PromptEditor/OptimizerPopover';
 import { WorkflowActionsContext } from '@/pageComponents/app/detail/WorkflowComponents/context/workflowActionsContext';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import { useLocalStorageState } from 'ahooks';
+import {
+  getSelectedInputRenderType,
+  workflowModelKeyMappings
+} from '@fastgpt/global/core/workflow/utils';
 
 const CommonInputForm = ({ item, nodeId }: RenderInputProps) => {
   const { t } = useTranslation();
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
-  const { getNodeById, edges, systemConfigNode } = useContextSelector(
-    WorkflowBufferDataContext,
-    (v) => v
-  );
+  const { getNodeById, edges } = useContextSelector(WorkflowBufferDataContext, (v) => v);
   const { appDetail } = useContextSelector(AppContext, (v) => v);
-  const { feConfigs, llmModelList } = useSystemStore();
+  const { feConfigs } = useSystemStore();
+  const { llmModelList } = useUserModelLists();
 
   const [defaultModel, setDefaultModel] = useLocalStorageState<string>(
     'workflow_default_llm_model',
     {
-      defaultValue: getWebDefaultLLMModel()?.model || ''
+      defaultValue: ''
     }
+  );
+
+  const selectedRenderType = getSelectedInputRenderType(item);
+  const inputType = nodeInputTypeToInputType(
+    selectedRenderType ? [selectedRenderType] : item.renderTypeList
   );
 
   const editorVariables = useMemoEnhance(() => {
     return getEditorVariables({
       nodeId,
-      systemConfigNode,
       getNodeById,
       edges,
       appDetail,
       t
     });
-  }, [nodeId, systemConfigNode, getNodeById, edges, appDetail, t]);
+  }, [nodeId, getNodeById, edges, appDetail, t]);
 
   const externalVariables = useMemo(() => {
     return (
@@ -63,8 +69,21 @@ const CommonInputForm = ({ item, nodeId }: RenderInputProps) => {
           value = value.slice(0, 1000000);
         }
       }
-      if (item.key === NodeInputKeyEnum.aiModel) {
+      if (item.key === NodeInputKeyEnum.aiModel || item.key === NodeInputKeyEnum.aiModelId) {
         setDefaultModel(value);
+      }
+
+      const modelIdKey = workflowModelKeyMappings.find(
+        ([legacyKey]) => legacyKey === item.key
+      )?.[1];
+      if (inputType === InputTypeEnum.selectLLMModel && modelIdKey) {
+        onChangeNode({
+          nodeId,
+          type: 'replaceInput',
+          key: item.key,
+          value: { ...item, key: modelIdKey, value }
+        });
+        return;
       }
 
       onChangeNode({
@@ -74,10 +93,8 @@ const CommonInputForm = ({ item, nodeId }: RenderInputProps) => {
         value: { ...item, value }
       });
     },
-    [item, nodeId, onChangeNode, setDefaultModel]
+    [inputType, item, nodeId, onChangeNode, setDefaultModel]
   );
-
-  const inputType = nodeInputTypeToInputType(item.renderTypeList);
 
   // 嵌套容器节点（loop/parallelRun/loopRun）里的 select 下拉向上展开，避免被子节点覆盖。
   const menuPlacement = useMemo(() => {
@@ -91,7 +108,7 @@ const CommonInputForm = ({ item, nodeId }: RenderInputProps) => {
     if (inputType === InputTypeEnum.selectLLMModel && item.value === undefined && defaultModel) {
       handleChange(defaultModel);
     }
-  }, [inputType, item.value]);
+  }, [defaultModel, handleChange, inputType, item.value]);
 
   const canOptimizePrompt = item.key === NodeInputKeyEnum.aiSystemPrompt;
   const OptimizerPopverComponent = useCallback(

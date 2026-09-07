@@ -3,33 +3,53 @@ import type { SearchDataResponseItemType } from '@fastgpt/global/core/dataset/ty
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 
-// Mock countPromptTokens (uses worker threads, not available in test)
+const childInputSchema = {
+  type: 'object',
+  properties: {
+    input1: {
+      type: 'string',
+      title: 'Input 1',
+      description: 'Input desc'
+    }
+  }
+};
+
+const childOutputSchema = {
+  type: 'object',
+  properties: {
+    output1: {
+      type: 'string',
+      title: 'Output 1',
+      description: 'Output desc'
+    }
+  }
+};
+
+// Mock token counting (uses worker threads, not available in test)
 vi.mock('@fastgpt/service/common/string/tiktoken/index', () => ({
-  countPromptTokens: vi.fn(async (text: string) => {
+  countPromptTokensBatch: vi.fn(async (texts: string[]) => {
     // Simple approximation: 1 token ≈ 1 char for test purposes
-    return typeof text === 'string' ? text.length : 0;
+    return texts.map((text) => (typeof text === 'string' ? text.length : 0));
   })
 }));
 
-// Mock getSystemTools and getSystemToolByIdAndVersionId (need database)
-vi.mock('@fastgpt/service/core/app/tool/controller', () => ({
-  getSystemTools: vi.fn(),
-  getSystemToolByIdAndVersionId: vi.fn()
+const mockGetSystemToolDetail = vi.hoisted(() => vi.fn());
+
+vi.mock('@fastgpt/service/core/app/tool/systemTool/systemTool.repo', () => ({
+  SystemToolRepo: {
+    getInstance: () => ({
+      getSystemToolDetail: mockGetSystemToolDetail
+    })
+  }
 }));
 
 import {
   filterSearchResultsByMaxChars,
   getSystemToolRunTimeNodeFromSystemToolset
 } from '@fastgpt/service/core/workflow/utils';
-import { countPromptTokens } from '@fastgpt/service/common/string/tiktoken/index';
-import {
-  getSystemTools,
-  getSystemToolByIdAndVersionId
-} from '@fastgpt/service/core/app/tool/controller';
+import { countPromptTokensBatch } from '@fastgpt/service/common/string/tiktoken/index';
 
-const mockedCountPromptTokens = vi.mocked(countPromptTokens);
-const mockedGetSystemTools = vi.mocked(getSystemTools);
-const mockedGetSystemToolByIdAndVersionId = vi.mocked(getSystemToolByIdAndVersionId);
+const mockedCountPromptTokensBatch = vi.mocked(countPromptTokensBatch);
 
 function makeSearchItem(q: string, a = ''): SearchDataResponseItemType {
   return {
@@ -118,7 +138,7 @@ describe('filterSearchResultsByMaxChars', () => {
   it('should concatenate q and a for token counting', async () => {
     const list = [makeSearchItem('hello', 'world')];
     await filterSearchResultsByMaxChars(list, 100);
-    expect(mockedCountPromptTokens).toHaveBeenCalledWith('helloworld');
+    expect(mockedCountPromptTokensBatch.mock.calls[0][0]).toEqual(['helloworld']);
   });
 
   it('should handle items with undefined a field', async () => {
@@ -127,7 +147,7 @@ describe('filterSearchResultsByMaxChars', () => {
     const list = [item];
     await filterSearchResultsByMaxChars(list, 100);
     // q + a = "hello" + undefined = "helloundefined"
-    expect(mockedCountPromptTokens).toHaveBeenCalledWith('helloundefined');
+    expect(mockedCountPromptTokensBatch.mock.calls[0][0]).toEqual(['helloundefined']);
   });
 });
 
@@ -139,106 +159,145 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
   const makeToolSetNode = (
     overrides: Partial<{
       toolId: string;
+      source: string;
       toolList: { toolId: string; name: string; description: string }[];
       inputs: any[];
       nodeId: string;
+      version: string;
     }> = {}
   ) => ({
     toolConfig: {
       systemToolSet: {
-        toolId: overrides.toolId ?? 'toolset-1',
+        toolId: overrides.toolId ?? 'systemTool-toolset-1',
+        source: overrides.source,
         toolList: overrides.toolList ?? []
       }
     },
     inputs: overrides.inputs ?? [],
-    nodeId: overrides.nodeId ?? 'node-1'
+    nodeId: overrides.nodeId ?? 'node-1',
+    version: overrides.version
   });
 
-  it('should return runtime nodes for active children', async () => {
+  const mockToolDetail = (
+    children: Array<{
+      id: string;
+      name?: string;
+      description?: string;
+      toolDescription?: string;
+      inputSchema?: any;
+      outputSchema?: any;
+    }> = [
+      {
+        id: 'child-1',
+        name: 'Original',
+        description: 'Original Desc',
+        toolDescription: 'Original Tool Desc',
+        inputSchema: childInputSchema,
+        outputSchema: childOutputSchema
+      }
+    ],
+    version = 'v1'
+  ) => {
+    mockGetSystemToolDetail.mockResolvedValue({
+      version,
+      children
+    });
+  };
+
+  it('should return empty nodes when no tools are selected', async () => {
+    const toolSetNode = makeToolSetNode();
+
+    const result = await getSystemToolRunTimeNodeFromSystemToolset({
+      toolSetNode,
+      lang: 'en'
+    });
+
+    expect(result).toEqual([]);
+    expect(mockGetSystemToolDetail).not.toHaveBeenCalled();
+  });
+
+  it('should return runtime nodes for selected children', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'toolset-1',
+      toolId: 'systemTool-toolset-1',
       toolList: [{ toolId: 'child-1', name: 'Custom Name', description: 'Custom Desc' }]
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'child-1', parentId: 'toolset-1', status: 1, name: 'Original' } as any,
-      { id: 'child-2', parentId: 'toolset-1', status: 0, name: 'Disabled' } as any
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Original',
+        description: 'Original Desc',
+        toolDescription: 'Original Tool Desc',
+        inputSchema: childInputSchema,
+        outputSchema: childOutputSchema
+      },
+      {
+        id: 'child-2',
+        name: 'Not Selected',
+        description: 'Not Selected Desc'
+      }
     ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [{ key: 'input1', value: 'val1' }],
-      outputs: [{ key: 'output1' }],
-      name: 'ToolName',
-      intro: 'ToolIntro'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
       lang: 'en'
     });
 
+    expect(mockGetSystemToolDetail).toHaveBeenCalledWith({
+      pluginId: 'systemTool-toolset-1',
+      lang: 'en',
+      source: 'system',
+      version: undefined,
+      fallbackLatestVersion: true
+    });
     expect(result).toHaveLength(1);
     expect(result[0].flowNodeType).toBe(FlowNodeTypeEnum.tool);
-    expect(result[0].nodeId).toBe('node-10');
+    expect(result[0].nodeId).toBe('node-1child-1');
     expect(result[0].name).toBe('Custom Name');
     expect(result[0].intro).toBe('Custom Desc');
-    expect(result[0].toolConfig).toEqual({ systemTool: { toolId: 'child-1' } });
-  });
-
-  it('should include children with undefined status', async () => {
-    const toolSetNode = makeToolSetNode({ toolId: 'ts-1' });
-
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: undefined, name: 'Tool1' } as any
-    ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [],
-      outputs: [],
-      name: 'Tool1',
-      intro: 'Intro1'
-    } as any);
-
-    const result = await getSystemToolRunTimeNodeFromSystemToolset({
-      toolSetNode,
-      lang: 'en'
+    expect(result[0].toolDescription).toBe('Custom Desc');
+    expect(result[0].toolConfig).toEqual({
+      systemTool: { toolId: 'systemTool-toolset-1/child-1' }
     });
-
-    expect(result).toHaveLength(1);
-  });
-
-  it('should exclude children with status !== 1 and status !== undefined', async () => {
-    const toolSetNode = makeToolSetNode({ toolId: 'ts-1' });
-
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 0, name: 'Disabled' } as any,
-      { id: 'c-2', parentId: 'ts-1', status: 2, name: 'Other' } as any
-    ]);
-
-    const result = await getSystemToolRunTimeNodeFromSystemToolset({
-      toolSetNode,
-      lang: 'en'
+    expect(result[0].pluginId).toBe('systemTool-toolset-1/child-1');
+    expect(result[0].inputs[0]).toMatchObject({
+      key: 'input1',
+      label: 'Input 1',
+      valueType: 'string'
     });
-
-    expect(result).toHaveLength(0);
+    expect(result[0].outputs[0]).toMatchObject({
+      key: 'output1',
+      label: 'Output 1',
+      valueType: 'string'
+    });
+    expect(result[0].version).toBe('v1');
   });
 
-  it('should use parseI18nString fallback when no custom name/description', async () => {
+  it('should preserve original child input schema on runtime node', async () => {
+    const inputSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: 'string',
+          pattern: '^fastgpt'
+        }
+      },
+      required: ['query']
+    };
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      toolList: [] // No matching toolList entry
+      toolId: 'systemTool-toolset-1',
+      toolList: [{ toolId: 'child-1', name: 'Search', description: 'Search Desc' }]
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Tool1' } as any
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Search',
+        description: 'Search Intro',
+        inputSchema
+      }
     ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [],
-      outputs: [],
-      name: 'OriginalName',
-      intro: 'OriginalIntro'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
@@ -246,32 +305,48 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
     });
 
     expect(result).toHaveLength(1);
-    // parseI18nString with string returns the string itself
-    expect(result[0].name).toBe('OriginalName');
-    expect(result[0].intro).toBe('OriginalIntro');
+    expect(result[0].jsonSchema).toBe(inputSchema);
+  });
+
+  it('should use child name and descriptions when selected config is empty', async () => {
+    const toolSetNode = makeToolSetNode({
+      toolList: [{ toolId: 'child-1', name: '', description: '' }]
+    });
+
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Original Name',
+        description: 'Original Intro',
+        toolDescription: 'Original Tool Description'
+      }
+    ]);
+
+    const result = await getSystemToolRunTimeNodeFromSystemToolset({
+      toolSetNode,
+      lang: 'en'
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Original Name');
+    expect(result[0].intro).toBe('Original Intro');
+    expect(result[0].toolDescription).toBe('Original Tool Description');
   });
 
   it('should pass systemInputConfig value to child tool inputs', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      toolList: [{ toolId: 'c-1', name: 'Tool1', description: 'Desc1' }],
+      toolList: [{ toolId: 'child-1', name: 'Tool1', description: 'Desc1' }],
       inputs: [{ key: NodeInputKeyEnum.systemInputConfig, value: { apiKey: 'test-key' } }]
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Tool1' } as any
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Tool1',
+        description: 'Intro1',
+        inputSchema: childInputSchema
+      }
     ]);
-
-    const childInputs = [
-      { key: NodeInputKeyEnum.systemInputConfig, value: null },
-      { key: 'otherInput', value: 'other' }
-    ];
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: childInputs,
-      outputs: [],
-      name: 'Tool1',
-      intro: 'Intro1'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
@@ -286,77 +361,64 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
     expect(configInput?.value).toEqual({ apiKey: 'test-key' });
   });
 
-  it('should not modify inputs when no systemInputConfig in toolSetNode', async () => {
+  it('should not add systemInputConfig when no systemInputConfig in toolSetNode', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      toolList: [{ toolId: 'c-1', name: 'Tool1', description: 'Desc1' }],
+      toolList: [{ toolId: 'child-1', name: 'Tool1', description: 'Desc1' }],
       inputs: [] // No systemInputConfig
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Tool1' } as any
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Tool1',
+        description: 'Intro1',
+        inputSchema: childInputSchema
+      }
     ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [{ key: NodeInputKeyEnum.systemInputConfig, value: 'original' }],
-      outputs: [],
-      name: 'Tool1',
-      intro: 'Intro1'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
       lang: 'en'
     });
 
-    // toolsetInputConfig is undefined, so value check is falsy → no modification
     const configInput = result[0].inputs.find(
       (i: any) => i.key === NodeInputKeyEnum.systemInputConfig
     );
-    expect(configInput?.value).toBe('original');
+    expect(configInput).toBeUndefined();
   });
 
   it('should use default lang "en" when not provided', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      toolList: []
+      toolList: [{ toolId: 'child-1', name: 'Tool1', description: 'Desc1' }]
     });
-
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Tool1' } as any
-    ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [],
-      outputs: [],
-      name: { en: 'English Name', 'zh-CN': '中文名称' },
-      intro: { en: 'English Intro', 'zh-CN': '中文介绍' }
-    } as any);
+    mockToolDetail();
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode
     });
 
-    expect(result[0].name).toBe('English Name');
-    expect(result[0].intro).toBe('English Intro');
+    expect(mockGetSystemToolDetail).toHaveBeenCalledWith({
+      pluginId: 'systemTool-toolset-1',
+      lang: 'en',
+      source: 'system',
+      version: undefined,
+      fallbackLatestVersion: true
+    });
+    expect(result).toHaveLength(1);
   });
 
-  it('should handle null inputs/outputs from tool', async () => {
+  it('should handle missing schemas from tool', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      toolList: [{ toolId: 'c-1', name: 'Tool1', description: 'Desc1' }]
+      toolList: [{ toolId: 'child-1', name: 'Tool1', description: 'Desc1' }]
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Tool1' } as any
+    mockToolDetail([
+      {
+        id: 'child-1',
+        name: 'Tool1',
+        description: 'Intro1'
+      }
     ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: null,
-      outputs: null,
-      name: 'Tool1',
-      intro: 'Intro1'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
@@ -367,23 +429,19 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
     expect(result[0].outputs).toEqual([]);
   });
 
-  it('should generate correct nodeId with index', async () => {
+  it('should generate nodeId with child id and preserve selected order', async () => {
     const toolSetNode = makeToolSetNode({
-      toolId: 'ts-1',
-      nodeId: 'parent-node'
+      nodeId: 'parent-node',
+      toolList: [
+        { toolId: 'child-2', name: 'T2', description: 'D2' },
+        { toolId: 'child-1', name: 'T1', description: 'D1' }
+      ]
     });
 
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'T1' } as any,
-      { id: 'c-2', parentId: 'ts-1', status: 1, name: 'T2' } as any
+    mockToolDetail([
+      { id: 'child-1', name: 'Original T1' },
+      { id: 'child-2', name: 'Original T2' }
     ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [],
-      outputs: [],
-      name: 'Tool',
-      intro: 'Intro'
-    } as any);
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
@@ -391,24 +449,21 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(result[0].nodeId).toBe('parent-node0');
-    expect(result[1].nodeId).toBe('parent-node1');
+    expect(result[0].nodeId).toBe('parent-nodechild-2');
+    expect(result[1].nodeId).toBe('parent-nodechild-1');
   });
 
-  it('should only include children matching the toolSetNode parentId', async () => {
-    const toolSetNode = makeToolSetNode({ toolId: 'ts-1' });
-
-    mockedGetSystemTools.mockResolvedValue([
-      { id: 'c-1', parentId: 'ts-1', status: 1, name: 'Match' } as any,
-      { id: 'c-2', parentId: 'ts-other', status: 1, name: 'NoMatch' } as any
-    ]);
-
-    mockedGetSystemToolByIdAndVersionId.mockResolvedValue({
-      inputs: [],
-      outputs: [],
-      name: 'Tool',
-      intro: 'Intro'
-    } as any);
+  it('should accept full child tool id from selected config', async () => {
+    const toolSetNode = makeToolSetNode({
+      toolList: [
+        {
+          toolId: 'systemTool-toolset-1/child-1',
+          name: 'Full Id Tool',
+          description: 'Full Id Desc'
+        }
+      ]
+    });
+    mockToolDetail();
 
     const result = await getSystemToolRunTimeNodeFromSystemToolset({
       toolSetNode,
@@ -416,6 +471,49 @@ describe('getSystemToolRunTimeNodeFromSystemToolset', () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(mockedGetSystemToolByIdAndVersionId).toHaveBeenCalledWith('c-1');
+    expect(result[0].pluginId).toBe('systemTool-toolset-1/child-1');
+  });
+
+  it('should skip selected tools that are missing from repo children', async () => {
+    const toolSetNode = makeToolSetNode({
+      toolList: [
+        { toolId: 'missing-child', name: 'Missing', description: 'Missing Desc' },
+        { toolId: 'child-1', name: 'Tool1', description: 'Desc1' }
+      ]
+    });
+    mockToolDetail();
+
+    const result = await getSystemToolRunTimeNodeFromSystemToolset({
+      toolSetNode,
+      lang: 'en'
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].pluginId).toBe('systemTool-toolset-1/child-1');
+  });
+
+  it('should pass debug source from toolset config to child runtime node', async () => {
+    const toolSetNode = makeToolSetNode({
+      source: 'debug:tmbId:tmb-1',
+      toolList: [{ toolId: 'child-1', name: 'Debug Tool', description: 'Debug Desc' }]
+    });
+    mockToolDetail();
+
+    const result = await getSystemToolRunTimeNodeFromSystemToolset({
+      toolSetNode,
+      lang: 'en'
+    });
+
+    expect(mockGetSystemToolDetail).toHaveBeenCalledWith({
+      pluginId: 'systemTool-toolset-1',
+      lang: 'en',
+      source: 'debug:tmbId:tmb-1',
+      version: undefined,
+      fallbackLatestVersion: true
+    });
+    expect(result[0].toolConfig?.systemTool).toEqual({
+      toolId: 'systemTool-toolset-1/child-1',
+      source: 'debug:tmbId:tmb-1'
+    });
   });
 });

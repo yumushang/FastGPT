@@ -1,7 +1,12 @@
 import type { I18nStringType, localeType } from '../../../../common/i18n/type';
-import { sandboxToolMap } from '../../../ai/sandbox/constants';
-import { skillToolsMap } from './skillTools';
+import {
+  AGENT_SANDBOX_TOOLSET_ID,
+  SANDBOX_ICON,
+  SANDBOX_NAME,
+  sandboxToolMap
+} from '../../../ai/sandbox/tools';
 import { parseI18nString } from '../../../../common/i18n/utils';
+import { documentFileType } from '../../../../common/file/constants';
 
 export enum SubAppIds {
   ask = 'ask_agent',
@@ -10,6 +15,7 @@ export enum SubAppIds {
   datasetSearch = 'dataset_search'
 }
 
+// TODO: 移除部分
 export const systemSubInfo: Record<
   string,
   { name: I18nStringType; avatar: string; toolDescription: string }
@@ -21,7 +27,7 @@ export const systemSubInfo: Record<
       en: 'FileParsing'
     },
     avatar: 'core/workflow/template/readFiles',
-    toolDescription: '读取文件内容，并返回文件内容。'
+    toolDescription: `读取文档并返回文档内容，支持: ${documentFileType}`
   },
   [SubAppIds.datasetSearch]: {
     name: {
@@ -33,28 +39,23 @@ export const systemSubInfo: Record<
     toolDescription:
       '搜索知识库获取相关信息，当有相关知识库信息的时候可以使用此工具来对知识库进行检索'
   },
-  [SubAppIds.ask]: {
-    name: {
-      'zh-CN': '询问Agent',
-      'zh-Hant': '詢問Agent',
-      en: 'AskAgent'
-    },
-    avatar: 'core/workflow/template/agent',
-    toolDescription: '询问用户问题，并返回用户回答。'
-  },
-  [SubAppIds.model]: {
-    name: {
-      'zh-CN': '模型Agent',
-      'zh-Hant': '模型Agent',
-      en: 'ModelAgent'
-    },
-    avatar: 'core/workflow/template/agent',
-    toolDescription: '调用 LLM 模型完成一些通用任务。'
-  },
-  ...sandboxToolMap,
-  ...skillToolsMap
+  [AGENT_SANDBOX_TOOLSET_ID]: {
+    name: SANDBOX_NAME,
+    avatar: SANDBOX_ICON,
+    toolDescription:
+      '提供完整虚拟机能力，包括命令执行、文件读写、文件编辑、文件搜索和文件链接生成。'
+  }
 };
 export const getSystemToolInfo = (id: string, lang: localeType = 'en') => {
+  if (id in sandboxToolMap) {
+    const info = sandboxToolMap[id];
+    return {
+      name: parseI18nString(info.name, lang),
+      avatar: info.avatar,
+      toolDescription: info.toolDescription
+    };
+  }
+
   if (id in systemSubInfo) {
     const info = systemSubInfo[id];
     return {

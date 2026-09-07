@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://fastgpt.io/"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
+<a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=logo"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
 
 # FastGPT
 
@@ -18,7 +18,7 @@ FastGPT adalah platform pembangunan AI Agent yang menyediakan kemampuan siap pak
 </div>
 
 <p align="center">
-  <a href="https://fastgpt.io/">
+  <a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_badge">
     <img height="21" src="https://img.shields.io/badge/Penggunaan_Online-d4eaf7?style=flat-square&logo=spoj&logoColor=7d09f1" alt="cloud">
   </a>
   <a href="https://doc.fastgpt.io/guide/getting-started">
@@ -40,7 +40,7 @@ Anda dapat memulai FastGPT dengan cepat menggunakan Docker. Jalankan perintah be
 
 ```bash
 # Jalankan perintah untuk menarik file konfigurasi
-bash <(curl -fsSL https://doc.fastgpt.cn/deploy/install.sh)
+bash <(curl -fsSL https://doc.fastgpt.io/deploy/install.sh)
 # Jalankan layanan
 docker compose up -d
 ```
@@ -52,13 +52,13 @@ Jika Anda menghadapi masalah, Anda dapat [melihat tutorial penyebaran Docker len
 ## 🛸 Cara Penggunaan
 
 - **Versi Cloud**  
-  Jika Anda tidak memerlukan penyebaran privat, Anda dapat langsung menggunakan layanan cloud kami di: [fastgpt.io](https://fastgpt.io/)
+  Jika Anda tidak memerlukan penyebaran privat, Anda dapat langsung menggunakan layanan cloud kami di: [fastgpt.io](https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_service_link)
 
 - **Versi Self-Hosted Komunitas**  
   Anda dapat menyebarkan dengan cepat menggunakan [Docker](https://doc.fastgpt.io/self-host/deploy/docker) atau menggunakan [Sealos Cloud](https://doc.fastgpt.io/self-host/deploy/sealos) untuk menyebarkan FastGPT dengan satu klik.
 
 - **Versi Komersial**  
-  Jika Anda membutuhkan fitur yang lebih lengkap atau dukungan layanan mendalam, Anda dapat memilih [Versi Komersial](https://doc.fastgpt.io/guide/version/commercial). Selain menyediakan perangkat lunak lengkap, kami juga menyediakan panduan implementasi untuk skenario tertentu. Anda dapat mengirimkan [konsultasi komersial](https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc).
+  Jika Anda membutuhkan fitur yang lebih lengkap atau dukungan layanan mendalam, Anda dapat memilih [Versi Komersial](https://doc.fastgpt.io/guide/version/commercial). Selain menyediakan perangkat lunak lengkap, kami juga menyediakan panduan implementasi untuk skenario tertentu. Anda dapat mengirimkan [konsultasi komersial](https://fastgpt.cn/en/contact?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=commercial_consultation).
 
 ## 💡 Fitur Inti
 
@@ -68,7 +68,7 @@ Jika Anda menghadapi masalah, Anda dapat [melihat tutorial penyebaran Docker len
 | ![Demo](./.github/imgs/intro3.png) | ![Demo](./.github/imgs/intro4.png) |
 
 `1` Kemampuan Orkestrasi Aplikasi
-   - [x] Mode Agent Perencanaan.
+   - [x] Orkestrasi Agent Skill.
    - [x] Workflow percakapan, workflow plugin, termasuk node RPA dasar.
    - [x] Interaksi pengguna
    - [x] MCP dua arah
@@ -89,25 +89,19 @@ Jika Anda menghadapi masalah, Anda dapat [melihat tutorial penyebaran Docker len
    - [x] Dukungan txt, md, html, pdf, docx, pptx, csv, xlsx (lebih banyak dapat di-PR), dukungan pembacaan URL dan impor batch CSV
    - [x] Pencarian hibrida & reranking
    - [x] Basis pengetahuan API
-   - [ ] Hot-swapping modul RAG
+   - [ ] 
 
-`4` Antarmuka OpenAPI
-   - [x] Antarmuka completions (sesuai dengan mode chat GPT)
-   - [x] CRUD basis pengetahuan
-   - [x] CRUD percakapan
-   - [x] Antarmuka OpenAPI otomatis
+`4` Kemampuan Plugin
+   - [x] Hot update tool sistem
+   - [ ] Hot update modul RAG
+   - [ ] Hot update Agent-loop
+   - [ ] Plugin yang dibuat AI secara real time
 
 `5` Kemampuan Operasi
    - [x] Jendela berbagi tanpa login
    - [x] Embedding Iframe satu klik
    - [x] Tinjauan catatan percakapan terpadu dengan anotasi data
    - [x] Log operasi aplikasi
-
-`6` Lainnya
-   - [x] Konfigurasi model visual.
-   - [x] Dukungan input dan output suara (dapat dikonfigurasi)
-   - [x] Petunjuk input fuzzy
-   - [x] Pasar template
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Kembali_ke_Atas-7d09f1.svg" alt="#" align="right">
@@ -116,10 +110,9 @@ Jika Anda menghadapi masalah, Anda dapat [melihat tutorial penyebaran Docker len
 ## 💪 Proyek & Tautan Kami
 
 - [Mulai Cepat Pengembangan Lokal](https://doc.fastgpt.io/self-host/dev/)
-- [Dokumentasi OpenAPI](https://doc.fastgpt.io/openapi/intro)
+- [Dokumentasi OpenAPI](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: Layanan Load Balancing Agregasi Model](https://github.com/labring/aiproxy)
-- [Laf: Akses Cepat 3 Menit ke Aplikasi Pihak Ketiga](https://github.com/labring/laf)
 - [Sealos: Penerapan Cepat Aplikasi Klaster](https://github.com/labring/sealos)
 
 <a href="#readme">
@@ -130,7 +123,6 @@ Jika Anda menghadapi masalah, Anda dapat [melihat tutorial penyebaran Docker len
 
 - [AI Proxy: Layanan Agregasi Model Besar](https://sealos.run/aiproxy/?k=fastgpt-github/)
 - [SiliconCloud - Platform Pengalaman Online Model Open Source](https://cloud.siliconflow.cn/i/TR9Ym0c4)
-- [PPIO: Panggilan Satu Klik ke API Model Open Source Hemat Biaya dan GPU Container](https://ppinfra.com/user/register?invited_by=VITYVU&utm_source=github_fastgpt)
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Kembali_ke_Atas-7d09f1.svg" alt="#" align="right">
@@ -186,9 +178,9 @@ Kami sangat menyambut kontribusi dalam berbagai bentuk. Jika Anda tertarik berko
 
 <a href="https://github.com/labring/FastGPT/stargazers" target="_blank" style="display: block" align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
   </picture>
 </a>
 

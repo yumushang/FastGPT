@@ -1,4 +1,4 @@
-import { connectionMongo, getMongoModel } from '../../../common/mongo';
+import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo';
 const { Schema } = connectionMongo;
 import { type TeamMemberSchema as TeamMemberType } from '@fastgpt/global/support/user/team/type';
 import { userCollectionName } from '../../user/schema';
@@ -8,7 +8,6 @@ import {
   TeamCollectionName
 } from '@fastgpt/global/support/user/team/constant';
 import { getRandomUserAvatar } from '@fastgpt/global/support/user/utils';
-import { getLogger, LogCategories } from '../../../common/logger';
 
 const TeamMemberSchema = new Schema({
   teamId: {
@@ -27,6 +26,8 @@ const TeamMemberSchema = new Schema({
   },
   name: {
     type: String,
+    required: true,
+    trim: true,
     default: 'Member'
   },
   status: {
@@ -67,13 +68,21 @@ TeamMemberSchema.virtual('user', {
   justOne: true
 });
 
-try {
-  TeamMemberSchema.index({ teamId: 1 }, { background: true });
-  TeamMemberSchema.index({ userId: 1 }, { background: true });
-} catch (error) {
-  const logger = getLogger(LogCategories.INFRA.MONGO);
-  logger.error('Failed to build team member indexes', { error });
-}
+defineIndex(TeamMemberSchema, {
+  key: { teamId: 1 },
+  options: { background: true }
+});
+
+defineIndex(TeamMemberSchema, {
+  key: { userId: 1, teamId: 1 },
+  options: { unique: true, background: true }
+});
+
+defineIndex(TeamMemberSchema, {
+  key: { userId: 1 },
+  deprecated: true,
+  options: { background: true }
+});
 
 export const MongoTeamMember = getMongoModel<TeamMemberType>(
   TeamMemberCollectionName,

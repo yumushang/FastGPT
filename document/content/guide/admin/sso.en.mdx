@@ -22,7 +22,7 @@ FastGPT-pro includes a standard set of SSO and member sync interfaces. The syste
 
 FastGPT-SSO-Service aggregates SSO and member sync interfaces from different sources and converts them into the format recognized by fastgpt-pro.
 
-   ![](/imgs/sso2.png)
+![](/imgs/sso2.png)
 
 ## System Configuration Tutorial
 
@@ -31,16 +31,16 @@ FastGPT-SSO-Service aggregates SSO and member sync interfaces from different sou
 Deploy using docker-compose:
 
 ```yaml
-  fastgpt-sso:
-    image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0  # This version must match the FastGPT image version
-    container_name: fastgpt-sso
-    restart: always
-    networks:
-      - fastgpt
-    environment:
-      - SSO_PROVIDER=example
-      - AUTH_TOKEN=xxxxx # Auth token, used by fastgpt-pro
-      # Provider-specific environment variables below
+fastgpt-sso:
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0 # This version must match the FastGPT image version
+  container_name: fastgpt-sso
+  restart: always
+  networks:
+    - fastgpt
+  environment:
+    - SSO_PROVIDER=example
+    - AUTH_TOKEN=xxxxx # Auth token, used by fastgpt-pro
+    # Provider-specific environment variables below
 ```
 
 Depending on the provider, you'll need different environment variables. Below are the built-in protocols/IMs:
@@ -79,6 +79,11 @@ Depending on the provider, you'll need different environment variables. Below ar
       <td>Yes</td>
       <td>No</td>
     </tr>
+    <tr>
+      <td>LDAP</td>
+      <td>No</td>
+      <td>Yes</td>
+    </tr>
   </tbody>
 </table>
 
@@ -90,8 +95,8 @@ The `EXTERNAL_USER_SYSTEM_BASE_URL` environment variable should be set to the in
 
 ```yaml
 env:
-   - EXTERNAL_USER_SYSTEM_BASE_URL=http://fastgpt-sso:3000
-   - EXTERNAL_USER_SYSTEM_AUTH_TOKEN=xxxxx
+  - EXTERNAL_USER_SYSTEM_BASE_URL=http://fastgpt-sso:3000
+  - EXTERNAL_USER_SYSTEM_AUTH_TOKEN=xxxxx
 ```
 
 #### 2. Configure button text, icons, etc. in the commercial version admin panel.
@@ -127,28 +132,28 @@ Set the fastgpt-pro environment variable to enable automatic member sync:
 
 ```yaml
 env:
-   - "SYNC_MEMBER_CRON=0 0 * * *" # Cron expression, runs daily at 00:00. Note: uses UTC (timezone 0). For example, to sync at 12:00 Beijing time, set this to "0 4 * * *" (UTC 04:00)
+  - 'SYNC_MEMBER_CRON=0 0 * * *' # Cron expression, runs daily at 00:00. Note: uses UTC (timezone 0). For example, to sync at 12:00 Beijing time, set this to "0 4 * * *" (UTC 04:00)
 ```
 
-## Built-in Protocol/IM Configuration Examples
+## Built-in Provider Configuration Examples
 
 ### Lark
 
 #### 1. Get Parameters
 
-   App ID and App Secret
+App ID and App Secret
 
-   Go to the developer console, click on your enterprise self-built app, and view the app credentials on the Credentials & Basic Info page.
+Go to the developer console, click on your enterprise self-built app, and view the app credentials on the Credentials & Basic Info page.
 
-   ![](/imgs/sso3.png)
+![](/imgs/sso3.png)
 
 #### 2. Permission Configuration
 
-   Go to the developer console, click on your enterprise self-built app, and enable permissions on the Permission Management page under Development Configuration.
+Go to the developer console, click on your enterprise self-built app, and enable permissions on the Permission Management page under Development Configuration.
 
-   ![](/imgs/sso4.png)
+![](/imgs/sso4.png)
 
-   You can use the **Batch Import/Export Permissions** feature to import the following permission configuration:
+You can use the **Batch Import/Export Permissions** feature to import the following permission configuration:
 
 ```json
 {
@@ -172,211 +177,213 @@ Note: The accessible data scope must be set to visible to all members.
 
 #### 3. Redirect URL
 
-   Go to the developer console, click on your enterprise self-built app, and set the redirect URL in Security Settings under Development Configuration.
-   The redirect URL should follow the format `https://www.fastgpt.cn/login/provider` — replace the domain with your publicly accessible FastGPT domain.
-   ![](/imgs/sso5.png)
+Go to the developer console, click on your enterprise self-built app, and set the redirect URL in Security Settings under Development Configuration.
+The redirect URL should follow the format `https://www.fastgpt.cn/login/provider` — replace the domain with your publicly accessible FastGPT domain.
+![](/imgs/sso5.png)
 
 #### 4. yml Configuration Example
 
 ```yaml
 fastgpt-sso:
-    image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
-    container_name: fastgpt-sso
-    restart: always
-    networks:
-      - fastgpt
-    environment:
-      - SSO_PROVIDER=feishu
-      - AUTH_TOKEN=xxxxx
-      # OAuth endpoint (for private Lark deployments, replace with your private address; same below)
-      - SSO_TARGET_URL=https://accounts.feishu.cn/open-apis/authen/v1/authorize
-      # Token endpoint
-      - FEISHU_TOKEN_URL=https://open.feishu.cn/open-apis/authen/v2/oauth/token
-      # User info endpoint
-      - FEISHU_GET_USER_INFO_URL=https://open.feishu.cn/open-apis/authen/v1/user_info
-      # Redirect address — must match the URL from step 3 exactly
-      - FEISHU_REDIRECT_URI=https://fastgpt.cn/login/provider
-      # Lark App ID, usually starts with cli
-      - FEISHU_APP_ID=xxx
-      # Lark App Secret
-      - FEISHU_APP_SECRET=xxx
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
+  container_name: fastgpt-sso
+  restart: always
+  networks:
+    - fastgpt
+  environment:
+    - SSO_PROVIDER=feishu
+    - AUTH_TOKEN=xxxxx
+    # OAuth endpoint (for private Lark deployments, replace with your private address; same below)
+    - SSO_TARGET_URL=https://accounts.feishu.cn/open-apis/authen/v1/authorize
+    # Token endpoint
+    - FEISHU_TOKEN_URL=https://open.feishu.cn/open-apis/authen/v2/oauth/token
+    # User info endpoint
+    - FEISHU_GET_USER_INFO_URL=https://open.feishu.cn/open-apis/authen/v1/user_info
+    # Redirect address — must match the URL from step 3 exactly
+    - FEISHU_REDIRECT_URI=https://fastgpt.cn/login/provider
+    # Lark App ID, usually starts with cli
+    - FEISHU_APP_ID=xxx
+    # Lark App Secret
+    - FEISHU_APP_SECRET=xxx
 ```
 
 ### DingTalk
 
 #### 1. Get Parameters
 
-   CLIENT_ID and CLIENT_SECRET
+CLIENT_ID and CLIENT_SECRET
 
-   Go to the DingTalk Open Platform, click App Development, select your app, and record the Client ID and Client Secret on the Credentials & Basic Info page.
-   ![](/imgs/sso6.png)
+Go to the DingTalk Open Platform, click App Development, select your app, and record the Client ID and Client Secret on the Credentials & Basic Info page.
+![](/imgs/sso6.png)
 
 #### 2. Permission Configuration
 
-   Go to the DingTalk Open Platform, click App Development, select your app, and manage permissions on the Permission Management page under Development Configuration. Required permissions:
+Go to the DingTalk Open Platform, click App Development, select your app, and manage permissions on the Permission Management page under Development Configuration. Required permissions:
 
-   1. ***Personal phone number information***
-   2. ***Contact personal information read permission***
-   3. ***Basic permission to obtain DingTalk open interface user access credentials***
+1.  **_Personal phone number information_**
+2.  **_Contact personal information read permission_**
+3.  **_Basic permission to obtain DingTalk open interface user access credentials_**
 
 #### 3. Redirect URL
 
-   Go to the DingTalk Open Platform, click App Development, select your app, and configure on the Security Settings page under Development Configuration.
-   Two items need to be filled in:
+Go to the DingTalk Open Platform, click App Development, select your app, and configure on the Security Settings page under Development Configuration.
+Two items need to be filled in:
 
-   1. Server egress IP (list of server IPs calling DingTalk server-side APIs)
-   2. Redirect URL (callback domain)
+1.  Server egress IP (list of server IPs calling DingTalk server-side APIs)
+2.  Redirect URL (callback domain)
 
 #### 4. yml Configuration Example
 
 ```yaml
 fastgpt-sso:
-   image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
-   container_name: fastgpt-sso
-   restart: always
-   networks:
-      - fastgpt
-   environment:
-      - SSO_PROVIDER=dingtalk
-      - AUTH_TOKEN=xxxxx
-      # OAuth endpoint
-      - SSO_TARGET_URL=https://login.dingtalk.com/oauth2/auth
-      # Token endpoint
-      - DINGTALK_TOKEN_URL=https://api.dingtalk.com/v1.0/oauth2/userAccessToken
-      # User info endpoint
-      - DINGTALK_GET_USER_INFO_URL=https://oapi.dingtalk.com/v1.0/contact/users/me
-      # DingTalk App ID
-      - DINGTALK_CLIENT_ID=xxx
-      # DingTalk App Secret
-      - DINGTALK_CLIENT_SECRET=xxx
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
+  container_name: fastgpt-sso
+  restart: always
+  networks:
+    - fastgpt
+  environment:
+    - SSO_PROVIDER=dingtalk
+    - AUTH_TOKEN=xxxxx
+    # OAuth endpoint
+    - SSO_TARGET_URL=https://login.dingtalk.com/oauth2/auth
+    # Token endpoint
+    - DINGTALK_TOKEN_URL=https://api.dingtalk.com/v1.0/oauth2/userAccessToken
+    # User info endpoint
+    - DINGTALK_GET_USER_INFO_URL=https://oapi.dingtalk.com/v1.0/contact/users/me
+    # DingTalk App ID
+    - DINGTALK_CLIENT_ID=xxx
+    # DingTalk App Secret
+    - DINGTALK_CLIENT_SECRET=xxx
 ```
 
 ### WeCom
 
 #### 1. Get Parameters
 
-   1. Enterprise CorpID
+1.  Enterprise CorpID
 
-      a. Log in to the WeCom admin console with an admin account: `https://work.weixin.qq.com/wework_admin/loginpage_wx`
+    a. Log in to the WeCom admin console with an admin account: `https://work.weixin.qq.com/wework_admin/loginpage_wx`
 
-      b. Go to the "My Enterprise" page and find the Enterprise ID
+    b. Go to the "My Enterprise" page and find the Enterprise ID
 
-      ![](/imgs/sso7.png)
+    ![](/imgs/sso7.png)
 
-   2. Create an internal app for FastGPT:
+2.  Create an internal app for FastGPT:
 
-      a. Get the app's AgentID and Secret
+    a. Get the app's AgentID and Secret
 
-      b. Ensure the app's visibility scope is set to all (i.e., root department)
+    b. Ensure the app's visibility scope is set to all (i.e., root department)
 
-      ![](/imgs/sso8.png)
+    ![](/imgs/sso8.png)
 
+    ![](/imgs/sso9.png)
 
-      ![](/imgs/sso9.png)
+3.  A domain name with the following requirements:
 
-   3. A domain name with the following requirements:
+    a. Resolves to a publicly accessible server
 
-      a. Resolves to a publicly accessible server
+    b. Can serve static files at the root path (for domain ownership verification — follow the prompts, you only need to host one static file, which can be removed after verification)
 
-      b. Can serve static files at the root path (for domain ownership verification — follow the prompts, you only need to host one static file, which can be removed after verification)
+    c. Configure web authorization, JS-SDK, and WeCom authorization login
 
-      c. Configure web authorization, JS-SDK, and WeCom authorization login
+    d. You can set "Hide app in Studio" at the bottom of the WeCom Authorization Login page
 
-      d. You can set "Hide app in workbench" at the bottom of the WeCom Authorization Login page
+    ![](/imgs/sso10.png)
 
-      ![](/imgs/sso10.png)
+    ![](/imgs/sso11.png)
 
-      ![](/imgs/sso11.png)
+    ![](/imgs/sso12.png)
 
-      ![](/imgs/sso12.png)
+4.  Get the "Contact Sync Assistant" secret
 
-   4. Get the "Contact Sync Assistant" secret
+    Retrieving contacts and organization member IDs requires the "Contact Sync Assistant" secret
 
-      Retrieving contacts and organization member IDs requires the "Contact Sync Assistant" secret
+    Security & Management -- Management Tools -- Contact Sync
 
-      Security & Management -- Management Tools -- Contact Sync
+    ![](/imgs/sso13.png)
 
-      ![](/imgs/sso13.png)
+5.  Enable interface sync
 
-   5. Enable interface sync
+6.  Get the Secret
 
-   6. Get the Secret
+7.  Configure enterprise trusted IPs
 
-   7. Configure enterprise trusted IPs
-
-      ![](/imgs/sso14.png)
+    ![](/imgs/sso14.png)
 
 #### 2. yml Configuration Example
 
 ```yaml
 fastgpt-sso:
-   image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
-   container_name: fastgpt-sso
-   restart: always
-   networks:
-      - fastgpt
-   environment:
-      - AUTH_TOKEN=xxxxx
-      - SSO_PROVIDER=wecom
-      # OAuth endpoint, used in WeCom client
-      - WECOM_TARGET_URL_OAUTH=https://open.weixin.qq.com/connect/oauth2/authorize
-      # SSO endpoint, QR code scan
-      - WECOM_TARGET_URL_SSO=https://login.work.weixin.qq.com/wwlogin/sso/login
-      # Get user ID (returns ID only)
-      - WECOM_GET_USER_ID_URL=https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo
-      # Get detailed user info (everything except name)
-      - WECOM_GET_USER_INFO_URL=https://qyapi.weixin.qq.com/cgi-bin/auth/getuserdetail
-      # Get user info (has name, no other info)
-      - WECOM_GET_USER_NAME_URL=https://qyapi.weixin.qq.com/cgi-bin/user/get
-      # Get department ID list
-      - WECOM_GET_DEPARTMENT_LIST_URL=https://qyapi.weixin.qq.com/cgi-bin/department/list
-      # Get user ID list
-      - WECOM_GET_USER_LIST_URL=https://qyapi.weixin.qq.com/cgi-bin/user/list_id
-      # WeCom CorpId
-      - WECOM_CORPID=
-      # WeCom App AgentId, usually 1000xxx
-      - WECOM_AGENTID=
-      # WeCom App Secret
-      - WECOM_APP_SECRET=
-      # Contact Sync Assistant Secret
-      - WECOM_SYNC_SECRET=
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
+  container_name: fastgpt-sso
+  restart: always
+  networks:
+    - fastgpt
+  environment:
+    - AUTH_TOKEN=xxxxx
+    - SSO_PROVIDER=wecom
+    # OAuth endpoint, used in WeCom client
+    - WECOM_TARGET_URL_OAUTH=https://open.weixin.qq.com/connect/oauth2/authorize
+    # SSO endpoint, QR code scan
+    - WECOM_TARGET_URL_SSO=https://login.work.weixin.qq.com/wwlogin/sso/login
+    # Get user ID (returns ID only)
+    - WECOM_GET_USER_ID_URL=https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo
+    # Get detailed user info (everything except name)
+    - WECOM_GET_USER_INFO_URL=https://qyapi.weixin.qq.com/cgi-bin/auth/getuserdetail
+    # Get user info (has name, no other info)
+    - WECOM_GET_USER_NAME_URL=https://qyapi.weixin.qq.com/cgi-bin/user/get
+    # Get department ID list
+    - WECOM_GET_DEPARTMENT_LIST_URL=https://qyapi.weixin.qq.com/cgi-bin/department/list
+    # Get user ID list
+    - WECOM_GET_USER_LIST_URL=https://qyapi.weixin.qq.com/cgi-bin/user/list_id
+    # WeCom CorpId
+    - WECOM_CORPID=
+    # WeCom App AgentId, usually 1000xxx
+    - WECOM_AGENTID=
+    # WeCom App Secret
+    - WECOM_APP_SECRET=
+    # Contact Sync Assistant Secret
+    - WECOM_SYNC_SECRET=
 ```
 
 ### Standard OAuth 2.0
 
 We provide OAuth 2.0 integration support using the authorization code grant from RFC 6749.
 References:
+
 - [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) documentation
 - [Ruan Yifeng's blog post on OAuth 2.0](https://www.ruanyifeng.com/blog/2014/05/oauth_2_0.html)
 
 #### Parameter Requirements
 
 ##### Three Endpoints
+
 We provide a standard OAuth 2.0 integration flow requiring three endpoints:
 
 1. Login authorization endpoint (users are redirected here with parameters after clicking the SSO button), e.g., `http://example.com/oauth/authorize`
-    ```bash
-    curl -X GET\
-    "http://example.com/oauth/authorize?response_type=code&client_id=s6BhdRkqt3&state=xyz&redirect_uri=https%3A%2F%2Ffastgpt.cn%2Flogin%2Fprovider"
-    ```
-      After entering credentials, users are redirected to redirect_uri with a code parameter:
-      `https://fastgpt.cn/login/provider?code=4/P7qD2qAz4&state=xyz`
-2. Access token endpoint. After obtaining the code, make a *server-side request* to this endpoint to get the access_token, e.g., `http://example.com/oauth/access_token`
-    ```bash
-    curl -X POST\
-        -H "Content-Type: application/x-www-form-urlencoded"\
-    "http://example.com/oauth/access_token?grant_type=authorization_code&client_id=s6BhdRkqt3&client_secret=xxx&code=4/P7qD2qAz4&redirect_uri=https%3A%2F%2Ffastgpt.cn%2Flogin%2Fprovider"
-    ```
-    Note: Content-Type must be application/x-www-form-urlencoded, not application/json
+   ```bash
+   curl -X GET\
+   "http://example.com/oauth/authorize?response_type=code&client_id=s6BhdRkqt3&state=xyz&redirect_uri=https%3A%2F%2Ffastgpt.cn%2Flogin%2Fprovider"
+   ```
+   After entering credentials, users are redirected to redirect_uri with a code parameter:
+   `https://fastgpt.cn/login/provider?code=4/P7qD2qAz4&state=xyz`
+2. Access token endpoint. After obtaining the code, make a _server-side request_ to this endpoint to get the access_token, e.g., `http://example.com/oauth/access_token`
+   ```bash
+   curl -X POST\
+       -H "Content-Type: application/x-www-form-urlencoded"\
+   "http://example.com/oauth/access_token?grant_type=authorization_code&client_id=s6BhdRkqt3&client_secret=xxx&code=4/P7qD2qAz4&redirect_uri=https%3A%2F%2Ffastgpt.cn%2Flogin%2Fprovider"
+   ```
+   Note: Content-Type must be application/x-www-form-urlencoded, not application/json
 3. User info endpoint, requires passing the access_token, e.g., `http://example.com/oauth/user_info`
-    ```bash
-    curl -X GET\
-        -H "Authorization: Bearer 4/P7qD2qAz4"\
-        "http://example.com/oauth/user_info"
-    ```
-    Note: access_token is passed as the Authorization header in the format: Bearer xxxx
+   ```bash
+   curl -X GET\
+       -H "Authorization: Bearer 4/P7qD2qAz4"\
+       "http://example.com/oauth/user_info"
+   ```
+   Note: access_token is passed as the Authorization header in the format: Bearer xxxx
 
 ##### Parameter Configuration
+
 - CLIENT_ID: Required
 - CLIENT_SECRET: Optional, skip if not needed
 - SCOPE: Optional, skip if not needed
@@ -389,38 +396,194 @@ We provide a standard OAuth 2.0 integration flow requiring three endpoints:
 
 ```yaml
 fastgpt-sso:
-    image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
-    container_name: fastgpt-sso
-    restart: always
-    networks:
-        - fastgpt
-    environment:
-        - SSO_PROVIDER=oauth2
-        - AUTH_TOKEN=xxxxx
-        # OAuth2.0
-        # === Request URLs ===
-        # 1. OAuth2 login authorization URL (required)
-        - OAUTH2_AUTHORIZE_URL=
-        # 2. OAuth2 access token URL (required)
-        - OAUTH2_TOKEN_URL=
-        # 3. OAuth2 user info URL (required)
-        - OAUTH2_USER_INFO_URL=
-        # === Parameters ===
-        # 1. client_id (required)
-        - OAUTH2_CLIENT_ID=
-        # 2. client_secret (optional)
-        - OAUTH2_CLIENT_SECRET=
-        # 3. scope (optional)
-        - OAUTH2_SCOPE=
-        # === Field Mapping ===
-        # OAuth2 username field mapping (required)
-        - OAUTH2_USERNAME_MAP=
-        # OAuth2 avatar field mapping (optional)
-        - OAUTH2_AVATAR_MAP=
-        # OAuth2 member name field mapping (optional)
-        - OAUTH2_MEMBER_NAME_MAP=
-        # OAuth2 contact field mapping (optional)
-        - OAUTH2_CONTACT_MAP=
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.9.0
+  container_name: fastgpt-sso
+  restart: always
+  networks:
+    - fastgpt
+  environment:
+    - SSO_PROVIDER=oauth2
+    - AUTH_TOKEN=xxxxx
+    # OAuth2.0
+    # === Request URLs ===
+    # 1. OAuth2 login authorization URL (required)
+    - OAUTH2_AUTHORIZE_URL=
+    # 2. OAuth2 access token URL (required)
+    - OAUTH2_TOKEN_URL=
+    # 3. OAuth2 user info URL (required)
+    - OAUTH2_USER_INFO_URL=
+    # === Parameters ===
+    # 1. client_id (required)
+    - OAUTH2_CLIENT_ID=
+    # 2. client_secret (optional)
+    - OAUTH2_CLIENT_SECRET=
+    # 3. scope (optional)
+    - OAUTH2_SCOPE=
+    # === Field Mapping ===
+    # OAuth2 username field mapping (required)
+    - OAUTH2_USERNAME_MAP=
+    # OAuth2 avatar field mapping (optional)
+    - OAUTH2_AVATAR_MAP=
+    # OAuth2 member name field mapping (optional)
+    - OAUTH2_MEMBER_NAME_MAP=
+    # OAuth2 contact field mapping (optional)
+    - OAUTH2_CONTACT_MAP=
+```
+
+### LDAP User and Organization Sync
+
+The LDAP provider only synchronizes users and organizations. It does not provide login. The recommended setup is to use separate providers for login and synchronization:
+
+```yaml
+fastgpt-sso:
+  image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sso-service:v4.14.16
+  environment:
+    - SSO_PROVIDER=oauth2
+    - SSO_SYNC_PROVIDER=ldap
+    - AUTH_TOKEN=replace-with-a-sync-token
+    - LDAP_URL=ldap://ldap.example.com:389
+    - LDAP_BASE_DN=dc=example,dc=com
+    - LDAP_BIND_DN=cn=fastgpt-sync,dc=example,dc=com
+    - LDAP_BIND_PASSWORD=replace-with-readonly-password
+    - LDAP_USER_BASE_DN=ou=people,dc=example,dc=com
+    - LDAP_USER_FILTER=(&(objectClass=inetOrgPerson)(uid=*))
+    - LDAP_USER_USERNAME_ATTRIBUTE=uid
+    - LDAP_USER_MEMBER_NAME_ATTRIBUTE=displayName
+    - LDAP_USER_CONTACT_ATTRIBUTE=mail
+    - LDAP_USERNAME_PREFIX=ldap-
+    - LDAP_MEMBERSHIP_MODE=user_attribute
+    - LDAP_USER_ATTRIBUTE_ORG_BASE_DN=ou=company,dc=example,dc=com
+    - LDAP_USER_ATTRIBUTE_ORG_FILTER=(objectClass=organizationalUnit)
+    - LDAP_USER_ATTRIBUTE_ORG_NAME_ATTRIBUTE=ou
+    - LDAP_USER_ATTRIBUTE_MEMBERSHIP_ATTRIBUTE=ou
+    - LDAP_USER_ATTRIBUTE_MEMBERSHIP_VALUE_TYPE=name_or_dn
+```
+
+SSO_PROVIDER remains responsible for login. Setting SSO_SYNC_PROVIDER=ldap makes /user/list and /org/list use LDAP. LDAP does not provide login endpoints; do not set SSO_PROVIDER=ldap when SSO login is required.
+
+#### FastGPT Configuration
+
+fastgpt-pro must reach the SSO service and use the same token as SSO-service.AUTH_TOKEN:
+
+```yaml
+env:
+  - EXTERNAL_USER_SYSTEM_BASE_URL=http://fastgpt-sso:3000
+  - EXTERNAL_USER_SYSTEM_AUTH_TOKEN=replace-with-a-sync-token
+  - SYNC_MEMBER_CRON=0 0 * * *
+```
+
+Enable member synchronization in the commercial admin panel. SYNC_MEMBER_CRON uses UTC; leaving it empty disables scheduled synchronization.
+
+#### LDAP Connection Configuration
+
+| Environment variable            | Required | Default                                | Description                                                  |
+| ------------------------------- | -------- | -------------------------------------- | ------------------------------------------------------------ |
+| LDAP_URL                        | Yes      | -                                      | Only ldap:// and ldaps:// are supported; do not use https:// |
+| LDAP_BASE_DN                    | Yes      | -                                      | Default search base DN                                       |
+| LDAP_BIND_DN                    | Yes      | -                                      | Read-only synchronization account DN                         |
+| LDAP_BIND_PASSWORD              | Yes      | -                                      | Synchronization account password                             |
+| LDAP_USER_BASE_DN               | No       | LDAP_BASE_DN                           | User search base                                             |
+| LDAP_USER_FILTER                | No       | (&(objectClass=inetOrgPerson)(uid=\*)) | LDAP user filter                                             |
+| LDAP_USER_USERNAME_ATTRIBUTE    | No       | uid                                    | User identifier attribute                                    |
+| LDAP_USER_MEMBER_NAME_ATTRIBUTE | No       | displayName                            | Display name attribute                                       |
+| LDAP_USER_CONTACT_ATTRIBUTE     | No       | mail                                   | Contact attribute                                            |
+| LDAP_USER_AVATAR_ATTRIBUTE      | No       | Empty                                  | Avatar attribute; empty disables sync                        |
+| LDAP_USERNAME_PREFIX            | No       | ldap-                                  | Username prefix                                              |
+| LDAP_PAGE_SIZE                  | No       | 500                                    | LDAP page size                                               |
+| LDAP_TIMEOUT_MS                 | No       | 10000                                  | LDAP operation timeout in milliseconds                       |
+| LDAP_CONNECT_TIMEOUT_MS         | No       | 10000                                  | LDAP connection timeout in milliseconds                      |
+
+For ldaps://, configure LDAP_TLS_REJECT_UNAUTHORIZED, LDAP_TLS_CA_FILE, LDAP_TLS_CA, LDAP_TLS_CERT_FILE, LDAP_TLS_KEY_FILE, and LDAP_TLS_SERVERNAME as needed. Use LDAP_TLS_CA_FILE for a private CA. Client certificate and key must be configured together.
+
+#### Membership Modes
+
+LDAP_MEMBERSHIP_MODE supports four modes:
+
+| Mode             | Relationship                                                    | Main configuration       |
+| ---------------- | --------------------------------------------------------------- | ------------------------ |
+| user_attribute   | A user attribute, usually ou, points to an organization         | LDAP_USER_ATTRIBUTE_*    |
+| group_member_dn  | A group attribute, usually member, contains user DNs            | LDAP_GROUP_MEMBER_DN_*   |
+| user_member_of   | A user attribute, usually memberOf, contains group DNs          | LDAP_USER_MEMBER_OF_*    |
+| posix_member_uid | A group attribute, usually memberUid, contains user identifiers | LDAP_POSIX_MEMBER_UID_*  |
+
+**1. user_attribute: user attribute points to an organization**
+
+```dotenv
+LDAP_MEMBERSHIP_MODE=user_attribute
+LDAP_USER_ATTRIBUTE_ORG_BASE_DN=ou=company,dc=example,dc=com
+LDAP_USER_ATTRIBUTE_ORG_FILTER=(objectClass=organizationalUnit)
+LDAP_USER_ATTRIBUTE_ORG_NAME_ATTRIBUTE=ou
+LDAP_USER_ATTRIBUTE_MEMBERSHIP_ATTRIBUTE=ou
+LDAP_USER_ATTRIBUTE_MEMBERSHIP_VALUE_TYPE=name_or_dn
+```
+
+name_or_dn first tries a DN match and then falls back to the organization name.
+
+**2. group_member_dn: groups contain user DNs**
+
+```text
+dn: cn=engineering,ou=groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: engineering
+member: uid=alice,ou=people,dc=example,dc=com
+```
+
+```dotenv
+LDAP_MEMBERSHIP_MODE=group_member_dn
+LDAP_GROUP_MEMBER_DN_ORG_BASE_DN=ou=groups,dc=example,dc=com
+LDAP_GROUP_MEMBER_DN_ORG_FILTER=(objectClass=groupOfNames)
+LDAP_GROUP_MEMBER_DN_ORG_NAME_ATTRIBUTE=cn
+LDAP_GROUP_MEMBER_DN_MEMBER_ATTRIBUTE=member
+LDAP_GROUP_MEMBER_DN_MEMBER_VALUE_TYPE=dn
+```
+
+For groupOfUniqueNames, change the filter to objectClass=groupOfUniqueNames and usually set the member attribute to uniqueMember.
+
+**3. user_member_of: users contain group DNs**
+
+```dotenv
+LDAP_MEMBERSHIP_MODE=user_member_of
+LDAP_USER_MEMBER_OF_ORG_BASE_DN=ou=groups,dc=example,dc=com
+LDAP_USER_MEMBER_OF_ORG_FILTER=(objectClass=groupOfNames)
+LDAP_USER_MEMBER_OF_ORG_NAME_ATTRIBUTE=cn
+LDAP_USER_MEMBER_OF_MEMBERSHIP_ATTRIBUTE=memberOf
+LDAP_USER_MEMBER_OF_MEMBERSHIP_VALUE_TYPE=dn
+```
+
+User entries must contain the memberOf attribute. Some OpenLDAP deployments require the memberof overlay.
+
+**4. posix_member_uid: POSIX groups contain user UIDs**
+
+```text
+dn: cn=engineering,ou=groups,dc=example,dc=com
+objectClass: posixGroup
+cn: engineering
+memberUid: alice
+```
+
+```dotenv
+LDAP_MEMBERSHIP_MODE=posix_member_uid
+LDAP_POSIX_MEMBER_UID_ORG_BASE_DN=ou=groups,dc=example,dc=com
+LDAP_POSIX_MEMBER_UID_ORG_FILTER=(objectClass=posixGroup)
+LDAP_POSIX_MEMBER_UID_ORG_NAME_ATTRIBUTE=cn
+LDAP_POSIX_MEMBER_UID_MEMBER_ATTRIBUTE=memberUid
+LDAP_POSIX_MEMBER_UID_USER_ID_ATTRIBUTE=uid
+LDAP_POSIX_MEMBER_UID_MEMBER_VALUE_TYPE=username
+```
+
+#### Sync Results and Limitations
+
+- Organization IDs use normalized LDAP DNs, and parentId is derived from DN hierarchy.
+- If the final organization list has multiple parentless organizations, a virtual root with id ldap-virtual-root and name ROOT is inserted.
+- The user result uses orgs for organization IDs. Synced usernames default to ldap- plus the LDAP user identifier.
+- The login provider must use the same prefix and identifier rule.
+- Nested groups are not recursively expanded, and dynamic groups are not parsed.
+
+#### Manually Check the Sync Interfaces
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-sync-token' http://fastgpt-sso:3000/org/list
+curl -H 'Authorization: Bearer replace-with-a-sync-token' http://fastgpt-sso:3000/user/list
 ```
 
 ## Standard Interface Documentation
@@ -466,15 +629,14 @@ Failure:
 
 ```json
 {
-   "success": false,
-   "message": "Error message",
-   "authURL": ""
+  "success": false,
+  "message": "Error message",
+  "authURL": ""
 }
 ```
 
   </Tab>
 </Tabs>
-
 
 ### SSO Get User Info
 
@@ -494,6 +656,7 @@ curl -X GET "https://oauth.example/login/oauth/getUserInfo?code=xxxxxx" \
   <Tab value="Response Example" >
 
 Success:
+
 ```json
 {
   "success": true,
@@ -501,11 +664,12 @@ Success:
   "username": "fastgpt-123456789",
   "avatar": "https://example.webp",
   "contact": "+861234567890",
-  "memberName": "Member name (optional)",
+  "memberName": "Member name (optional)"
 }
 ```
 
 Failure:
+
 ```json
 {
   "success": false,
@@ -538,41 +702,39 @@ Warning: Only one root department can exist. If your system has multiple root de
 
 ```ts
 type OrgListResponseType = {
-    message?: string; // Error message
-    success: boolean;
-    orgList: {
-        id: string; // Unique department ID
-        name: string; // Name
-        parentId: string; // parentId — empty string for root department
-    }[];
-}
+  message?: string; // Error message
+  success: boolean;
+  orgList: {
+    id: string; // Unique department ID
+    name: string; // Name
+    parentId: string; // parentId — empty string for root department
+  }[];
+};
 ```
 
 ```json
 {
   "success": true,
   "message": "",
-   "orgList": [
-      {
-         "id": "od-125151515",
-         "name": "Root Department",
-         "parentId": ""
-      },
-      {
-         "id": "od-51516152",
-         "name": "Sub Department",
-         "parentId": "od-125151515"
-      }
-   ]
+  "orgList": [
+    {
+      "id": "od-125151515",
+      "name": "Root Department",
+      "parentId": ""
+    },
+    {
+      "id": "od-51516152",
+      "name": "Sub Department",
+      "parentId": "od-125151515"
+    }
+  ]
 }
 ```
 
   </Tab>
 </Tabs>
 
-
 ### Get Members
-
 
 <Tabs items={['Request Example','Response Example']}>
   <Tab value="Request Example" >
@@ -591,17 +753,18 @@ Return type:
 
 ```typescript
 type UserListResponseListType = {
-    message?: string; // Error message
-    success: boolean;
-    userList: {
-      username: string; // Unique ID. username must match the username returned by the SSO interface. Must include a prefix, e.g., sync-aaaaa, consistent with the SSO interface prefix
-      memberName?: string; // Name, used as tmbname
-      avatar?: string;
-      contact?: string; // email or phone number
-      orgs?: string[]; // IDs of organizations the member belongs to. Pass [] if no organization
-    }[];
-}
+  message?: string; // Error message
+  success: boolean;
+  userList: {
+    username: string; // Unique ID. username must match the username returned by the SSO interface. Must include a prefix, e.g., sync-aaaaa, consistent with the SSO interface prefix
+    memberName?: string; // Name, used as tmbname
+    avatar?: string;
+    contact?: string; // email or phone number
+    orgs?: string[]; // IDs of organizations the member belongs to. Pass [] if no organization
+  }[];
+};
 ```
+
 curl example
 
 ```json
@@ -624,15 +787,11 @@ curl example
       "orgs": ["od-125151515"]
     }
   ]
-
 }
 ```
 
   </Tab>
 </Tabs>
-
-
-
 
 ## How to Integrate Non-Standard Systems
 

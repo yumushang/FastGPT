@@ -1,116 +1,256 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Box, Flex, IconButton } from '@chakra-ui/react';
-import { useTranslation } from 'next-i18next';
-import MyIcon from '@fastgpt/web/components/common/Icon';
+import React, { useMemo, useState } from 'react';
+import { Box } from '@chakra-ui/react';
 import { useContextSelector } from 'use-context-selector';
 import { SkillDetailContext } from '../context';
-import AIModelSelector from '@/components/Select/AIModelSelector';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
-import ChatItemContextProvider from '@/web/core/chat/context/chatItemContext';
+import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
+import ChatItemContextProvider, { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
 import ChatRecordContextProvider from '@/web/core/chat/context/chatRecordContext';
-import { useSkillChatTest } from './useSkillChatTest';
-import { getNanoid } from '@fastgpt/global/common/string/tools';
-import { getSkillDebugRecords } from '@/web/core/skill/api';
-import type { LinkedPaginationProps } from '@fastgpt/global/openapi/api';
+import { streamSkillDebugChat } from '@/web/core/skill/api';
 import type { GetPaginationRecordsBodyType } from '@fastgpt/global/openapi/core/chat/record/api';
+import ChatAIModelSelector from '@/pageComponents/chat/ChatWindow/ChatAIModelSelector';
+import ChatBox from '@/components/core/chat/ChatContainer/ChatBox';
+import { ChatTypeEnum } from '@/components/core/chat/ChatContainer/ChatBox/constants';
+import { useTranslation } from 'next-i18next';
+import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import type { AppFileSelectConfigType } from '@fastgpt/global/core/app/type/config.schema';
+import type { StartChatFnProps } from '@/components/core/chat/ChatContainer/type';
+import { useMemoizedFn } from 'ahooks';
+import ProModal from '@/components/ProTip/ProModal';
+import { useSkillDebugChatStore } from '../useSkillDebugChatStore';
+import { getSkillEditChatSourceKey } from '@/web/core/chat/utils';
+import { defaultQGConfig, defaultWhisperConfig } from '@fastgpt/global/core/app/constants';
+import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { getInitChatInfo } from '@/web/core/chat/api';
+import { findClientModelByValue } from '@/web/core/ai/model/modelReference';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
-const SkillPreview = ({ chatId, restartChat }: { chatId: string; restartChat: () => void }) => {
-  const { t } = useTranslation();
-  const { skillId, sandboxState } = useContextSelector(SkillDetailContext, (v) => v);
+const fileSelectConfig: AppFileSelectConfigType = {
+  maxFiles: 10,
+  canSelectFile: true,
+  canSelectImg: true,
+  customPdfParse: false,
+  canSelectVideo: true,
+  canSelectAudio: true,
+  canSelectCustomFileExtension: false,
+  customFileExtensionList: []
+};
 
-  const { llmModelList } = useSystemStore();
-  const [selectedModel, setSelectedModel] = useState(llmModelList[0]?.model || '');
+const SkillPreview = () => {
+  const { t } = useTranslation(['skill', 'common']);
+  const { skillId, sandboxState, chatId } = useContextSelector(SkillDetailContext, (v) => ({
+    skillId: v.skillId,
+    sandboxState: v.sandboxState,
+    chatId: v.chatId
+  }));
+
+  const { feConfigs } = useSystemStore();
+  const { defaultModels } = useUserModelStore();
+  const { llmModelList } = useUserModelLists();
+  const setChatBoxData = useContextSelector(ChatItemContext, (v) => v.setChatBoxData);
+  const defaultModelId = defaultModels.llm?.modelId || llmModelList[0]?.modelId || '';
+  const [proModalOpen, setProModalOpen] = useState(false);
+  const selectedModel = useSkillDebugChatStore((state) => state.selectedModel);
+  const setSelectedModel = useSkillDebugChatStore((state) => state.setSelectedModel);
 
   const modelSelectList = useMemo(
-    () => llmModelList.map((item) => ({ label: item.name, value: item.model })),
+    () =>
+      llmModelList
+        .filter((item): item is typeof item & { modelId: string } => !!item.modelId)
+        .map((item) => ({ label: item.name, value: item.modelId })),
     [llmModelList]
   );
+  const fallbackModel = useMemo(() => {
+    const selectedModelId = findClientModelByValue({
+      models: llmModelList,
+      value: selectedModel
+    })?.modelId;
+    if (selectedModelId) return selectedModelId;
+    if (selectedModel) return selectedModel;
+    if (defaultModelId) return defaultModelId;
+    return llmModelList[0]?.modelId || '';
+  }, [defaultModelId, llmModelList, selectedModel]);
 
   const isReady = sandboxState === 'ready';
+  const sourceKey = useMemo(() => getSkillEditChatSourceKey(skillId), [skillId]);
 
-  const { ChatContainer } = useSkillChatTest({
-    skillId,
-    model: selectedModel,
-    chatId,
-    isReady
-  });
+  useRequest(
+    async () => {
+      if (!skillId || !chatId) return;
+
+      /*
+        init 失败时仍先写入本地 preview 配置，保证调试页可以用默认态渲染。
+        同一个 chat 内刷新模型配置时保留已有生成状态，避免把恢复条件提前清掉。
+      */
+      setChatBoxData((prev) => {
+        const isSameChat = prev.sourceKey === sourceKey && prev.chatId === chatId;
+
+        return {
+          ...prev,
+          sourceKey,
+          appId: '',
+          chatId,
+          title: isSameChat ? prev.title : undefined,
+          chatGenerateStatus: isSameChat ? prev.chatGenerateStatus : undefined,
+          hasBeenRead: isSameChat ? prev.hasBeenRead : undefined,
+          app: {
+            chatConfig: {
+              fileSelectConfig,
+              questionGuide: {
+                ...defaultQGConfig,
+                open: true,
+                modelId: fallbackModel
+              },
+              whisperConfig: {
+                ...defaultWhisperConfig,
+                open: true
+              }
+            },
+            name: 'Skill Preview',
+            avatar: '',
+            type: AppTypeEnum.simple,
+            pluginInputs: []
+          }
+        };
+      });
+
+      const res = await getInitChatInfo({ skillId, chatId }).catch(() => undefined);
+      if (!res) return;
+
+      /*
+        Skill Debug 的流恢复依赖刷新后重新拿到 chatGenerateStatus。
+        这里只同步会话状态，调试页自己的模型和输入配置仍由本地 preview 配置控制。
+      */
+      setChatBoxData((prev) =>
+        prev.sourceKey === sourceKey && prev.chatId === chatId
+          ? {
+              ...prev,
+              sourceKey,
+              appId: '',
+              chatId: res.chatId || chatId,
+              title: res.title,
+              chatGenerateStatus: res.chatGenerateStatus,
+              hasBeenRead: res.hasBeenRead
+            }
+          : prev
+      );
+    },
+    {
+      manual: false,
+      refreshDeps: [skillId, chatId, sourceKey, fallbackModel],
+      errorToast: ''
+    }
+  );
+
+  const ModelSelectorInput = useMemo(() => {
+    return (
+      <ChatAIModelSelector
+        modelType={ModelTypeEnum.llm}
+        h={'36px'}
+        boxShadow={'none'}
+        size={'sm'}
+        bg={'myGray.50'}
+        rounded={'10px'}
+        value={fallbackModel}
+        list={modelSelectList}
+        onChange={setSelectedModel}
+      />
+    );
+  }, [fallbackModel, modelSelectList, setSelectedModel]);
+
+  const onStartChat = useMemoizedFn(
+    async ({ messages, responseChatItemId, controller, generatingMessage }: StartChatFnProps) => {
+      const histories = messages.slice(-1);
+
+      const { responseText } = await streamSkillDebugChat({
+        data: {
+          skillId,
+          chatId,
+          messages: histories,
+          modelId: fallbackModel,
+          responseChatItemId
+        },
+        onMessage: generatingMessage,
+        abortCtrl: controller
+      });
+
+      return { responseText };
+    }
+  );
 
   return (
-    <Flex h={'100%'} direction={'column'} py={'16px'} px={'24px'}>
-      {/* Header */}
-      <Flex alignItems={'center'} justifyContent={'space-between'} mb={4} flexShrink={0}>
-        <Box fontSize={'18px'} fontWeight={500} color={'#111824'} lineHeight={'28px'}>
-          {t('skill:detail_tab_preview')}
-        </Box>
-        <Flex alignItems={'center'} gap={'8px'}>
-          <AIModelSelector
-            w={'200px'}
-            size={'sm'}
-            value={selectedModel}
-            list={modelSelectList}
-            onChange={(val) => setSelectedModel(val)}
-          />
-          <IconButton
-            w={'32px'}
-            h={'32px'}
-            minW={'32px'}
-            icon={<MyIcon name={'common/clearLight'} w={'14px'} />}
-            variant={'whiteDanger'}
-            borderRadius={'md'}
-            aria-label={'clear'}
-            onClick={(e) => {
-              e.stopPropagation();
-              restartChat();
-            }}
-          />
-        </Flex>
-      </Flex>
-
-      {/* Chat area */}
-      <Box flex={1} overflow={'hidden'}>
-        <ChatContainer />
-      </Box>
-    </Flex>
+    <Box h={'100%'} w={'100%'} overflow={'hidden'}>
+      <ChatBox
+        isReady={isReady}
+        sourceTarget={{ sourceType: ChatSourceTypeEnum.skillEdit, sourceId: skillId }}
+        chatId={chatId}
+        chatType={ChatTypeEnum.test}
+        features={{
+          markRead: false,
+          voice: true,
+          tts: false,
+          inputGuide: true,
+          autoResume: true,
+          sandbox: false
+        }}
+        onStartChat={onStartChat}
+        InputLeftComponent={ModelSelectorInput}
+        disabledSendTip={isReady ? undefined : t('sandbox_lazy_init')}
+        dialogTips={t('common:core.chat.Type a message')}
+        pl={'16px'}
+        pr={0}
+        maxW={'100%'}
+        boxBodyProps={{ px: 0, pr: '8px', maxW: '100%', mx: 0 }}
+        inputBodyProps={{ maxW: '100%', mx: 0, px: 0, pl: 0, pr: '8px' }}
+        EmptyState={
+          <Box
+            w="100%"
+            color="myGray.500"
+            fontSize="sm"
+            textAlign="center"
+            lineHeight="20px"
+            whiteSpace="pre-wrap"
+          >
+            {feConfigs?.isPlus ? (
+              t('empty_state_tip')
+            ) : (
+              <>
+                {t('empty_state_community_prefix')}
+                <Box
+                  as="button"
+                  type="button"
+                  color="primary.600"
+                  fontWeight={500}
+                  cursor="pointer"
+                  onClick={() => setProModalOpen(true)}
+                >
+                  {t('empty_state_community_upgrade')}
+                </Box>
+                {t('empty_state_community_suffix')}
+              </>
+            )}
+          </Box>
+        }
+      />
+      <ProModal isOpen={proModalOpen} onClose={() => setProModalOpen(false)} />
+    </Box>
   );
 };
 
-const CHAT_ID_STORAGE_KEY = (skillId: string) => `skill_debug_chatId_${skillId}`;
-
 const Render = () => {
-  const { skillId } = useContextSelector(SkillDetailContext, (v) => v);
-  const [chatId, setChatId] = useState(() => {
-    const stored = localStorage.getItem(CHAT_ID_STORAGE_KEY(skillId));
-    if (stored) return stored;
-    const newId = getNanoid(24);
-    localStorage.setItem(CHAT_ID_STORAGE_KEY(skillId), newId);
-    return newId;
-  });
+  const { skillId, chatId } = useContextSelector(SkillDetailContext, (v) => ({
+    skillId: v.skillId,
+    chatId: v.chatId
+  }));
 
-  const chatRecordProviderParams = useMemo(
+  const chatRecordProviderParams = useMemo<GetPaginationRecordsBodyType>(
     () => ({
-      appId: skillId,
+      skillId,
       chatId
     }),
     [skillId, chatId]
-  );
-
-  const restartChat = useCallback(() => {
-    const newId = getNanoid(24);
-    localStorage.setItem(CHAT_ID_STORAGE_KEY(skillId), newId);
-    setChatId(newId);
-  }, [skillId]);
-
-  const skillFetchFn = useCallback(
-    (data: LinkedPaginationProps<GetPaginationRecordsBodyType>) =>
-      getSkillDebugRecords({
-        skillId,
-        chatId: data.chatId!,
-        pageSize: data.pageSize,
-        initialId: data.initialId,
-        nextId: data.nextId,
-        prevId: data.prevId
-      }),
-    [skillId]
   );
 
   return (
@@ -122,10 +262,11 @@ const Render = () => {
       showRunningStatus={true}
       showSkillReferences={true}
       showWholeResponse={false}
+      showPoints={true}
       showAvatar={false}
     >
-      <ChatRecordContextProvider params={chatRecordProviderParams} fetchFn={skillFetchFn}>
-        <SkillPreview chatId={chatId} restartChat={restartChat} />
+      <ChatRecordContextProvider params={chatRecordProviderParams}>
+        <SkillPreview />
       </ChatRecordContextProvider>
     </ChatItemContextProvider>
   );

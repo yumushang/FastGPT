@@ -1,25 +1,33 @@
 import type { NextApiResponse } from 'next';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
 import { DelChatHistorySchema } from '@fastgpt/global/openapi/core/chat/history/api';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
 import { NextAPI } from '@/service/middleware/entry';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { ChatErrEnum } from '@fastgpt/global/common/error/code/chat';
+import { buildChatHistoryMatch } from '@/service/core/chat/history';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { ReadPermissionVal, WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 
 /* delete single chat history (soft delete) */
-export async function handler(req: ApiRequestProps, res: NextApiResponse) {
-  const { appId, chatId } = parseApiInput({ req, querySchema: DelChatHistorySchema }).query;
+export async function handler(req: ApiRequestProps, _res: NextApiResponse) {
+  const { query } = parseApiInput({ req, querySchema: DelChatHistorySchema });
+  const { sourceType, sourceId, chatId, outLinkAuthData } = query;
 
-  await authChatCrud({
+  const per = sourceType === ChatSourceTypeEnum.skillEdit ? WritePermissionVal : ReadPermissionVal;
+  const match = await buildChatHistoryMatch({
     req,
-    authToken: true,
-    authApiKey: true,
-    ...req.query
+    sourceType,
+    sourceId,
+    chatId,
+    outLinkAuthData,
+    per
   });
+  if (!match) return Promise.reject(ChatErrEnum.unAuthChat);
 
   await MongoChat.updateOne(
     {
-      appId,
+      ...match,
       chatId
     },
     {

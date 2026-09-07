@@ -12,6 +12,7 @@ export type UsageSchemaType = {
   source: `${UsageSourceEnum}`;
 
   appId?: string;
+  skillId?: string;
   datasetId?: string;
 
   /** @deprecated */
@@ -28,6 +29,8 @@ export type UsageItemSchemaType = {
 } & UsageItemCountType;
 
 export type UsageItemCountType = {
+  modelId?: string;
+  /** @deprecated 历史用量记录使用 provider model 标识。 */
   model?: string;
   inputTokens?: number;
   outputTokens?: number;

@@ -104,18 +104,19 @@ In **App Launchpad**, select FastGPT, click **Change**, and you'll see environme
 ![](../../../public/imgs/fastgptonsealos1.png)
 
 <Alert icon="🤖" context="success">
-  On Sealos, FastGPT runs 1 service and 2 databases. When pausing or deleting, handle the databases together. (You can start them during the day and pause at night to save costs.)
+  On Sealos, FastGPT runs 1 service and 2 databases. When pausing or deleting, handle the databases
+  together. (You can start them during the day and pause at night to save costs.)
 </Alert>
 
 ### How to Update/Upgrade FastGPT
 
-[Upgrade script documentation](../upgrading/upgrade-intruction.en.mdx) — read the docs first to determine which version to upgrade to. Do not skip versions.
+[Upgrade script documentation](../upgrading/upgrade-instruction.en.mdx) — read the docs first to determine which version to upgrade to. Do not skip versions.
 
 For example, if you're on version 4.5 and want to upgrade to 4.5.1: change the image version to v4.5.1, run the upgrade script, wait for completion, then continue upgrading. If the target version doesn't require initialization, skip it.
 
 Upgrade steps:
 
-1. Check the [update documentation](../upgrading/upgrade-intruction.en.mdx) to confirm the target version — avoid skipping versions.
+1. Check the [update documentation](../upgrading/upgrade-instruction.en.mdx) to confirm the target version — avoid skipping versions.
 2. Open Sealos app management
 3. There are 2 apps: fastgpt, fastgpt-pro
 4. Click the 3 dots on the right side of the app, then **Change**. Or click details, then **Change** in the top right.
@@ -138,13 +139,13 @@ Click **Change** on the app -> **Custom Domain** -> enter domain -> configure do
 
 ![](../../../public/imgs/onsealos4.png)
 
-### How to Modify Config Files
+### How to Modify Environment Variables
 
-Open Sealos app management -> find the app -> **Change** -> scroll down to advanced configuration where you'll find config files -> add new or click an existing config file to edit -> click confirm change in the top right.
+Open Sealos app management -> find the app -> **Change** -> edit environment variables -> click confirm change in the top right.
 
 ![](../../../public/imgs/onsealos5.png)
 
-[Config file reference](../config/json.en.mdx)
+[Environment Variables](../config/env.en.mdx)
 
 ### Modify Site Name and Favicon
 

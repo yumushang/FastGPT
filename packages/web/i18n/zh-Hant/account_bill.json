@@ -1,6 +1,7 @@
 {
   "Invoice_document": "發票文件",
   "all": "全部",
+  "apply_invoice": "申請開票",
   "back": "返回",
   "bank_account": "開戶帳號",
   "bank_name": "開戶銀行",
@@ -27,7 +28,7 @@
   "save_failed": "儲存異常",
   "save_success": "儲存成功",
   "submit_failed": "提交失敗",
-  "submit_success": "提交成功",
+  "submit_success": "開票申請成功",
   "submitted": "已提交",
   "support_wallet_apply_invoice": "可開立帳單",
   "support_wallet_bill_tag_invoice": "帳單發票",
@@ -36,5 +37,10 @@
   "total_amount": "總金額",
   "type": "類型",
   "unit_code": "統一信用代碼",
-  "wecom_not_pay_tip": "未支付，即將跳轉支付地址"
+  "wecom_not_pay_tip": "未支付，即將跳轉支付地址",
+  "status": "狀態",
+  "support_wallet_amount": "金額",
+  "yes": "是",
+  "no": "否",
+  "yuan": "{{amount}}元"
 }

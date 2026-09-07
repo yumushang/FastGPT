@@ -19,6 +19,20 @@ export const adminAuditLogMap = {
       userName?: string;
     }
   },
+  [AdminAuditEventEnum.ADMIN_DELETE_USER]: {
+    content: i18nT('account_team:log_admin_delete_user'),
+    typeLabel: i18nT('account_team:admin_delete_user'),
+    params: {} as {
+      userId?: string;
+      userName?: string;
+      operatorUserId?: string;
+      operatorType?: 'admin';
+      requestSource?: 'admin';
+      requestedAt?: Date;
+      scheduledCancelAt?: Date;
+      requestId?: string;
+    }
+  },
   [AdminAuditEventEnum.ADMIN_UPDATE_TEAM]: {
     content: i18nT('account_team:log_admin_update_team'),
     typeLabel: i18nT('account_team:admin_update_team'),
@@ -476,6 +490,50 @@ export const auditLogMap = {
     typeLabel: i18nT('account_team:change_member_name_self'),
     params: {} as { name?: string; oldName: string; newName: string }
   },
+  [AuditEventEnum.ACCOUNT_CANCELLATION_SUBMIT]: {
+    content: i18nT('account_team:log_account_cancellation_submit'),
+    typeLabel: i18nT('account_team:account_cancellation_submit'),
+    params: {} as {
+      userId: string;
+      operatorUserId: string;
+      operatorType: 'self';
+      requestSource: 'self';
+      verificationMethod: string;
+      verificationProvider?: string;
+      affectedTeamIds: string[];
+      requestedAt: Date;
+      scheduledCancelAt: Date;
+      requestId?: string;
+    }
+  },
+  [AuditEventEnum.ACCOUNT_CANCELLATION_CANCEL]: {
+    content: i18nT('account_team:log_account_cancellation_cancel'),
+    typeLabel: i18nT('account_team:account_cancellation_cancel'),
+    params: {} as {
+      userId: string;
+      operatorUserId: string;
+      operatorType: 'self';
+      requestSource: 'self';
+      requestedAt: Date;
+      scheduledCancelAt: Date;
+      requestId?: string;
+    }
+  },
+  [AuditEventEnum.ACCOUNT_CANCELLATION_FINALIZE]: {
+    content: i18nT('account_team:log_account_cancellation_finalize'),
+    typeLabel: i18nT('account_team:account_cancellation_finalize'),
+    params: {} as {
+      userId: string;
+      operatorUserId: string;
+      operatorType: 'system' | 'admin';
+      requestSource: 'self' | 'admin';
+      requestedAt: Date;
+      scheduledCancelAt: Date;
+      finalizedAt: Date;
+      requestId?: string;
+      cronExecutionId?: string;
+    }
+  },
   [AuditEventEnum.PURCHASE_PLAN]: {
     content: i18nT('account_team:log_purchase_plan'),
     typeLabel: i18nT('account_team:purchase_plan'),
@@ -496,6 +554,21 @@ export const auditLogMap = {
     typeLabel: i18nT('account_team:set_invoice_header'),
     params: {} as { name?: string }
   },
+  [AuditEventEnum.START_ENTERPRISE_AUTH]: {
+    content: i18nT('account_team:log_start_enterprise_auth'),
+    typeLabel: i18nT('account_team:start_enterprise_auth'),
+    params: {} as { name?: string; enterpriseName: string }
+  },
+  [AuditEventEnum.VERIFY_ENTERPRISE_AUTH_AMOUNT]: {
+    content: i18nT('account_team:log_verify_enterprise_auth_amount'),
+    typeLabel: i18nT('account_team:verify_enterprise_auth_amount'),
+    params: {} as { name?: string; enterpriseName: string }
+  },
+  [AuditEventEnum.RESET_ENTERPRISE_AUTH_TASK]: {
+    content: i18nT('account_team:log_reset_enterprise_auth_task'),
+    typeLabel: i18nT('account_team:reset_enterprise_auth_task'),
+    params: {} as { name?: string; enterpriseName: string }
+  },
   [AuditEventEnum.CREATE_API_KEY]: {
     content: i18nT('account_team:log_create_api_key'),
     typeLabel: i18nT('account_team:create_api_key'),
@@ -504,6 +577,11 @@ export const auditLogMap = {
   [AuditEventEnum.UPDATE_API_KEY]: {
     content: i18nT('account_team:log_update_api_key'),
     typeLabel: i18nT('account_team:update_api_key'),
+    params: {} as { name?: string; keyName: string }
+  },
+  [AuditEventEnum.COPY_API_KEY]: {
+    content: i18nT('account_team:log_copy_api_key'),
+    typeLabel: i18nT('account_team:copy_api_key'),
     params: {} as { name?: string; keyName: string }
   },
   [AuditEventEnum.DELETE_API_KEY]: {

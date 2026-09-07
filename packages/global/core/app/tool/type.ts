@@ -1,11 +1,9 @@
+import z from 'zod';
 import type { StoreEdgeItemType } from '../../workflow/type/edge';
 import type { StoreNodeItemType } from '../../workflow/type/node';
-import type { FlowNodeTemplateType } from '../../workflow/type/node';
-import type { WorkflowTemplateType } from '../../workflow/type';
-import type { FlowNodeInputItemType, FlowNodeOutputItemType } from '../../workflow/type/io';
-import type { I18nStringType } from '../../../common/i18n/type';
-import type { PluginStatusType, SystemPluginToolTagType } from '../../plugin/type';
-import type { UserTagsEnum } from '../../../support/user/type';
+import { NodeToolConfigTypeSchema } from '../../workflow/type/node';
+import type { AppChatConfigType } from '../type';
+import { CanonicalAgentToolInputConfigSchema } from '../../workflow/migration';
 
 export type AppToolRuntimeType = {
   id: string;
@@ -18,60 +16,44 @@ export type AppToolRuntimeType = {
   isTool?: boolean;
   nodes: StoreNodeItemType[];
   edges: StoreEdgeItemType[];
+  chatConfig?: AppChatConfigType;
   currentCost?: number;
   systemKeyCost?: number;
   hasTokenFee?: boolean;
-};
-
-// System tool
-export type AppToolTemplateItemType = WorkflowTemplateType & {
-  status?: PluginStatusType;
-  // FastGPT-plugin tool
-  inputs?: FlowNodeInputItemType[];
-  outputs?: FlowNodeOutputItemType[];
-  versionList?: {
-    value: string;
-    description?: string;
-
-    inputs: FlowNodeInputItemType[];
-    outputs: FlowNodeOutputItemType[];
-  }[];
-
-  // Admin workflow tool
+  /** 系统工具关联的真实 workflow app。存在时按系统级 workflow tool 处理。 */
   associatedPluginId?: string;
-  userGuide?: string;
-
-  // commercial plugin config
-  originCost?: number; // n points/one time
-  currentCost?: number;
-  systemKeyCost?: number;
-  hasTokenFee?: boolean;
-  pluginOrder?: number;
-
-  tags?: string[] | null;
-  defaultInstalled?: boolean;
-  isOfficial?: boolean;
-
-  // Admin config
-  inputList?: FlowNodeInputItemType['inputList'];
-  inputListVal?: Record<string, any>;
-  hasSystemSecret?: boolean;
-
-  // User tag filtering
-  hideTags?: UserTagsEnum[] | null;
-  promoteTags?: UserTagsEnum[] | null;
-
-  /** @deprecated */
-  isActive?: boolean; //use tags instead
-  /** @deprecated */
-  templateType?: string;
 };
 
-export type AppToolTemplateListItemType = Omit<
-  AppToolTemplateItemType,
-  'name' | 'intro' | 'workflow'
-> & {
-  name: string;
-  intro: string;
-  tags?: SystemPluginToolTagType[];
-};
+/**
+ * Agent 工具中单个输入的持久化配置。
+ *
+ * 数据位于 Agent 节点 `inputs[selectedTools].value[*].inputs`，随工作流草稿或版本快照保存。
+ * 当前格式只保存字段关联和输入来源：`key` 标识工具输入，`mode` 决定由模型生成还是使用
+ * `AgentTool.config[key]` 中的固定值。历史完整 NodeIO 快照只在 workflow migration 边界预处理。
+ */
+export const AgentToolInputConfigSchema = CanonicalAgentToolInputConfigSchema;
+export type AgentToolInputConfigType = z.infer<typeof AgentToolInputConfigSchema>;
+
+const AgentToolBaseSchema = z.object({
+  id: z.string(),
+  // 空字符串表示保持最新版本，不能在序列化时被 truthy 判断过滤。
+  version: z.string().optional(),
+  source: z.string().optional(),
+  toolConfig: NodeToolConfigTypeSchema.optional(),
+  inputs: z.array(AgentToolInputConfigSchema).optional(),
+  config: z.record(z.string(), z.any())
+});
+
+export const AgentToolSchema = AgentToolBaseSchema;
+export type AgentToolType = z.infer<typeof AgentToolSchema>;
+
+// // System tool
+
+// export type AppToolTemplateListItemType = Omit<
+//   AppToolTemplateItemType,
+//   'name' | 'intro' | 'workflow'
+// > & {
+//   name: string;
+//   intro: string;
+//   tags?: SystemPluginToolTagType[];
+// };

@@ -1,5 +1,5 @@
 /* 模型的知识库 */
-import { connectionMongo, getMongoModel } from '../../../common/mongo';
+import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo';
 const { Schema } = connectionMongo;
 import { type DatasetTrainingSchemaType } from '@fastgpt/global/core/dataset/type';
 import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
@@ -11,7 +11,6 @@ import {
 } from '@fastgpt/global/support/user/team/constant';
 import { DatasetDataIndexTypeEnum } from '@fastgpt/global/core/dataset/data/constants';
 import { DatasetDataCollectionName } from '../data/schema';
-import { getLogger, LogCategories } from '../../../common/logger';
 
 export const DatasetTrainingCollectionName = 'dataset_trainings';
 
@@ -44,7 +43,7 @@ const TrainingDataSchema = new Schema({
     enum: Object.values(TrainingModeEnum),
     required: true
   },
-
+  synonymVersion: Number,
   expireAt: {
     // It will be deleted after 7 days
     type: Date,
@@ -69,6 +68,9 @@ const TrainingDataSchema = new Schema({
   },
   imageId: String,
   imageDescMap: Object,
+  dataMetadata: {
+    type: Object
+  },
   chunkIndex: {
     type: Number,
     default: 0
@@ -120,11 +122,23 @@ TrainingDataSchema.virtual('data', {
 });
 
 // lock training data(teamId); delete training data
-TrainingDataSchema.index({ teamId: 1, datasetId: 1 });
+defineIndex(TrainingDataSchema, { key: { teamId: 1, datasetId: 1 } });
+// collection 级状态、错误列表、删除、详情
+defineIndex(TrainingDataSchema, {
+  key: {
+    teamId: 1,
+    datasetId: 1,
+    collectionId: 1
+  }
+});
 // get training data and sort
-TrainingDataSchema.index({ mode: 1, retryCount: 1, lockTime: 1, weight: -1 });
-TrainingDataSchema.index({ expireAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 }); // 7 days
-
+defineIndex(TrainingDataSchema, {
+  key: { mode: 1, retryCount: 1, lockTime: 1, weight: -1 }
+});
+defineIndex(TrainingDataSchema, {
+  key: { expireAt: 1 },
+  options: { expireAfterSeconds: 7 * 24 * 60 * 60 }
+});
 export const MongoDatasetTraining = getMongoModel<DatasetTrainingSchemaType>(
   DatasetTrainingCollectionName,
   TrainingDataSchema

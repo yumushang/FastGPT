@@ -2,7 +2,6 @@
 import { MongoApp } from '../../../core/app/schema';
 import { type AppDetailType } from '@fastgpt/global/core/app/type';
 import {
-  NullRoleVal,
   PerResourceTypeEnum,
   ReadPermissionVal,
   ReadRoleVal
@@ -15,9 +14,13 @@ import { type PermissionValueType } from '@fastgpt/global/support/permission/typ
 import { AppFolderTypeList, AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
 import { type AuthModeType, type AuthResponseType } from '../type';
-import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
+import {
+  AppReadChatLogPerVal,
+  AppReadChatLogRoleVal
+} from '@fastgpt/global/support/permission/app/constant';
 import { parseHeaderCert } from '../auth/common';
 import { sumPer } from '@fastgpt/global/support/permission/utils';
+import { shouldInheritResourcePermission } from '../resourcePermissionPolicy';
 
 export const authWorkflowToolByTmbId = async ({
   tmbId,
@@ -80,16 +83,20 @@ export const authAppByTmbId = async ({
 
       return {
         ...app,
-        permission: new AppPermission({ isOwner: false, role: ReadRoleVal })
+        permission: new AppPermission({
+          isOwner: false,
+          role: sumPer(ReadRoleVal, AppReadChatLogRoleVal)
+        })
       };
     }
 
     const isOwner = tmbPer.isOwner || String(app.tmbId) === String(tmbId);
 
     const isGetParentClb =
-      app.inheritPermission && !AppFolderTypeList.includes(app.type) && !!app.parentId;
-
-    const [folderPer = NullRoleVal, myPer = NullRoleVal] = await Promise.all([
+      shouldInheritResourcePermission(app.inheritPermission) &&
+      !AppFolderTypeList.includes(app.type) &&
+      !!app.parentId;
+    const [folderPer = 0, myPer = 0] = await Promise.all([
       isGetParentClb
         ? getTmbPermission({
             teamId,
@@ -97,7 +104,7 @@ export const authAppByTmbId = async ({
             resourceId: app.parentId!,
             resourceType: PerResourceTypeEnum.app
           })
-        : NullRoleVal,
+        : 0,
       getTmbPermission({
         teamId,
         tmbId,

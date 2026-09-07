@@ -4,7 +4,11 @@ import {
   type UpdateFeedbackReadStatusResponseType
 } from '@fastgpt/global/openapi/core/chat/feedback/api';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
-import { ChatRoleEnum, ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  ChatRoleEnum,
+  ChatSourceEnum,
+  ChatSourceTypeEnum
+} from '@fastgpt/global/core/chat/constants';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { MongoChatItem } from '@fastgpt/service/core/chat/chatItemSchema';
@@ -39,6 +43,7 @@ describe('updateFeedbackReadStatus api test', () => {
     await MongoChat.create({
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       chatId,
       source: ChatSourceEnum.test
@@ -49,6 +54,7 @@ describe('updateFeedbackReadStatus api test', () => {
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
       userId: testUser.userId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       chatId,
       dataId,
@@ -69,7 +75,7 @@ describe('updateFeedbackReadStatus api test', () => {
   it('should mark feedback as read', async () => {
     const res = await Call<
       UpdateFeedbackReadStatusBodyType,
-      {},
+      Record<string, never>,
       UpdateFeedbackReadStatusResponseType
     >(handler, {
       auth: testUser,
@@ -101,7 +107,7 @@ describe('updateFeedbackReadStatus api test', () => {
 
     const res = await Call<
       UpdateFeedbackReadStatusBodyType,
-      {},
+      Record<string, never>,
       UpdateFeedbackReadStatusResponseType
     >(handler, {
       auth: testUser,
@@ -132,7 +138,7 @@ describe('updateFeedbackReadStatus api test', () => {
 
     const res = await Call<
       UpdateFeedbackReadStatusBodyType,
-      {},
+      Record<string, never>,
       UpdateFeedbackReadStatusResponseType
     >(handler, {
       auth: unauthorizedUser,
@@ -149,6 +155,84 @@ describe('updateFeedbackReadStatus api test', () => {
   });
 
   it('should only update AI role chat items', async () => {
+    const sharedDataId = getNanoid();
+
+    await MongoChatItem.create([
+      {
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: sharedDataId,
+        obj: ChatRoleEnum.Human,
+        value: [
+          {
+            type: 'text',
+            text: {
+              content: 'Test question'
+            }
+          }
+        ],
+        userBadFeedback: 'Human feedback should stay unchanged',
+        isFeedbackRead: false
+      },
+      {
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: sharedDataId,
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            type: 'text',
+            text: {
+              content: 'Test response'
+            }
+          }
+        ],
+        isFeedbackRead: false
+      }
+    ]);
+
+    const res = await Call<
+      UpdateFeedbackReadStatusBodyType,
+      Record<string, never>,
+      UpdateFeedbackReadStatusResponseType
+    >(handler, {
+      auth: testUser,
+      body: {
+        appId,
+        chatId,
+        dataId: sharedDataId,
+        isRead: true
+      }
+    });
+
+    expect(res.code).toBe(200);
+
+    const humanChatItem = await MongoChatItem.findOne({
+      appId,
+      chatId,
+      dataId: sharedDataId,
+      obj: ChatRoleEnum.Human
+    });
+    const aiChatItem = await MongoChatItem.findOne({
+      appId,
+      chatId,
+      dataId: sharedDataId,
+      obj: ChatRoleEnum.AI
+    });
+
+    expect(humanChatItem?.isFeedbackRead).toBe(false);
+    expect(aiChatItem?.isFeedbackRead).toBe(true);
+  });
+
+  it('should not update human chat items without feedback', async () => {
     const humanDataId = getNanoid();
 
     // Create a human message
@@ -156,6 +240,7 @@ describe('updateFeedbackReadStatus api test', () => {
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
       userId: testUser.userId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       chatId,
       dataId: humanDataId,
@@ -173,7 +258,7 @@ describe('updateFeedbackReadStatus api test', () => {
 
     const res = await Call<
       UpdateFeedbackReadStatusBodyType,
-      {},
+      Record<string, never>,
       UpdateFeedbackReadStatusResponseType
     >(handler, {
       auth: testUser,
@@ -200,7 +285,7 @@ describe('updateFeedbackReadStatus api test', () => {
   it('should handle non-existent dataId gracefully', async () => {
     const res = await Call<
       UpdateFeedbackReadStatusBodyType,
-      {},
+      Record<string, never>,
       UpdateFeedbackReadStatusResponseType
     >(handler, {
       auth: testUser,

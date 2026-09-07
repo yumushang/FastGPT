@@ -1,6 +1,10 @@
 ---
-title: V4.6.9 (Includes Upgrade Script)
+title: V4.6.9
 description: FastGPT V4.6.9 Release Notes
+releaseTime: '2024-03-11'
+upgradeTags:
+  - CONFIG
+  - MIGRATION
 ---
 
 ## Update Commercial Edition Environment Variables
@@ -23,20 +27,20 @@ curl --location --request POST 'https://{{host}}/api/admin/initv469' \
 ```
 
 1. Resets the usage tracking table.
-2. Runs stale data cleanup (removes invalid files, images, Knowledge Base collections, and vectors).
+2. Runs stale data cleanup (removes invalid files, images, Dataset collections, and vectors).
 
 ## External API Updates
 
-1. Due to billing system changes, the [share link chat reporting endpoint](../../../openapi/share.en.mdx#5-编写对话结果上报接口可选) requires some adjustments. The `price` field has been replaced by `totalPoints`. The `inputToken` and `outputToken` fields are no longer provided — only a `token` field (total token count) is returned.
+1. Due to billing system changes, the [share link chat reporting endpoint](../../../guide/build/publish/link.en.mdx#5-implement-the-chat-result-reporting-endpoint-optional) requires some adjustments. The `price` field has been replaced by `totalPoints`. The `inputToken` and `outputToken` fields are no longer provided — only a `token` field (total token count) is returned.
 
 ## V4.6.9 Release Notes
 
-1. Commercial Edition - Knowledge Base now supports an "Enhanced Processing" training mode that generates additional index types.
-2. New - Improved variable hints for the HTTP module.
-3. New - HTTP module supports OpenAI single-endpoint import.
+1. Commercial Edition - Dataset now supports an "Enhanced Processing" mode that generates additional index types.
+2. New - Improved variable hints for the HTTP node.
+3. New - HTTP node supports OpenAI single-endpoint import.
 4. New - Global variables now support external variables, which can be passed via share link query parameters or the API `variables` parameter.
-5. New - Content extraction module now supports default values.
-6. Improved - Query completion now includes English language support. It can also be configured as a standalone module for reuse.
+5. New - Content extraction node now supports default values.
+6. Improved - Query rewriting now includes English language support. It can also be configured as a standalone node for reuse.
 7. Improved - Rewrote the usage tracking system.
 8. Improved - Token-based history filtering now keeps an even number of messages to prevent errors with certain models.
 9. Improved - Share link SEO now displays the app name and avatar directly.

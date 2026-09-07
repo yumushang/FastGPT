@@ -1,28 +1,67 @@
-import {
-  type EmbeddingModelItemType,
-  type LLMModelItemType
-} from '@fastgpt/global/core/ai/model.schema';
+import type { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { MyModelItemType } from '@fastgpt/global/openapi/core/ai/model/api';
+import type {
+  FastGPTFeConfigsType,
+  FastGPTRegisterMethodType
+} from '@fastgpt/global/common/system/types';
 import { useSystemStore } from './useSystemStore';
+import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
 import { getWebReqUrl } from '@fastgpt/web/common/system/utils';
+import {
+  findClientModelByReference,
+  findClientModelByValue
+} from '@/web/core/ai/model/modelReference';
+
+type MyLLMModelType = Extract<MyModelItemType, { type: ModelTypeEnum.llm }>;
+type MyEmbeddingModelType = Extract<MyModelItemType, { type: ModelTypeEnum.embedding }>;
+
+/**
+ * 获取真实支持的自助注册方式，兼容过滤旧配置中被混入的 sync 团队模式。
+ */
+export const getRegisterMethods = (feConfigs?: FastGPTFeConfigsType): FastGPTRegisterMethodType[] =>
+  feConfigs?.register_method?.filter(
+    (method): method is FastGPTRegisterMethodType => method === 'email' || method === 'phone'
+  ) ?? [];
+
+/**
+ * 判断是否为成员同步模式。teamMode 是当前权威字段；旧 register_method: ['sync']
+ * 仅用于兼容缺少 teamMode 的历史配置，避免新旧字段冲突时前后端模式不一致。
+ */
+export const getIsMemberSyncMode = (feConfigs?: FastGPTFeConfigsType) => {
+  if (feConfigs?.teamMode) {
+    return feConfigs.teamMode === 'sync';
+  }
+
+  return !!feConfigs?.register_method?.includes('sync');
+};
 
 export const downloadFetch = async ({
   url,
   filename,
-  body
+  body,
+  waitResponse = false
 }: {
   url: string;
   filename: string;
   body?: Record<string, any>;
+  waitResponse?: boolean;
 }) => {
-  if (body) {
-    // fetch data with POST method if body exists
+  if (body || waitResponse) {
     const response = await fetch(getWebReqUrl(url), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
+      method: body ? 'POST' : 'GET',
+      ...(body
+        ? {
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          }
+        : {})
     });
+
+    if (!response.ok) {
+      throw new Error((await response.text()) || response.statusText);
+    }
 
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
@@ -46,27 +85,27 @@ export const downloadFetch = async ({
   }
 };
 
-export const getWebLLMModel = (model?: string) => {
-  const list = useSystemStore.getState().llmModelList;
-  const defaultModels = useSystemStore.getState().defaultModels;
+export const getWebLLMModel = (model?: string, llmList: MyLLMModelType[] = []) => {
+  const defaultModels = useUserModelStore.getState().defaultModels;
 
-  return list.find((item) => item.model === model || item.name === model) ?? defaultModels.llm!;
+  if (!model) return defaultModels.llm;
+  return findClientModelByValue({ models: llmList, value: model });
 };
-export const getWebDefaultLLMModel = (llmList: LLMModelItemType[] = []) => {
-  const list = llmList.length > 0 ? llmList : useSystemStore.getState().llmModelList;
-  const defaultModels = useSystemStore.getState().defaultModels;
+export const getWebDefaultLLMModel = (llmList: MyLLMModelType[] = []) => {
+  const defaultModels = useUserModelStore.getState().defaultModels;
 
-  return defaultModels.llm && list.find((item) => item.model === defaultModels.llm?.model)
+  if (llmList.length === 0) return defaultModels.llm;
+  return defaultModels.llm &&
+    findClientModelByReference({ models: llmList, reference: defaultModels.llm })
     ? defaultModels.llm
-    : list[0];
+    : llmList[0];
 };
-export const getWebDefaultEmbeddingModel = (embeddingList: EmbeddingModelItemType[] = []) => {
-  const list =
-    embeddingList.length > 0 ? embeddingList : useSystemStore.getState().embeddingModelList;
-  const defaultModels = useSystemStore.getState().defaultModels;
+export const getWebDefaultEmbeddingModel = (embeddingList: MyEmbeddingModelType[] = []) => {
+  const defaultModels = useUserModelStore.getState().defaultModels;
 
+  if (embeddingList.length === 0) return defaultModels.embedding;
   return defaultModels.embedding &&
-    list.find((item) => item.model === defaultModels.embedding?.model)
+    findClientModelByReference({ models: embeddingList, reference: defaultModels.embedding })
     ? defaultModels.embedding
-    : list[0];
+    : embeddingList[0];
 };

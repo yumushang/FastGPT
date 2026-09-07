@@ -1,26 +1,34 @@
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps, ApiResponseType } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { pluginClient } from '@fastgpt/service/thirdProvider/fastgptPlugin';
 import { authSystemAdmin } from '@fastgpt/service/support/permission/user/auth';
-import type { InstallPluginFromUrlBodyType } from '@fastgpt/global/openapi/core/plugin/admin/api';
+import {
+  InstallPluginFromUrlBodySchema,
+  type InstallPluginFromUrlBodyType
+} from '@fastgpt/global/openapi/core/plugin/admin/api';
+import type { PluginInstallResultType } from '@fastgpt/global/sdk/fastgpt-plugin';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 export type InstallToolBody = InstallPluginFromUrlBodyType;
 
-export type InstallToolResponse = {};
+export type InstallToolResponse = PluginInstallResultType;
 
 async function handler(
-  req: ApiRequestProps<InstallToolBody, {}>,
-  res: ApiResponseType<InstallToolResponse>
+  req: ApiRequestProps<InstallToolBody, Record<string, never>>,
+  _res: ApiResponseType<InstallToolResponse>
 ): Promise<InstallToolResponse> {
   await authSystemAdmin({ req });
 
-  const { downloadUrls } = req.body;
+  const { downloadUrls } = parseApiInput({
+    req,
+    bodySchema: InstallPluginFromUrlBodySchema
+  }).body;
 
   if (!downloadUrls || downloadUrls.length === 0) {
     return Promise.reject('Download URL is required');
   }
 
-  return await pluginClient.installTools(downloadUrls);
+  return await pluginClient.installPlugins(downloadUrls);
 }
 
 export default NextAPI(handler);

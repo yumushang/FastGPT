@@ -2,8 +2,8 @@ import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
 import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
 import { NextAPI } from '@/service/middleware/entry';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
-import { isS3ObjectKey, jwtSignS3DownloadToken } from '@fastgpt/service/common/s3/utils';
+import { type ApiRequestProps } from '@fastgpt/next/type';
+import { isS3ObjectKey } from '@fastgpt/service/common/s3/utils';
 import { addMinutes } from 'date-fns';
 import {
   GetTrainingDataDetailBodySchema,
@@ -12,14 +12,15 @@ import {
 } from '@fastgpt/global/openapi/core/dataset/training/api';
 import { S3Buckets } from '@fastgpt/service/common/s3/config/constants';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { createS3DownloadAccessUrl } from '@fastgpt/service/common/s3/accessLink';
 
 async function handler(req: ApiRequestProps): Promise<GetTrainingDataDetailResponse> {
-  const { datasetId, collectionId, dataId } = parseApiInput({
+  const { collectionId, dataId } = parseApiInput({
     req,
     bodySchema: GetTrainingDataDetailBodySchema
   }).body;
 
-  const { teamId } = await authDatasetCollection({
+  const { collection } = await authDatasetCollection({
     req,
     authToken: true,
     authApiKey: true,
@@ -27,24 +28,32 @@ async function handler(req: ApiRequestProps): Promise<GetTrainingDataDetailRespo
     per: ReadPermissionVal
   });
 
-  const data = await MongoDatasetTraining.findOne({ teamId, datasetId, _id: dataId }).lean();
+  const data = await MongoDatasetTraining.findOne({
+    teamId: collection.teamId,
+    datasetId: collection.datasetId,
+    collectionId: collection._id,
+    _id: dataId
+  }).lean();
 
   if (!data) {
     return GetTrainingDataDetailResponseSchema.parse(null);
   }
 
+  const imagePreviewUrl =
+    data.imageId && isS3ObjectKey(data.imageId, 'dataset')
+      ? await createS3DownloadAccessUrl({
+          objectKey: data.imageId,
+          bucketName: S3Buckets.private,
+          expiredTime: addMinutes(new Date(), 30)
+        })
+      : undefined;
+
   return GetTrainingDataDetailResponseSchema.parse({
     _id: data._id,
     datasetId: data.datasetId,
+    collectionId: data.collectionId,
     mode: data.mode,
-    imagePreviewUrl:
-      data.imageId && isS3ObjectKey(data.imageId, 'dataset')
-        ? jwtSignS3DownloadToken({
-            objectKey: data.imageId,
-            bucketName: S3Buckets.private,
-            expiredTime: addMinutes(new Date(), 30)
-          })
-        : undefined,
+    imagePreviewUrl,
     q: data.q,
     a: data.a
   });

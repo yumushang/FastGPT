@@ -1,33 +1,33 @@
 import type { OpenAPIPath } from '../../../type';
-import { TagsMap } from '../../../tag';
+import { DevApiTagsMap, SystemOpenApiTagMap } from '../../../tag';
 import {
-  GetHistoriesBodySchema,
+  GetHistoriesBodyRawSchema,
   GetHistoriesResponseSchema,
-  GetHistoryStatusBodySchema,
+  GetHistoryStatusBodyRawSchema,
   GetHistoryStatusResponseSchema,
-  MarkChatReadBodySchema,
-  UpdateHistoryBodySchema,
-  ChatBatchDeleteBodySchema,
-  DelChatHistorySchema,
-  ClearChatHistoriesSchema
+  MarkChatReadBodyRawSchema,
+  UpdateHistoryBodyRawSchema,
+  ChatBatchDeleteBodyRawSchema,
+  DelChatHistoryRawSchema,
+  ClearChatHistoriesRawSchema
 } from './api';
 
 export const ChatHistoryPath: OpenAPIPath = {
   '/core/chat/history/getHistories': {
     post: {
-      summary: '获取对话历史列表',
-      description: '分页获取指定应用的对话历史记录',
-      tags: [TagsMap.chatHistory],
+      summary: '获取会话列表',
+      description: '分页获取会话列表',
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestBody: {
         content: {
           'application/json': {
-            schema: GetHistoriesBodySchema
+            schema: GetHistoriesBodyRawSchema
           }
         }
       },
       responses: {
         200: {
-          description: '成功获取对话历史列表',
+          description: '成功获取会话列表',
           content: {
             'application/json': {
               schema: GetHistoriesResponseSchema
@@ -39,14 +39,14 @@ export const ChatHistoryPath: OpenAPIPath = {
   },
   '/core/chat/history/getHistoryStatus': {
     post: {
-      summary: '批量获取对话状态（生成中/已读）',
+      summary: '批量获取会话状态（生成中/已读）',
       description:
         '按 chatId 列表返回 chatGenerateStatus、hasBeenRead、updateTime，用于侧栏轻量轮询同步',
-      tags: [TagsMap.chatHistory],
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestBody: {
         content: {
           'application/json': {
-            schema: GetHistoryStatusBodySchema
+            schema: GetHistoryStatusBodyRawSchema
           }
         }
       },
@@ -64,13 +64,13 @@ export const ChatHistoryPath: OpenAPIPath = {
   },
   '/core/chat/history/markRead': {
     post: {
-      summary: '标记对话已读',
+      summary: '标记会话已读',
       description: '用户在本页看完回复后调用，同步 Mongo hasBeenRead',
-      tags: [TagsMap.chatHistory],
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestBody: {
         content: {
           'application/json': {
-            schema: MarkChatReadBodySchema
+            schema: MarkChatReadBodyRawSchema
           }
         }
       },
@@ -83,72 +83,68 @@ export const ChatHistoryPath: OpenAPIPath = {
   },
   '/core/chat/history/updateHistory': {
     put: {
-      summary: '修改对话历史',
-      description: '修改对话历史的标题、自定义标题或置顶状态',
-      tags: [TagsMap.chatHistory],
+      summary: '修改会话',
+      description: '修改会话的标题、自定义标题或置顶状态',
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestBody: {
         content: {
           'application/json': {
-            schema: UpdateHistoryBodySchema
+            schema: UpdateHistoryBodyRawSchema
           }
         }
       },
       responses: {
         200: {
-          description: '成功修改对话历史'
+          description: '成功修改会话'
         }
       }
     }
   },
   '/core/chat/history/delHistory': {
     delete: {
-      summary: '删除单个对话历史',
-      description: '软删除指定的单个对话记录',
-      tags: [TagsMap.chatHistory],
-      requestBody: {
-        content: {
-          'application/json': {
-            schema: DelChatHistorySchema
-          }
-        }
+      summary: '删除单个会话',
+      description: '软删除指定的单个会话，不会物理删除',
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
+      requestParams: {
+        query: DelChatHistoryRawSchema
       },
       responses: {
         200: {
-          description: '成功删除对话'
+          description: '成功删除会话'
         }
       }
     }
   },
   '/core/chat/history/clearHistories': {
     delete: {
-      summary: '清空应用对话历史',
-      description: '清空指定应用的所有对话记录(软删除)',
-      tags: [TagsMap.chatHistory],
+      summary: '清空会话',
+      description: '清空所有会话（软删除）',
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestParams: {
-        query: ClearChatHistoriesSchema
+        query: ClearChatHistoriesRawSchema
       },
       responses: {
         200: {
-          description: '成功清空对话历史'
+          description: '成功清空会话'
         }
       }
     }
   },
   '/core/chat/history/batchDelete': {
     post: {
-      summary: '批量删除对话历史',
-      description: '批量删除指定应用的多个对话记录(真实删除)，需应用日志权限。',
-      tags: [TagsMap.chatHistory],
+      summary: '批量删除会话',
+      description: '批量删除多个会话（真实删除），需对应会话目标的管理权限。',
+      tags: [DevApiTagsMap.chatHistory, SystemOpenApiTagMap.chatHistory],
       requestBody: {
         content: {
           'application/json': {
-            schema: ChatBatchDeleteBodySchema
+            schema: ChatBatchDeleteBodyRawSchema
           }
         }
       },
       responses: {
         200: {
-          description: '成功删除对话'
+          description: '成功删除会话'
         }
       }
     }

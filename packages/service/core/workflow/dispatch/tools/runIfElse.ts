@@ -1,11 +1,7 @@
 import type { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import {
-  type RuntimeNodeItemType,
-  type DispatchNodeResultType,
-  type WorkflowVariableStateLike
-} from '@fastgpt/global/core/workflow/runtime/type';
+import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
 import {
   IfElseResultEnum,
   VariableConditionEnum
@@ -15,7 +11,12 @@ import {
   type IfElseConditionType,
   type IfElseListItemType
 } from '@fastgpt/global/core/workflow/template/system/ifElse/type';
-import { type ModuleDispatchProps } from '@fastgpt/global/core/workflow/runtime/type';
+import { getIfElseBranchHandleKey } from '@fastgpt/global/core/workflow/template/system/ifElse/utils';
+import type {
+  DispatchNodeResultType,
+  ModuleDispatchProps,
+  WorkflowVariableStateLike
+} from '../../types/runtime';
 import { getElseIFLabel, getHandleId } from '@fastgpt/global/core/workflow/utils';
 import { getReferenceVariableValue } from '@fastgpt/global/core/workflow/runtime/utils';
 import { type ReferenceItemValueType } from '@fastgpt/global/core/workflow/type/io';
@@ -137,37 +138,48 @@ function getResult(
 export const dispatchIfElse = async (props: Props): Promise<Response> => {
   const {
     params,
+    runtimeEdges,
     runtimeNodesMap,
     variableState,
     node: { nodeId }
   } = props;
   const { ifElseList } = params;
 
-  let res = IfElseResultEnum.ELSE as string;
+  let selectedLabel = IfElseResultEnum.ELSE as string;
+  let selectedHandleKey = IfElseResultEnum.ELSE as string;
   for (let i = 0; i < ifElseList.length; i++) {
     const item = ifElseList[i];
     const result = getResult(item.condition, item.list, variableState, runtimeNodesMap);
     if (result) {
-      res = getElseIFLabel(i);
+      selectedLabel = getElseIFLabel(i);
+      selectedHandleKey = getIfElseBranchHandleKey(item, i);
       break;
     }
   }
 
-  const resArray = Array.from({ length: ifElseList.length + 1 }, (_, index) => {
-    const label = index < ifElseList.length ? getElseIFLabel(index) : IfElseResultEnum.ELSE;
-    return getHandleId(nodeId, 'source', label);
-  });
+  const selectedHandleId = getHandleId(nodeId, 'source', selectedHandleKey);
+  const sourceHandlePrefix = `${nodeId}-source-`;
+  const sourceHandleIds = Array.from(
+    new Set(
+      runtimeEdges
+        .filter(
+          (edge) => edge.source === nodeId && edge.sourceHandle.startsWith(sourceHandlePrefix)
+        )
+        .map((edge) => edge.sourceHandle)
+    )
+  );
 
   return {
     data: {
-      [NodeOutputKeyEnum.ifElseResult]: res
+      [NodeOutputKeyEnum.ifElseResult]: selectedLabel
     },
     [DispatchNodeResponseKeyEnum.nodeResponse]: {
       totalPoints: 0,
-      ifElseResult: res
+      ifElseResult: selectedLabel
     },
-    [DispatchNodeResponseKeyEnum.skipHandleId]: resArray.filter(
-      (item) => item !== getHandleId(nodeId, 'source', res)
+    [DispatchNodeResponseKeyEnum.toolResponse]: selectedLabel,
+    [DispatchNodeResponseKeyEnum.skipHandleId]: sourceHandleIds.filter(
+      (handleId) => handleId !== selectedHandleId
     )
   };
 };

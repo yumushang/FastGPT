@@ -15,13 +15,6 @@ vi.mock('@fastgpt/service/core/ai/llm/utils', () => ({
   filterGPTMessageByMaxContext: filterGPTMessageByMaxContextMock
 }));
 
-vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getLLMModel: vi.fn(() => ({
-    model: 'gpt-query',
-    maxContext: 4000
-  }))
-}));
-
 vi.mock('@fastgpt/service/core/ai/hooks/useTextCosine', () => ({
   useTextCosine: vi.fn(() => ({
     embeddingModel: 'embedding-query',
@@ -30,6 +23,43 @@ vi.mock('@fastgpt/service/core/ai/hooks/useTextCosine', () => ({
 }));
 
 import { queryExtension } from '../../../../core/ai/functions/queryExtension';
+import type {
+  EmbeddingSystemModelDataType,
+  LLMSystemModelDataType
+} from '@fastgpt/global/core/ai/model.schema';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+
+const llmModel = {
+  modelId: '507f1f77bcf86cd799439014',
+  provider: 'openai',
+  model: 'gpt-query',
+  name: 'GPT Query',
+  type: ModelTypeEnum.llm,
+  scope: 'system' as const,
+  isActive: true,
+  isCustom: false,
+  config: {
+    maxContext: 4000,
+    maxResponse: 1000,
+    quoteMaxToken: 2000,
+    reasoning: true
+  }
+} satisfies LLMSystemModelDataType;
+const embeddingModel = {
+  modelId: '507f1f77bcf86cd799439015',
+  provider: 'openai',
+  model: 'embedding-query',
+  name: 'Embedding Query',
+  type: ModelTypeEnum.embedding,
+  scope: 'system' as const,
+  isActive: true,
+  isCustom: false,
+  config: {
+    defaultToken: 512,
+    maxToken: 8192,
+    weight: 0
+  }
+} satisfies EmbeddingSystemModelDataType;
 
 describe('queryExtension', () => {
   beforeEach(() => {
@@ -39,6 +69,50 @@ describe('queryExtension', () => {
       selectedData: ['expanded query'],
       embeddingTokens: 6
     });
+  });
+
+  it('disables reasoning when the query extension model supports it', async () => {
+    createLLMResponseMock.mockResolvedValue({
+      answerText: '[]',
+      requestId: 'req_query_extension_reasoning',
+      usage: {
+        inputTokens: 11,
+        outputTokens: 3,
+        usedUserOpenAIKey: false
+      }
+    });
+
+    await queryExtension({
+      query: 'original query',
+      histories: [],
+      llmModel,
+      embeddingModel,
+      teamId: 'team_1'
+    });
+
+    expect(createLLMResponseMock.mock.calls[0][0].body.reasoning_effort).toBe('none');
+  });
+
+  it('does not send reasoning effort when the query extension model does not support it', async () => {
+    createLLMResponseMock.mockResolvedValue({
+      answerText: '[]',
+      requestId: 'req_query_extension_without_reasoning',
+      usage: {
+        inputTokens: 11,
+        outputTokens: 3,
+        usedUserOpenAIKey: false
+      }
+    });
+
+    await queryExtension({
+      query: 'original query',
+      histories: [],
+      llmModel: { ...llmModel, config: { ...llmModel.config, reasoning: false } },
+      embeddingModel,
+      teamId: 'team_1'
+    });
+
+    expect(createLLMResponseMock.mock.calls[0][0].body).not.toHaveProperty('reasoning_effort');
   });
 
   it('returns LLM request id for node response tracing', async () => {
@@ -55,15 +129,16 @@ describe('queryExtension', () => {
     const result = await queryExtension({
       query: 'original query',
       histories: [],
-      llmModel: 'gpt-query',
-      embeddingModel: 'embedding-query'
+      llmModel,
+      embeddingModel,
+      teamId: 'team_1'
     });
 
     expect(result).toEqual({
       rawQuery: 'original query',
       extensionQueries: ['expanded query'],
-      llmModel: 'gpt-query',
-      embeddingModel: 'embedding-query',
+      llmModel: llmModel.model,
+      embeddingModel: embeddingModel.model,
       requestId: 'req_query_extension',
       seconds: expect.any(Number),
       inputTokens: 11,
@@ -87,8 +162,9 @@ describe('queryExtension', () => {
     await queryExtension({
       query: 'original query',
       histories: [],
-      llmModel: 'gpt-query',
-      embeddingModel: 'embedding-query'
+      llmModel,
+      embeddingModel,
+      teamId: 'team_1'
     });
 
     expect(lazyGreedyQuerySelectionMock).toHaveBeenCalledWith({
@@ -113,8 +189,9 @@ describe('queryExtension', () => {
     const result = await queryExtension({
       query: 'original query',
       histories: [],
-      llmModel: 'gpt-query',
-      embeddingModel: 'embedding-query'
+      llmModel,
+      embeddingModel,
+      teamId: 'team_1'
     });
 
     expect(lazyGreedyQuerySelectionMock).not.toHaveBeenCalled();
@@ -147,8 +224,9 @@ describe('queryExtension', () => {
       chatBg: '当前对话围绕产品 A。唯一背景 42。',
       query: '权限资源接入测试问题 42',
       histories: [],
-      llmModel: 'gpt-query',
-      embeddingModel: 'embedding-query',
+      llmModel,
+      embeddingModel,
+      teamId: 'team_1',
       generateCount: 4
     });
 

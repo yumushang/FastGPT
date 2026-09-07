@@ -1,5 +1,5 @@
 import type { OpenAPIPath } from '../../../../type';
-import { TagsMap } from '../../../../tag';
+import { DevApiTagsMap } from '../../../../tag';
 import {
   LoginByPasswordBodySchema,
   PreLoginQuerySchema,
@@ -9,7 +9,12 @@ import {
   WxLoginBodySchema,
   GetWXLoginQRResponseSchema,
   LoginSuccessResponseSchema,
-  OpenAPIUserSchema
+  WxLoginResultResponseSchema,
+  OpenAPIUserSchema,
+  SsoGetAuthorizationURLBodySchema,
+  SsoGetAuthorizationURLResponseSchema,
+  WecomGetRedirectURLBodySchema,
+  WecomGetRedirectURLResponseSchema
 } from './api';
 
 export const LoginPath: OpenAPIPath = {
@@ -17,7 +22,7 @@ export const LoginPath: OpenAPIPath = {
     get: {
       summary: 'Token 登录',
       description: '通过已有的登录令牌获取用户信息',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       responses: {
         200: {
           description: '成功获取用户信息',
@@ -34,7 +39,7 @@ export const LoginPath: OpenAPIPath = {
     get: {
       summary: '预登录获取验证码',
       description: '通过用户名获取预登录验证码，用于密码登录时的验证',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       requestParams: {
         query: PreLoginQuerySchema
       },
@@ -54,7 +59,7 @@ export const LoginPath: OpenAPIPath = {
     post: {
       summary: '用户密码登录',
       description: '通过用户名和密码进行登录，需要先获取预登录验证码',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       requestBody: {
         content: {
           'application/json': {
@@ -78,7 +83,7 @@ export const LoginPath: OpenAPIPath = {
     post: {
       summary: 'OAuth 登录',
       description: '使用第三方 OAuth 授权登录',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       requestBody: {
         content: {
           'application/json': {
@@ -98,11 +103,59 @@ export const LoginPath: OpenAPIPath = {
       }
     }
   },
+  '/proApi/support/user/account/login/getAuthURL': {
+    post: {
+      summary: '获取 SSO 授权地址',
+      description: '根据当前登录回调地址生成 SSO 授权跳转地址',
+      tags: [DevApiTagsMap.userLogin],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: SsoGetAuthorizationURLBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功生成 SSO 授权地址',
+          content: {
+            'application/json': {
+              schema: SsoGetAuthorizationURLResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+  '/proApi/support/user/account/login/wecom/getRedirectUrl': {
+    post: {
+      summary: '获取企业微信登录跳转地址',
+      description: '根据登录回调地址和当前终端环境生成企业微信 OAuth 跳转地址',
+      tags: [DevApiTagsMap.userLogin],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: WecomGetRedirectURLBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功生成企业微信登录跳转地址',
+          content: {
+            'application/json': {
+              schema: WecomGetRedirectURLResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
   '/proApi/support/user/account/login/fastLogin': {
     post: {
       summary: '快捷登录',
       description: '使用 Token 和 Code 进行快捷登录',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       requestBody: {
         content: {
           'application/json': {
@@ -126,7 +179,7 @@ export const LoginPath: OpenAPIPath = {
     get: {
       summary: '获取微信登录二维码',
       description: '获取微信登录二维码',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       responses: {
         200: {
           description: '获取微信登录二维码成功',
@@ -143,7 +196,7 @@ export const LoginPath: OpenAPIPath = {
     post: {
       summary: '获取微信登录结果',
       description: '提交微信登录 Code 以获取登录结果',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
       requestBody: {
         content: {
           'application/json': {
@@ -153,10 +206,10 @@ export const LoginPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '登录成功',
+          description: '登录成功或二维码已过期',
           content: {
             'application/json': {
-              schema: LoginSuccessResponseSchema
+              schema: WxLoginResultResponseSchema
             }
           }
         }
@@ -167,7 +220,17 @@ export const LoginPath: OpenAPIPath = {
     get: {
       summary: '退出登录',
       description: '退出当前用户的所有会话并清除登录凭证',
-      tags: [TagsMap.userLogin],
+      tags: [DevApiTagsMap.userLogin],
+      responses: {
+        200: {
+          description: '退出登录成功'
+        }
+      }
+    },
+    post: {
+      summary: '退出登录',
+      description: '退出当前用户的所有会话并清除登录凭证（管理端兼容调用）',
+      tags: [DevApiTagsMap.userLogin],
       responses: {
         200: {
           description: '退出登录成功'

@@ -1,4 +1,4 @@
-import type { Processor } from 'bullmq';
+import type { Processor } from '@fastgpt/dal/redis/bullmq';
 import { addDatasetDeleteJob, type DatasetDeleteJobData } from './index';
 import { delDatasetRelevantData, findDatasetAndAllChildren } from '../controller';
 import { MongoDatasetCollectionTags } from '../tag/schema';
@@ -8,6 +8,8 @@ import { MongoDataset } from '../schema';
 import { removeImageByPath } from '../../../common/file/image/controller';
 import { MongoDatasetTraining } from '../training/schema';
 import { getLogger, LogCategories } from '../../../common/logger';
+import { resourcePermissionRepo } from '../../../support/permission/repository/resourcePermissionRepo';
+import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.COLLECTION);
 
@@ -44,6 +46,11 @@ export const deleteTeamAllDatasets = async (teamId: string) => {
     datasetIds: datasets.map((d) => d._id)
   });
 
+  const datasetIdSet = new Set(datasets.map((dataset) => String(dataset._id)));
+  const deleteRootDatasets = datasets.filter(
+    (dataset) => !dataset.parentId || !datasetIdSet.has(String(dataset.parentId))
+  );
+
   await mongoSessionRun(async (session) => {
     await MongoDataset.updateMany(
       {
@@ -59,9 +66,7 @@ export const deleteTeamAllDatasets = async (teamId: string) => {
       }
     );
     await Promise.all(
-      datasets.map((dataset) => {
-        // 有 parentId 的忽略，只需要删 root 下的即可。
-        if (dataset.parentId) return;
+      deleteRootDatasets.map((dataset) => {
         return addDatasetDeleteJob({
           teamId,
           datasetId: dataset._id
@@ -99,11 +104,22 @@ const deleteDatasets = async ({
       datasets,
       session
     });
-  });
 
-  // delete dataset
-  await MongoDataset.deleteMany({
-    _id: { $in: datasetIds }
+    // 权限与知识库本体同步删除，避免留下无法回收的孤立权限记录。
+    await resourcePermissionRepo.deleteByResources({
+      teamId,
+      resourceType: PerResourceTypeEnum.dataset,
+      resourceIds: datasetIds,
+      session
+    });
+
+    await MongoDataset.deleteMany(
+      {
+        teamId,
+        _id: { $in: datasetIds }
+      },
+      { session }
+    );
   });
 };
 

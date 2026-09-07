@@ -1,49 +1,66 @@
 import type { NextApiResponse } from 'next';
-import { jsonRes } from '@fastgpt/service/common/response';
 import { pushQuestionGuideUsage } from '@/service/support/wallet/usage/push';
 import { createQuestionGuide } from '@fastgpt/service/core/ai/functions/createQuestionGuide';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
-import { type OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 import { getChatItems } from '@fastgpt/service/core/chat/controller';
 import { chats2GPTMessages } from '@fastgpt/global/core/chat/adapt';
 import { getAppLatestVersion } from '@fastgpt/service/core/app/version/controller';
-import { getDefaultLLMModel } from '@fastgpt/service/core/ai/model';
+import { getDefaultLLMModelData, getLLMModelData } from '@fastgpt/service/core/ai/model';
+import {
+  CreateQuestionGuideResponseSchema,
+  CreateQuestionGuideV2BodySchema,
+  type CreateQuestionGuideResponseType,
+  type CreateQuestionGuideV2BodyType
+} from '@fastgpt/global/openapi/core/ai/agent/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import type { AppQGConfigType } from '@fastgpt/global/core/app/type';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 
-export type CreateQuestionGuideParams = OutLinkChatAuthProps & {
-  appId: string;
-  chatId: string;
-  questionGuide?: {
-    open: boolean;
-    model?: string;
-    customPrompt?: string;
-  };
-};
+async function handler(
+  req: ApiRequestProps<CreateQuestionGuideV2BodyType>,
+  _res: NextApiResponse<any>
+): Promise<CreateQuestionGuideResponseType> {
+  const {
+    sourceType,
+    sourceId,
+    chatId,
+    questionGuide: inputQuestionGuide,
+    outLinkAuthData
+  } = parseApiInput({
+    req,
+    bodySchema: CreateQuestionGuideV2BodySchema
+  }).body;
 
-async function handler(req: ApiRequestProps<CreateQuestionGuideParams>, res: NextApiResponse<any>) {
-  const { appId, chatId, questionGuide: inputQuestionGuide } = req.body;
-  const [{ tmbId, teamId }] = await Promise.all([
-    authChatCrud({
-      req,
-      authToken: true,
-      authApiKey: true,
-      ...req.body
-    })
-  ]);
+  const {
+    tmbId,
+    teamId,
+    sourceType: resolvedSourceType,
+    sourceId: resolvedSourceId
+  } = await authChatTargetCrud({
+    req,
+    authToken: true,
+    authApiKey: true,
+    sourceType,
+    sourceId,
+    chatId,
+    outLinkAuthData
+  });
 
-  // Auth app and get questionGuide config
-  const questionGuide = await (async () => {
-    if (inputQuestionGuide) {
-      return inputQuestionGuide;
-    }
-    const { chatConfig } = await getAppLatestVersion(appId);
+  // 未由客户端覆盖时读取持久化配置；该分支在迁移期兼容历史 model 字段。
+  const persistedQuestionGuide: AppQGConfigType | undefined = await (async () => {
+    if (inputQuestionGuide || resolvedSourceType !== ChatSourceTypeEnum.app) return undefined;
+
+    const { chatConfig } = await getAppLatestVersion(resolvedSourceId);
     return chatConfig.questionGuide;
   })();
+  const questionGuide = inputQuestionGuide ?? persistedQuestionGuide;
 
   // Get histories
   const { histories } = await getChatItems({
-    appId,
+    sourceType: resolvedSourceType,
+    sourceId: resolvedSourceId,
     chatId,
     offset: 0,
     limit: 6,
@@ -51,23 +68,41 @@ async function handler(req: ApiRequestProps<CreateQuestionGuideParams>, res: Nex
   });
   const messages = chats2GPTMessages({ messages: histories, reserveId: false });
 
-  const qgModel = questionGuide?.model || getDefaultLLMModel().model;
+  const qgModelData = (() => {
+    if (inputQuestionGuide?.modelId !== undefined || inputQuestionGuide?.model !== undefined) {
+      return getLLMModelData({
+        modelId: inputQuestionGuide.modelId,
+        model: inputQuestionGuide.model
+      });
+    }
+    if (
+      persistedQuestionGuide?.modelId !== undefined ||
+      persistedQuestionGuide?.model !== undefined
+    ) {
+      return getLLMModelData({
+        modelId: persistedQuestionGuide.modelId,
+        model: persistedQuestionGuide.model
+      });
+    }
+    return getDefaultLLMModelData();
+  })();
 
   const { result, inputTokens, outputTokens } = await createQuestionGuide({
     messages,
-    model: qgModel,
-    customPrompt: questionGuide?.customPrompt
+    model: qgModelData,
+    customPrompt: questionGuide?.customPrompt,
+    teamId
   });
 
   pushQuestionGuideUsage({
-    model: qgModel,
+    model: qgModelData,
     inputTokens,
     outputTokens,
     teamId,
     tmbId
   });
 
-  return result;
+  return CreateQuestionGuideResponseSchema.parse(result);
 }
 
 export default NextAPI(handler);

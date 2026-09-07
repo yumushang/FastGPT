@@ -13,8 +13,10 @@ import type {
   getAppChatLogsBody,
   getAppChatLogsResponseType
 } from '@fastgpt/global/openapi/core/app/log/api';
-import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatRoleEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+
+type EmptyQuery = Record<string, never>;
 
 describe('logs list API - errorFilter', () => {
   let testAppId: string;
@@ -37,8 +39,7 @@ describe('logs list API - errorFilter', () => {
       ownerId: user._id,
       avatar: 'test-avatar',
       createTime: new Date(),
-      balance: 0,
-      teamDomain: 'test-domain-logs-list'
+      balance: 0
     });
     testTeamId = String(team._id);
 
@@ -77,22 +78,24 @@ describe('logs list API - errorFilter', () => {
     const now = new Date();
 
     // Create chats - some with errors, some without
-    const chat1 = await MongoChat.create({
+    await MongoChat.create({
       chatId: 'chat-all-1',
       appId: testAppId,
       teamId: testTeamId,
       tmbId: testTmbId,
+      sourceType: ChatSourceTypeEnum.app,
       source: 'online',
       updateTime: now,
       title: 'Chat without error',
       errorCount: 0
     });
 
-    const chat2 = await MongoChat.create({
+    await MongoChat.create({
       chatId: 'chat-all-2',
       appId: testAppId,
       teamId: testTeamId,
       tmbId: testTmbId,
+      sourceType: ChatSourceTypeEnum.app,
       source: 'online',
       updateTime: now,
       title: 'Chat with error',
@@ -105,6 +108,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-all-1',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Normal response' } }],
@@ -114,6 +118,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-all-2',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Error response' } }],
@@ -132,17 +137,20 @@ describe('logs list API - errorFilter', () => {
     const dateStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const dateEnd = new Date(now.getTime() + 1000).toISOString();
 
-    const res = await Call<getAppChatLogsBody, {}, getAppChatLogsResponseType>(listApi.default, {
-      auth: authUser,
-      cookies: {
-        NEXT_LOCALE: 'zh-CN'
-      },
-      body: {
-        appId: testAppId,
-        dateStart,
-        dateEnd
+    const res = await Call<getAppChatLogsBody, EmptyQuery, getAppChatLogsResponseType>(
+      listApi.default,
+      {
+        auth: authUser,
+        headers: {
+          cookie: 'NEXT_LOCALE=zh-CN'
+        },
+        body: {
+          appId: testAppId,
+          dateStart,
+          dateEnd
+        }
       }
-    });
+    );
 
     expect(res.code).toBe(200);
     expect(res.data.total).toBe(2);
@@ -159,6 +167,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'Chat without error',
@@ -169,6 +178,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'Chat with error',
@@ -179,6 +189,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'Another chat without error',
@@ -192,6 +203,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-error-filter-1',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Normal response' } }],
@@ -201,6 +213,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-error-filter-2',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Error response' } }],
@@ -218,6 +231,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-error-filter-3',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Another normal response' } }],
@@ -228,18 +242,21 @@ describe('logs list API - errorFilter', () => {
     const dateStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const dateEnd = new Date(now.getTime() + 1000).toISOString();
 
-    const res = await Call<getAppChatLogsBody, {}, getAppChatLogsResponseType>(listApi.default, {
-      auth: authUser,
-      cookies: {
-        NEXT_LOCALE: 'zh-CN'
-      },
-      body: {
-        appId: testAppId,
-        dateStart,
-        dateEnd,
-        errorFilter: 'has_error'
+    const res = await Call<getAppChatLogsBody, EmptyQuery, getAppChatLogsResponseType>(
+      listApi.default,
+      {
+        auth: authUser,
+        headers: {
+          cookie: 'NEXT_LOCALE=zh-CN'
+        },
+        body: {
+          appId: testAppId,
+          dateStart,
+          dateEnd,
+          errorFilter: 'has_error'
+        }
       }
-    });
+    );
 
     expect(res.code).toBe(200);
     expect(res.data.total).toBe(1);
@@ -261,6 +278,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: new Date(now.getTime() - i * 1000),
         title: `Chat with error ${i}`,
@@ -274,6 +292,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: new Date(now.getTime() - (i + 5) * 1000),
         title: `Chat without error ${i}`,
@@ -288,6 +307,7 @@ describe('logs list API - errorFilter', () => {
       chatId: chat.chatId,
       teamId: testTeamId,
       tmbId: testTmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId: testAppId,
       obj: ChatRoleEnum.AI,
       value: [{ text: { content: 'Error response' } }],
@@ -306,6 +326,7 @@ describe('logs list API - errorFilter', () => {
       chatId: chat.chatId,
       teamId: testTeamId,
       tmbId: testTmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId: testAppId,
       obj: ChatRoleEnum.AI,
       value: [{ text: { content: 'Normal response' } }],
@@ -318,19 +339,22 @@ describe('logs list API - errorFilter', () => {
     const dateEnd = new Date(now.getTime() + 1000).toISOString();
 
     // Request first page with errorFilter
-    const res = await Call<getAppChatLogsBody, {}, getAppChatLogsResponseType>(listApi.default, {
-      auth: authUser,
-      cookies: {
-        NEXT_LOCALE: 'zh-CN'
-      },
-      body: {
-        appId: testAppId,
-        dateStart,
-        dateEnd,
-        errorFilter: 'has_error',
-        pageSize: 3
+    const res = await Call<getAppChatLogsBody, EmptyQuery, getAppChatLogsResponseType>(
+      listApi.default,
+      {
+        auth: authUser,
+        headers: {
+          cookie: 'NEXT_LOCALE=zh-CN'
+        },
+        body: {
+          appId: testAppId,
+          dateStart,
+          dateEnd,
+          errorFilter: 'has_error',
+          pageSize: 3
+        }
       }
-    });
+    );
 
     expect(res.code).toBe(200);
     expect(res.data.total).toBe(5); // Total chats with errors
@@ -366,6 +390,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'User 1 with error',
@@ -377,6 +402,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'User 1 without error',
@@ -388,6 +414,7 @@ describe('logs list API - errorFilter', () => {
         appId: testAppId,
         teamId: testTeamId,
         tmbId: teamMember2._id,
+        sourceType: ChatSourceTypeEnum.app,
         source: 'online',
         updateTime: now,
         title: 'User 2 with error',
@@ -401,6 +428,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-user-error-1',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Error' } }],
@@ -418,6 +446,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-user-error-2',
         teamId: testTeamId,
         tmbId: testTmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Normal' } }],
@@ -427,6 +456,7 @@ describe('logs list API - errorFilter', () => {
         chatId: 'chat-user-error-3',
         teamId: testTeamId,
         tmbId: teamMember2._id,
+        sourceType: ChatSourceTypeEnum.app,
         appId: testAppId,
         obj: ChatRoleEnum.AI,
         value: [{ text: { content: 'Error' } }],
@@ -446,23 +476,60 @@ describe('logs list API - errorFilter', () => {
     const dateEnd = new Date(now.getTime() + 1000).toISOString();
 
     // Filter by user 1 AND has_error
-    const res = await Call<getAppChatLogsBody, {}, getAppChatLogsResponseType>(listApi.default, {
-      auth: authUser,
-      cookies: {
-        NEXT_LOCALE: 'zh-CN'
-      },
-      body: {
-        appId: testAppId,
-        dateStart,
-        dateEnd,
-        tmbIds: [testTmbId],
-        errorFilter: 'has_error'
+    const res = await Call<getAppChatLogsBody, EmptyQuery, getAppChatLogsResponseType>(
+      listApi.default,
+      {
+        auth: authUser,
+        headers: {
+          cookie: 'NEXT_LOCALE=zh-CN'
+        },
+        body: {
+          appId: testAppId,
+          dateStart,
+          dateEnd,
+          tmbIds: [testTmbId],
+          errorFilter: 'has_error'
+        }
       }
-    });
+    );
 
     expect(res.code).toBe(200);
     expect(res.data.total).toBe(1);
     expect(res.data.list).toHaveLength(1);
     expect(res.data.list[0].chatId).toBe('chat-user-error-1');
+  });
+
+  it('returns empty list when user filter is unselected', async () => {
+    const now = new Date();
+    await MongoChat.create({
+      chatId: 'chat-unselected-user',
+      appId: testAppId,
+      teamId: testTeamId,
+      tmbId: testTmbId,
+      sourceType: ChatSourceTypeEnum.app,
+      source: 'online',
+      updateTime: now,
+      title: 'Should be hidden'
+    });
+
+    const res = await Call<getAppChatLogsBody, EmptyQuery, getAppChatLogsResponseType>(
+      listApi.default,
+      {
+        auth: authUser,
+        headers: {
+          cookie: 'NEXT_LOCALE=zh-CN'
+        },
+        body: {
+          appId: testAppId,
+          dateStart: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+          dateEnd: new Date(now.getTime() + 1000).toISOString(),
+          tmbIds: [],
+          outLinkUids: []
+        }
+      }
+    );
+
+    expect(res.code).toBe(200);
+    expect(res.data).toEqual({ list: [], total: 0 });
   });
 });

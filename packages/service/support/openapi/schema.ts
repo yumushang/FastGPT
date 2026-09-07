@@ -1,11 +1,10 @@
-import { connectionMongo, getMongoModel, type Model } from '../../common/mongo';
-const { Schema, model, models } = connectionMongo;
+import { defineIndex, connectionMongo, getMongoModel } from '../../common/mongo';
+const { Schema } = connectionMongo;
 import { type OpenApiSchema } from '@fastgpt/global/support/openapi/type';
 import {
   TeamCollectionName,
   TeamMemberCollectionName
 } from '@fastgpt/global/support/user/team/constant';
-import { getLogger, LogCategories } from '../../common/logger';
 
 const OpenApiSchema = new Schema(
   {
@@ -35,9 +34,21 @@ const OpenApiSchema = new Schema(
       type: String,
       required: false
     },
+    appName: {
+      type: String
+    },
+    tagIds: {
+      type: [Schema.Types.ObjectId],
+      default: []
+    },
+    authProxy: {
+      type: Boolean,
+      default: false
+    },
     name: {
       type: String,
-      default: 'Api Key'
+      default: 'Api Key',
+      maxlength: 50
     },
     usagePoints: {
       type: Number,
@@ -58,12 +69,14 @@ const OpenApiSchema = new Schema(
   }
 );
 
-try {
-  OpenApiSchema.index({ teamId: 1 });
-  OpenApiSchema.index({ apiKey: 1 });
-} catch (error) {
-  const logger = getLogger(LogCategories.INFRA.MONGO);
-  logger.error('Failed to build OpenAPI indexes', { error });
-}
+defineIndex(OpenApiSchema, { key: { teamId: 1 } });
+defineIndex(OpenApiSchema, { key: { apiKey: 1 } });
+defineIndex(OpenApiSchema, {
+  key: { teamId: 1, tmbId: 1, tagIds: 1, _id: -1 }
+});
+defineIndex(OpenApiSchema, {
+  key: { teamId: 1, tmbId: 1, appId: 1, _id: -1 }
+});
+defineIndex(OpenApiSchema, { key: { teamId: 1, tmbId: 1, name: 1 } });
 
 export const MongoOpenApi = getMongoModel<OpenApiSchema>('openapi', OpenApiSchema);

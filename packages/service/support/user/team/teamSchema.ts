@@ -1,9 +1,8 @@
-import { connectionMongo, getMongoModel } from '../../../common/mongo';
+import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo';
 const { Schema } = connectionMongo;
 import { type TeamSchema as TeamType } from '@fastgpt/global/support/user/team/type';
 import { userCollectionName } from '../../user/schema';
 import { TeamCollectionName } from '@fastgpt/global/support/user/team/constant';
-import { getLogger, LogCategories } from '../../../common/logger';
 
 const TeamSchema = new Schema({
   name: {
@@ -23,26 +22,12 @@ const TeamSchema = new Schema({
     default: () => Date.now()
   },
   balance: Number,
-  teamDomain: {
-    type: String
-  },
   limit: {
     lastExportDatasetTime: {
       type: Date
     },
     lastWebsiteSyncTime: {
       type: Date
-    }
-  },
-  lafAccount: {
-    token: {
-      type: String
-    },
-    appid: {
-      type: String
-    },
-    pat: {
-      type: String
     }
   },
   openaiAccount: {
@@ -67,13 +52,13 @@ const TeamSchema = new Schema({
   }
 });
 
-try {
-  TeamSchema.index({ name: 1 });
-  TeamSchema.index({ ownerId: 1 });
-  TeamSchema.index({ 'meta.wecom.corpId': 1 }, { sparse: true, unique: true });
-} catch (error) {
-  const logger = getLogger(LogCategories.INFRA.MONGO);
-  logger.error('Failed to build team indexes', { error });
-}
+defineIndex(TeamSchema, { key: { name: 1 } });
+defineIndex(TeamSchema, { key: { ownerId: 1 } });
+// Admin team list pagination.
+defineIndex(TeamSchema, { key: { createTime: -1, _id: -1 } });
+defineIndex(TeamSchema, {
+  key: { 'meta.wecom.corpId': 1 },
+  options: { sparse: true, unique: true }
+});
 
 export const MongoTeam = getMongoModel<TeamType>(TeamCollectionName, TeamSchema);

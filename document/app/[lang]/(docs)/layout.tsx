@@ -12,7 +12,7 @@ import { SidebarScrollFix } from '@/components/sidebarScrollFix';
 import { CategorySwitcher } from '@/components/docs/categorySwitcher';
 import { LanguageSwitcher } from '@/components/docs/languageSwitcher';
 import { normalizePageTreeSections } from '@/lib/page-tree';
-import { BookOpen, Code, CircleHelp, Handshake, Server } from 'lucide-react';
+import { BookOpen, Code, Handshake, Plug, Server } from 'lucide-react';
 
 export default async function Layout({
   params,
@@ -31,6 +31,11 @@ export default async function Layout({
       url: getLocalizedPath('/guide', lang)
     },
     {
+      icon: <Plug className={iconClass} />,
+      title: t('common:pluginSystem', lang),
+      url: getLocalizedPath('/plugin', lang)
+    },
+    {
       icon: <Server className={iconClass} />,
       title: t('common:selfHost', lang),
       url: getLocalizedPath('/self-host', lang)
@@ -41,14 +46,18 @@ export default async function Layout({
       url: getLocalizedPath('/openapi', lang)
     },
     {
-      icon: <CircleHelp className={iconClass} />,
-      title: t('common:faq', lang),
-      url: getLocalizedPath('/faq', lang)
-    },
-    {
       icon: <Handshake className={iconClass} />,
       title: t('common:businessConsultation', lang),
-      url: 'https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc'
+      url: `https://fastgpt.cn/${lang === 'en' ? 'en' : 'zh'}/contact/embed?source=docs&utm_source=docs&utm_medium=referral&utm_campaign=docs_navigation&utm_content=business_consultation`,
+      dialog: {
+        url: `https://fastgpt.cn/${lang === 'en' ? 'en' : 'zh'}/contact/embed?source=docs&utm_source=docs&utm_medium=referral&utm_campaign=docs_navigation&utm_content=business_consultation`,
+        title: lang === 'en' ? 'Contact FastGPT' : '联系 FastGPT',
+        description:
+          lang === 'en'
+            ? "We'll get in touch with you within 1–3 business days."
+            : '我们将在 1～3 个工作日内与您取得联系',
+        closeLabel: lang === 'en' ? 'Close contact dialog' : '关闭咨询窗口'
+      }
     }
   ];
 

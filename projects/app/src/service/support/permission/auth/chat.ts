@@ -1,29 +1,27 @@
-import { type ChatHistoryItemResType, type ChatSchemaType } from '@fastgpt/global/core/chat/type';
+import { type ChatSchemaType } from '@fastgpt/global/core/chat/type';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
 import { type AuthModeType } from '@fastgpt/service/support/permission/type';
 import { authOutLink } from './outLink';
 import { ChatErrEnum } from '@fastgpt/global/common/error/code/chat';
-import { authTeamSpaceToken } from './team';
 import { AuthUserTypeEnum, ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
+import { authSkill } from '@fastgpt/service/support/permission/skill/auth';
 import { MongoChatItem } from '@fastgpt/service/core/chat/chatItemSchema';
 import { DatasetErrEnum } from '@fastgpt/global/common/error/code/dataset';
-import { getFlatAppResponses } from '@fastgpt/global/core/chat/utils';
-import { MongoChatItemResponse } from '@fastgpt/service/core/chat/chatItemResponseSchema';
-import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
-import type { HelperBotTypeEnum } from '@fastgpt/global/core/chat/helperBot/type';
-import { MongoHelperBotChat } from '@fastgpt/service/core/chat/HelperBot/chatSchema';
-import { authCert } from '@fastgpt/service/support/permission/auth/common';
-import { MongoApp } from '@fastgpt/service/core/app/schema';
+import { ChatRoleEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  buildChatSourceAggregateMatch,
+  buildChatSourceQuery
+} from '@fastgpt/service/core/chat/source';
+import type { OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 
 /* 
   检查chat的权限：
-  1. 无 chatId，仅校验 cookie、shareChat、teamChat 秘钥是否合法
+  1. 无 chatId，仅校验 cookie、shareChat 秘钥是否合法
   2. 有 chatId，校验用户是否有权限操作该 chat
 
   * cookie + appId 校验
   * shareId + outLinkUid 校验
-  * teamId + teamToken + appId 校验
 
   Chat没有读写的权限之分，鉴权过了，都可以操作。
 */
@@ -35,12 +33,16 @@ export const defaultResponseShow = {
   canDownloadSource: true
 };
 type AuthChatCommonProps = {
-  appId: string;
+  appId?: string;
   shareId?: string;
   outLinkUid?: string;
-  teamId?: string;
-  teamToken?: string;
 };
+
+const buildAppChatAuthQuery = (appId: string) =>
+  buildChatSourceQuery({
+    sourceType: ChatSourceTypeEnum.app,
+    sourceId: appId
+  });
 
 export async function authChatCrud({
   appId,
@@ -48,14 +50,12 @@ export async function authChatCrud({
 
   shareId,
   outLinkUid,
-
-  teamId: spaceTeamId,
-  teamToken,
   ...props
 }: AuthModeType &
   AuthChatCommonProps & {
     chatId?: string;
   }): Promise<{
+  appId?: string;
   teamId: string;
   tmbId: string; // 本轮鉴权的 uid
   uid: string; // chat 里的实际的 uid（outlinkUid??tmbId)
@@ -67,65 +67,6 @@ export async function authChatCrud({
   canDownloadSource: boolean;
   authType?: `${AuthUserTypeEnum}`;
 }> {
-  if (!appId) return Promise.reject(ChatErrEnum.unAuthChat);
-
-  if (spaceTeamId && teamToken) {
-    const { uid, tmbId, tags } = await authTeamSpaceToken({
-      teamId: spaceTeamId,
-      teamToken
-    });
-
-    // Verify app belongs to the authenticated team and tag-based access
-    const app = await MongoApp.findOne(
-      {
-        _id: appId,
-        teamId: spaceTeamId,
-        $or: [
-          { teamTags: { $size: 0 } },
-          { teamTags: { $exists: false } },
-          { teamTags: { $in: tags } }
-        ]
-      },
-      'teamId'
-    ).lean();
-    if (!app) {
-      return Promise.reject(ChatErrEnum.unAuthChat);
-    }
-
-    if (!chatId) {
-      return {
-        teamId: spaceTeamId,
-        tmbId,
-        uid,
-        ...defaultResponseShow,
-        authType: AuthUserTypeEnum.teamDomain
-      };
-    }
-
-    const chat = await MongoChat.findOne({ appId, chatId }).lean();
-    if (!chat) {
-      return {
-        teamId: spaceTeamId,
-        tmbId,
-        uid,
-        ...defaultResponseShow,
-        authType: AuthUserTypeEnum.teamDomain
-      };
-    }
-
-    if (String(chat.teamId) !== spaceTeamId || chat.outLinkUid !== uid)
-      return Promise.reject(ChatErrEnum.unAuthChat);
-
-    return {
-      teamId: spaceTeamId,
-      tmbId,
-      uid,
-      chat,
-      ...defaultResponseShow,
-      authType: AuthUserTypeEnum.teamDomain
-    };
-  }
-
   if (shareId && outLinkUid) {
     const {
       outLinkConfig,
@@ -133,10 +74,12 @@ export async function authChatCrud({
       appId: shareChatAppId
     } = await authOutLink({ shareId, outLinkUid });
 
-    if (String(shareChatAppId) !== appId) return Promise.reject(ChatErrEnum.unAuthChat);
+    const resolvedAppId = String(shareChatAppId);
+    if (appId && resolvedAppId !== appId) return Promise.reject(ChatErrEnum.unAuthChat);
 
     if (!chatId) {
       return {
+        appId: resolvedAppId,
         teamId: String(outLinkConfig.teamId),
         tmbId: String(outLinkConfig.tmbId),
         uid,
@@ -150,10 +93,14 @@ export async function authChatCrud({
       };
     }
 
-    const chat = await MongoChat.findOne({ appId, chatId }).lean();
+    const chat = await MongoChat.findOne({
+      ...buildAppChatAuthQuery(resolvedAppId),
+      chatId
+    }).lean();
 
     if (!chat) {
       return {
+        appId: resolvedAppId,
         teamId: String(outLinkConfig.teamId),
         tmbId: String(outLinkConfig.tmbId),
         uid,
@@ -169,6 +116,7 @@ export async function authChatCrud({
     return {
       teamId: String(outLinkConfig.teamId),
       tmbId: String(outLinkConfig.tmbId),
+      appId: resolvedAppId,
       chat,
       uid,
       showCite: outLinkConfig.showCite ?? false,
@@ -181,12 +129,14 @@ export async function authChatCrud({
   }
 
   // Cookie
+  if (!appId) return Promise.reject(ChatErrEnum.unAuthChat);
+
   const { teamId, tmbId, permission, authType } = await authApp({
     req: props.req,
     authToken: true,
     authApiKey: true,
     appId,
-    per: ReadPermissionVal
+    per: props.per ?? ReadPermissionVal
   });
 
   if (!chatId) {
@@ -200,7 +150,7 @@ export async function authChatCrud({
     };
   }
 
-  const chat = await MongoChat.findOne({ appId, chatId }).lean();
+  const chat = await MongoChat.findOne({ ...buildAppChatAuthQuery(appId), chatId }).lean();
   if (!chat) {
     return {
       teamId,
@@ -237,83 +187,194 @@ export async function authChatCrud({
   return Promise.reject(ChatErrEnum.unAuthChat);
 }
 
-export const authCollectionInChat = async ({
-  collectionIds,
-  appId,
-  chatId,
-  chatItemDataId
-}: {
-  collectionIds: string[];
-  appId: string;
-  chatId: string;
-  chatItemDataId: string;
-}) => {
-  try {
-    // 1. 使用 citeCollectionIds 字段来判断
-    const chatItems = await MongoChatItem.find(
-      {
-        appId,
-        chatId,
-        obj: ChatRoleEnum.AI
-      },
-      'citeCollectionIds'
-    )
-      .sort({ _id: -1 })
-      .limit(50)
-      .lean();
-    const citeCollectionIds = new Set(
-      chatItems.map((item) => ('citeCollectionIds' in item ? item.citeCollectionIds : [])).flat()
-    );
-    if (collectionIds.every((id) => citeCollectionIds.has(id))) {
-      return;
-    }
-
-    // Adapt <=4.13.0
-    const chatItem = (await MongoChatItem.findOne(
-      {
-        appId,
-        chatId,
-        dataId: chatItemDataId
-      },
-      'responseData'
-    ).lean()) as { time: Date; responseData?: ChatHistoryItemResType[] };
-
-    if (!chatItem) return Promise.reject(DatasetErrEnum.unAuthDatasetFile);
-
-    // Concat response data
-    if (!chatItem.responseData || chatItem.responseData.length === 0) {
-      const chatItemResponses = await MongoChatItemResponse.find(
-        { appId, chatId, chatItemDataId },
-        { data: 1 }
-      ).lean();
-      chatItem.responseData = chatItemResponses.map((item) => item.data);
-    }
-
-    // 找 responseData 里，是否有该文档 id
-    const flatResData = getFlatAppResponses(chatItem.responseData || []);
-
-    const quoteListSet = new Set(
-      flatResData.map((item) => item.quoteList?.map((quote) => quote.collectionId) || []).flat()
-    );
-
-    if (collectionIds.every((id) => quoteListSet.has(id))) {
-      return;
-    }
-  } catch (error) {}
-  return Promise.reject(DatasetErrEnum.unAuthDatasetFile);
+export type ChatTargetAuthParams = AuthModeType & {
+  sourceType: ChatSourceTypeEnum;
+  sourceId?: string;
+  chatId?: string;
+  outLinkAuthData?: OutLinkChatAuthProps;
+  per?: number;
 };
 
-export const authHelperBotChatCrud = async ({
-  type,
+type AuthChatTargetCrudResult = {
+  appId?: string;
+  userId?: string;
+  sourceType: ChatSourceTypeEnum;
+  sourceId: string;
+  teamId: string;
+  tmbId: string;
+  uid: string;
+  chat?: ChatSchemaType;
+  showCite: boolean;
+  showRunningStatus: boolean;
+  showSkillReferences: boolean;
+  showFullText: boolean;
+  canDownloadSource: boolean;
+  authType?: `${AuthUserTypeEnum}`;
+};
+
+/**
+ * 标准 chat target 鉴权入口。
+ *
+ * API 边界已经把 `appId/skillId` 转换为 `sourceType/sourceId`；这里按 source 类型分发
+ * 到现有 App Chat 或 Skill Edit 权限体系，并返回后续 chat 查询需要的 uid/team 信息。
+ */
+export async function authChatTargetCrud({
+  sourceType,
+  sourceId,
   chatId,
+  outLinkAuthData,
+  per = ReadPermissionVal,
   ...props
-}: AuthModeType & {
-  type: `${HelperBotTypeEnum}`;
+}: ChatTargetAuthParams): Promise<AuthChatTargetCrudResult> {
+  if (sourceType === ChatSourceTypeEnum.app) {
+    const authRes = await authChatCrud({
+      ...props,
+      appId: sourceId,
+      chatId,
+      ...outLinkAuthData,
+      per
+    });
+
+    const resolvedSourceId = sourceId ?? authRes.appId;
+    if (!resolvedSourceId) return Promise.reject(ChatErrEnum.unAuthChat);
+
+    return {
+      ...authRes,
+      sourceType,
+      sourceId: resolvedSourceId
+    };
+  }
+
+  if (sourceType === ChatSourceTypeEnum.skillEdit) {
+    if (!sourceId) return Promise.reject(ChatErrEnum.unAuthChat);
+
+    const authRes = await authSkill({
+      ...props,
+      skillId: sourceId,
+      per
+    });
+    const chat =
+      (chatId
+        ? await MongoChat.findOne({
+            ...buildChatSourceQuery({ sourceType, sourceId }),
+            chatId
+          }).lean()
+        : undefined) ?? undefined;
+
+    if (chat && String(chat.teamId) !== String(authRes.teamId)) {
+      return Promise.reject(ChatErrEnum.unAuthChat);
+    }
+
+    return {
+      teamId: authRes.teamId,
+      tmbId: authRes.tmbId,
+      uid: authRes.tmbId,
+      chat,
+      showCite: true,
+      showRunningStatus: true,
+      showSkillReferences: true,
+      showFullText: true,
+      canDownloadSource: true,
+      sourceType,
+      sourceId,
+      authType: authRes.authType
+    };
+  }
+
+  if (sourceType === ChatSourceTypeEnum.chatAgentHelper) {
+    if (!sourceId) return Promise.reject(ChatErrEnum.unAuthChat);
+
+    const authRes = await authApp({
+      ...props,
+      appId: sourceId,
+      per
+    });
+    if (!authRes.userId) return Promise.reject(ChatErrEnum.unAuthChat);
+    const chat =
+      (chatId
+        ? await MongoChat.findOne({
+            ...buildChatSourceQuery({ sourceType, sourceId }),
+            chatId
+          }).lean()
+        : undefined) ?? undefined;
+
+    if (chat) {
+      if (String(chat.teamId) !== String(authRes.teamId)) {
+        return Promise.reject(ChatErrEnum.unAuthChat);
+      }
+
+      if (!authRes.permission.hasReadChatLogPer && String(chat.tmbId) !== String(authRes.tmbId)) {
+        return Promise.reject(ChatErrEnum.unAuthChat);
+      }
+    }
+
+    return {
+      userId: authRes.userId,
+      teamId: authRes.teamId,
+      tmbId: authRes.tmbId,
+      uid: chat?.tmbId ? String(chat.tmbId) : authRes.tmbId,
+      chat,
+      showCite: false,
+      showRunningStatus: false,
+      showSkillReferences: false,
+      showFullText: false,
+      canDownloadSource: false,
+      sourceType,
+      sourceId,
+      authType: authRes.authType
+    };
+  }
+
+  const exhaustiveCheck: never = sourceType;
+  throw new Error(`Unsupported chat source type: ${exhaustiveCheck}`);
+}
+
+/**
+ * 校验文档是否来自当前会话引用。
+ *
+ * 只依赖 ChatItem 上的 citeCollectionIds 判断 collection 是否在当前会话中被引用，
+ * 避免读取和解析完整 responseData。
+ */
+export const authCollectionInChat = async ({
+  collectionIds,
+  sourceType,
+  sourceId,
+  chatId
+}: {
+  collectionIds: string[];
+  sourceType: ChatSourceTypeEnum;
+  sourceId: string;
   chatId: string;
 }) => {
-  const { userId, teamId, tmbId } = await authCert(props);
+  const targetCollectionIds = collectionIds.map(String);
 
-  const chat = await MongoHelperBotChat.findOne({ type, userId, chatId }).lean();
+  const [authResult] = await MongoChatItem.aggregate<{ isAuthorized: boolean }>([
+    {
+      $match: {
+        ...buildChatSourceAggregateMatch({ sourceType, sourceId }),
+        chatId,
+        obj: ChatRoleEnum.AI
+      }
+    },
+    { $sort: { _id: -1 } },
+    { $limit: 50 },
+    { $unwind: '$citeCollectionIds' },
+    {
+      $group: {
+        _id: null,
+        citeCollectionIds: { $addToSet: { $toString: '$citeCollectionIds' } }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        isAuthorized: { $setIsSubset: [targetCollectionIds, '$citeCollectionIds'] }
+      }
+    }
+  ]);
 
-  return { chat, userId, teamId, tmbId };
+  if (authResult?.isAuthorized) {
+    return;
+  }
+  return Promise.reject(DatasetErrEnum.unAuthDatasetFile);
 };

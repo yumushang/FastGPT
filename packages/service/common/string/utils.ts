@@ -1,6 +1,5 @@
-import { serviceEnv } from '../../env';
+import { getLightweightWorkerPoolOptions } from '../../worker/lightweightResource';
 import { WorkerNameEnum, getWorkerController } from '../../worker/utils';
-import { type ImageType } from '../../worker/readFile/type';
 import { getLogger, LogCategories } from '../logger';
 
 const logger = getLogger(LogCategories.INFRA.WORKER);
@@ -16,11 +15,10 @@ export const htmlToMarkdown = async (html?: string | null) => {
     { html: string },
     {
       rawText: string;
-      imageList: ImageType[];
     }
   >({
     name: WorkerNameEnum.htmlStr2Md,
-    maxReservedThreads: serviceEnv.HTML_TO_MARKDOWN_WORKERS,
+    ...getLightweightWorkerPoolOptions<{ html: string }>(),
     taskTimeoutMs: HTML_TO_MARKDOWN_TIMEOUT_MS,
     maxTasksPerWorker: 100
   });
@@ -28,7 +26,7 @@ export const htmlToMarkdown = async (html?: string | null) => {
   logger.info('HTML to markdown worker task started', {
     htmlLength: htmlContent.length,
     workerName: WorkerNameEnum.htmlStr2Md,
-    maxReservedThreads: serviceEnv.HTML_TO_MARKDOWN_WORKERS,
+    maxReservedThreads: workerController.maxReservedThreads,
     timeoutMs: HTML_TO_MARKDOWN_TIMEOUT_MS
   });
 

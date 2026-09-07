@@ -1,17 +1,19 @@
-import type fs from 'fs';
+import type { Readable } from 'node:stream';
 import { getAxiosConfig } from '../config';
 import { axiosWithoutSSRF } from '../../../common/api/axios';
 import FormData from 'form-data';
-import { type STTModelType } from '@fastgpt/global/core/ai/model.schema';
+import { type STTSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 import { UserError } from '@fastgpt/global/common/error/utils';
 
 export const aiTranscriptions = async ({
   model: modelData,
   fileStream,
+  filename,
   headers
 }: {
-  model: STTModelType;
-  fileStream: fs.ReadStream;
+  model: STTSystemModelDataType;
+  fileStream: Readable;
+  filename: string;
   headers?: Record<string, string>;
 }) => {
   if (!modelData) {
@@ -20,7 +22,7 @@ export const aiTranscriptions = async ({
 
   const data = new FormData();
   data.append('model', modelData.model);
-  data.append('file', fileStream);
+  data.append('file', fileStream, { filename });
 
   const aiAxiosConfig = getAxiosConfig();
 

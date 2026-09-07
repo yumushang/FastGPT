@@ -19,6 +19,8 @@ export const ChatRoleMap = {
 
 export enum ChatFileTypeEnum {
   image = 'image',
+  audio = 'audio',
+  video = 'video',
   file = 'file'
 }
 
@@ -28,12 +30,23 @@ export enum ChatSourceEnum {
   share = 'share',
   api = 'api',
   cronJob = 'cronJob',
-  team = 'team',
   feishu = 'feishu',
   official_account = 'official_account',
   wecom = 'wecom',
   wechat = 'wechat',
   mcp = 'mcp'
+}
+
+/**
+ * 会话所属资源类型。
+ *
+ * `ChatSourceEnum` 表示对话入口来源，例如 test/api/online。
+ * `ChatSourceTypeEnum` 表示会话归属资源类型，用于在同一套 chat 表中隔离 App 和 Skill Edit。
+ */
+export enum ChatSourceTypeEnum {
+  app = 'app',
+  skillEdit = 'skillEdit',
+  chatAgentHelper = 'chatAgentHelper'
 }
 
 export const ChatSourceMap = {
@@ -56,10 +69,6 @@ export const ChatSourceMap = {
   [ChatSourceEnum.cronJob]: {
     name: i18nT('chat:source_cronJob'),
     color: '#FF81AE'
-  },
-  [ChatSourceEnum.team]: {
-    name: i18nT('common:core.chat.logs.team'),
-    color: '#42CFC6'
   },
   [ChatSourceEnum.feishu]: {
     name: i18nT('common:core.chat.logs.feishu'),
@@ -92,7 +101,6 @@ export enum ChatStatusEnum {
 export enum GetChatTypeEnum {
   normal = 'normal',
   outLink = 'outLink',
-  team = 'team',
   home = 'home'
 }
 

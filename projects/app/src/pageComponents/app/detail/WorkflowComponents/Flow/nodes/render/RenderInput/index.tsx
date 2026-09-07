@@ -1,6 +1,6 @@
 import React from 'react';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
-import { Box, Flex } from '@chakra-ui/react';
+import { Box, Flex, Switch } from '@chakra-ui/react';
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import dynamic from 'next/dynamic';
 import InputLabel from './Label';
@@ -10,9 +10,12 @@ import VariableTip from '@/components/common/Textarea/MyTextarea/VariableTip';
 import CommonInputForm from './templates/CommonInputForm';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import SandboxTipTag from '@/pageComponents/app/detail/components/SandboxTipTag';
 import SandboxNotSupportTip from '@/pageComponents/app/detail/components/SandboxNotSupportTip';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import MyTag from '@fastgpt/web/components/common/Tag/index';
+import { useTranslation } from 'next-i18next';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import { getSelectedInputRenderType } from '@fastgpt/global/core/workflow/utils';
 
 const RenderList: Record<
   FlowNodeInputTypeEnum,
@@ -89,6 +92,7 @@ const RenderList: Record<
     Component: CommonInputForm
   },
 
+  [FlowNodeInputTypeEnum.agentGenerated]: undefined,
   [FlowNodeInputTypeEnum.customVariable]: undefined,
   [FlowNodeInputTypeEnum.hidden]: undefined,
   [FlowNodeInputTypeEnum.custom]: undefined,
@@ -102,9 +106,48 @@ type Props = {
   flowInputList: FlowNodeInputItemType[];
   nodeId: string;
   CustomComponent?: Record<string, (e: FlowNodeInputItemType) => React.ReactNode>;
+  settingLLMModelProps?: RenderInputProps['settingLLMModelProps'];
   mb?: number;
+  isTool?: boolean;
 };
-const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) => {
+const AgentGeneratedPlaceholder = ({ isRowUI }: { isRowUI: boolean }) => {
+  const { t } = useTranslation();
+
+  if (isRowUI) {
+    return (
+      <Flex alignItems={'center'} gap={1} color={'myGray.500'} fontSize={'mini'}>
+        <MyIcon name={'infoRounded'} w={'14px'} color={'myGray.500'} />
+        <Box>{t('common:core.workflow.inputType.agentGeneratedSwitchTip')}</Box>
+      </Flex>
+    );
+  }
+
+  return (
+    <Flex
+      h={'40px'}
+      alignItems={'center'}
+      px={3}
+      bg={'myGray.50'}
+      border={'base'}
+      borderColor={'myGray.200'}
+      borderRadius={'md'}
+      color={'myGray.500'}
+      fontSize={'sm'}
+    >
+      {t('common:core.workflow.inputType.agentGeneratedInputPlaceholder')}
+    </Flex>
+  );
+};
+
+const RenderInput = ({
+  flowInputList,
+  nodeId,
+  CustomComponent,
+  settingLLMModelProps,
+  mb = 5,
+  isTool
+}: Props) => {
+  const { t } = useTranslation();
   const { feConfigs } = useSystemStore();
   const { teamPlanStatus } = useUserStore();
   const enableSandbox = !teamPlanStatus?.standard || !!teamPlanStatus?.standard?.enableSandbox;
@@ -119,7 +162,7 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
 
   const filterInputs = useMemoEnhance(() => {
     return filterProInputs.filter((input) => {
-      const renderType = input.renderTypeList?.[input.selectedTypeIndex || 0];
+      const renderType = getSelectedInputRenderType(input);
       const isDynamic = !!input.canEdit;
 
       if (renderType === FlowNodeInputTypeEnum.hidden || isDynamic) return false;
@@ -131,9 +174,22 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
   return (
     <>
       {filterInputs.map((input) => {
-        const renderType = input.renderTypeList?.[input.selectedTypeIndex || 0];
+        const renderType = getSelectedInputRenderType(input) ?? FlowNodeInputTypeEnum.custom;
+        const agentGeneratedDeveloperType =
+          input.renderTypeList.find((type) => type !== FlowNodeInputTypeEnum.agentGenerated) ??
+          FlowNodeInputTypeEnum.input;
 
         const RenderComponent = (() => {
+          if (renderType === FlowNodeInputTypeEnum.agentGenerated) {
+            return {
+              Component: (
+                <AgentGeneratedPlaceholder
+                  isRowUI={agentGeneratedDeveloperType === FlowNodeInputTypeEnum.switch}
+                />
+              )
+            };
+          }
+
           if (renderType === FlowNodeInputTypeEnum.custom && CustomComponent?.[input.key]) {
             return {
               Component: <>{CustomComponent?.[input.key]({ ...input })}</>
@@ -144,21 +200,52 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
 
           if (!RenderItem) return null;
 
+          const renderInput =
+            input.key === NodeInputKeyEnum.useAgentSandbox
+              ? {
+                  ...input,
+                  customRender: ({
+                    value,
+                    onChange
+                  }: {
+                    value: boolean;
+                    onChange?: (value: boolean) => void;
+                  }) => (
+                    <Switch
+                      isChecked={!!value}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        if (checked && (!showSandbox || !enableSandbox)) return;
+                        onChange?.(checked);
+                      }}
+                    />
+                  )
+                }
+              : input;
+
           return {
             Component: (
-              <RenderItem.Component inputs={filterProInputs} item={input} nodeId={nodeId} />
+              <RenderItem.Component
+                inputs={filterProInputs}
+                item={renderInput}
+                nodeId={nodeId}
+                settingLLMModelProps={settingLLMModelProps}
+              />
             ),
             LableRightComponent: RenderItem.LableRightComponent ? (
               <RenderItem.LableRightComponent
                 inputs={filterProInputs}
-                item={input}
+                item={renderInput}
                 nodeId={nodeId}
               />
             ) : undefined
           };
         })();
 
-        const isRowUI = renderType === FlowNodeInputTypeEnum.switch;
+        const isRowUI =
+          renderType === FlowNodeInputTypeEnum.switch ||
+          (renderType === FlowNodeInputTypeEnum.agentGenerated &&
+            agentGeneratedDeveloperType === FlowNodeInputTypeEnum.switch);
 
         return (
           <Box
@@ -174,22 +261,26 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
                 nodeId={nodeId}
                 input={input}
                 RightComponent={RenderComponent?.LableRightComponent}
+                isTool={isTool}
               />
             )}
 
-            {/* tmp */}
             {input.key === NodeInputKeyEnum.useAgentSandbox ? (
-              showSandbox ? (
-                enableSandbox ? (
-                  <Flex alignItems={'center'} gap={1}>
-                    <SandboxTipTag />
-                    {RenderComponent!.Component}
-                  </Flex>
-                ) : (
-                  <SandboxNotSupportTip type="freeDisable" />
-                )
+              RenderComponent ? (
+                <Flex alignItems={'center'} gap={1}>
+                  {showSandbox && enableSandbox ? (
+                    <MyTag>{t('app:sandbox_free_tip')}</MyTag>
+                  ) : (
+                    <MyTag>
+                      {t(
+                        showSandbox ? 'app:sandbox_free_not_support' : 'app:sandbox_not_support_tip'
+                      )}
+                    </MyTag>
+                  )}
+                  {RenderComponent.Component}
+                </Flex>
               ) : (
-                <SandboxNotSupportTip type="systemDisable" />
+                <SandboxNotSupportTip type={showSandbox ? 'freeDisable' : 'systemDisable'} />
               )
             ) : (
               <>

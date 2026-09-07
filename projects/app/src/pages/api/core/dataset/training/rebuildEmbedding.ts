@@ -7,14 +7,13 @@ import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection
 import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
 import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
 import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
-import { getLLMModel, getEmbeddingModel } from '@fastgpt/service/core/ai/model';
 import {
-  getDatasetImageIndexCapability,
-  getDatasetImageTrainingMode
-} from '@fastgpt/service/core/dataset/utils';
-import { uniqueDatasetDataMarkdownImageUrls } from '@fastgpt/service/core/dataset/data/utils';
-import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+  getLLMModelData,
+  getEmbeddingModelData,
+  getOptionalVlmModelData
+} from '@fastgpt/service/core/ai/model';
+import { getDatasetImageIndexCapability } from '@fastgpt/service/core/dataset/utils';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { OwnerPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
@@ -22,9 +21,10 @@ import {
   RebuildEmbeddingResponseSchema,
   type RebuildEmbeddingResponse
 } from '@fastgpt/global/openapi/core/dataset/training/api';
+import { seedDatasetRebuildTasks } from '@/service/core/dataset/queues/rebuild';
 
 async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> {
-  const { datasetId, vectorModel } = parseApiInput({
+  const { datasetId, vectorModelId } = parseApiInput({
     req,
     bodySchema: RebuildEmbeddingBodySchema
   }).body;
@@ -37,8 +37,10 @@ async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> 
     per: OwnerPermissionVal
   });
 
+  const vectorModelData = getEmbeddingModelData({ modelId: vectorModelId });
+
   // check vector model
-  if (!vectorModel || dataset.vectorModel === vectorModel) {
+  if (String(dataset.vectorModelId || '') === vectorModelData.modelId) {
     return Promise.reject('vectorModel 不合法');
   }
 
@@ -52,9 +54,13 @@ async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> 
     return Promise.reject('数据集正在训练或者重建中，请稍后再试');
   }
 
-  const { availableVlmModel, supportVlm, supportImageIndex } = getDatasetImageIndexCapability({
-    vectorModel,
-    vlmModel: dataset.vlmModel
+  const vlmModelData = getOptionalVlmModelData({
+    modelId: dataset.vlmModelId ? String(dataset.vlmModelId) : undefined,
+    model: dataset.vlmModel
+  });
+  const { availableVlmModel, supportImageIndex } = getDatasetImageIndexCapability({
+    vectorModel: vectorModelData,
+    vlmModel: vlmModelData
   });
 
   const { usageId } = await createTrainingUsage({
@@ -62,9 +68,12 @@ async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> 
     tmbId,
     appName: '切换索引模型',
     billSource: UsageSourceEnum.training,
-    vectorModel: getEmbeddingModel(vectorModel)?.name || vectorModel,
-    agentModel: getLLMModel(dataset.agentModel)?.name,
-    vllmModel: availableVlmModel?.name
+    vectorModelId: vectorModelData.modelId!,
+    agentModelId: getLLMModelData({
+      modelId: dataset.agentModelId ? String(dataset.agentModelId) : undefined,
+      model: dataset.agentModel
+    }).modelId,
+    vllmModelId: availableVlmModel?.modelId
   });
 
   // update vector model and dataset.data rebuild field
@@ -73,7 +82,7 @@ async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> 
       datasetId,
       {
         $set: {
-          vectorModel,
+          vectorModelId: vectorModelData.modelId,
           ...(!supportImageIndex && { 'chunkSettings.imageIndex': false })
         }
       },
@@ -109,91 +118,16 @@ async function handler(req: ApiRequestProps): Promise<RebuildEmbeddingResponse> 
     );
   });
 
-  // get 10 init dataset.data
-  const max = global.systemEnv?.vectorMaxProcess || 10;
-  const arr = new Array(max * 2).fill(0);
+  await seedDatasetRebuildTasks({
+    teamId,
+    tmbId,
+    datasetId,
+    billId: String(usageId),
+    vectorModel: vectorModelData,
+    vlmModel: vlmModelData
+  });
 
-  for (let i = 0; i < arr.length; i++) {
-    try {
-      const hasNext = await mongoSessionRun(async (session) => {
-        // get next dataset.data
-        const data = await MongoDatasetData.findOneAndUpdate(
-          {
-            rebuilding: true,
-            teamId,
-            datasetId
-          },
-          {
-            $unset: {
-              rebuilding: null
-            },
-            updateTime: new Date()
-          },
-          {
-            session
-          }
-        ).select({
-          _id: 1,
-          collectionId: 1,
-          imageId: 1,
-          q: 1,
-          indexes: 1
-        });
-
-        if (data) {
-          const collection = await MongoDatasetCollection.findById(data.collectionId)
-            .select('imageIndex')
-            .session(session);
-          const hasMarkdownImages =
-            !!collection?.imageIndex && uniqueDatasetDataMarkdownImageUrls([data.q]).length > 0;
-          const mode = getDatasetImageTrainingMode({
-            supportVlm,
-            supportImageIndex,
-            imageId: data.imageId,
-            hasMarkdownImages
-          });
-
-          await MongoDatasetTraining.create(
-            [
-              {
-                teamId,
-                tmbId,
-                datasetId,
-                collectionId: data.collectionId,
-                billId: usageId,
-                mode,
-                model:
-                  (mode === TrainingModeEnum.imageParse || mode === TrainingModeEnum.image) &&
-                  supportVlm &&
-                  availableVlmModel
-                    ? availableVlmModel.model
-                    : vectorModel,
-                dataId: data._id,
-                ...(data.imageId && { imageId: data.imageId }),
-                ...(mode === TrainingModeEnum.image && {
-                  q: data.q,
-                  indexes: data.indexes
-                }),
-                retryCount: 50
-              }
-            ],
-            {
-              session,
-              ordered: true
-            }
-          );
-        }
-
-        return !!data;
-      });
-
-      if (!hasNext) {
-        break;
-      }
-    } catch {}
-  }
-
-  return RebuildEmbeddingResponseSchema.parse({});
+  return RebuildEmbeddingResponseSchema.parse(undefined);
 }
 
 export default NextAPI(handler);

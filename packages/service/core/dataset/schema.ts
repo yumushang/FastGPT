@@ -1,4 +1,4 @@
-import { getMongoModel, Schema } from '../../common/mongo';
+import { defineIndex, getMongoModel, Schema } from '../../common/mongo';
 import {
   ChunkSettingModeEnum,
   ChunkTriggerConfigTypeEnum,
@@ -12,8 +12,8 @@ import {
   TeamCollectionName,
   TeamMemberCollectionName
 } from '@fastgpt/global/support/user/team/constant';
+import { userCollectionName } from '../../support/user/schema';
 import type { DatasetSchemaType } from '@fastgpt/global/core/dataset/type';
-import { getLogger, LogCategories } from '../../common/logger';
 
 export const DatasetCollectionName = 'datasets';
 
@@ -65,7 +65,7 @@ const DatasetSchema = new Schema({
   userId: {
     //abandon
     type: Schema.Types.ObjectId,
-    ref: 'user'
+    ref: userCollectionName
   },
   teamId: {
     type: Schema.Types.ObjectId,
@@ -95,17 +95,26 @@ const DatasetSchema = new Schema({
     type: Date,
     default: () => new Date()
   },
+  createTime: {
+    type: Date,
+    default: () => new Date()
+  },
   vectorModel: {
-    type: String,
-    required: true,
-    default: 'text-embedding-3-small'
+    type: String
+  },
+  vectorModelId: {
+    type: String
   },
   agentModel: {
-    type: String,
-    required: true,
-    default: 'gpt-4o-mini'
+    type: String
+  },
+  agentModelId: {
+    type: String
   },
   vlmModel: String,
+  vlmModelId: {
+    type: String
+  },
   intro: {
     type: String,
     default: ''
@@ -151,13 +160,12 @@ const DatasetSchema = new Schema({
   yuqueServer: Object
 });
 
-try {
-  DatasetSchema.index({ teamId: 1 });
-  DatasetSchema.index({ type: 1 }); // Admin count
-  DatasetSchema.index({ deleteTime: 1 }); // 添加软删除字段索引
-} catch (error) {
-  const logger = getLogger(LogCategories.INFRA.MONGO);
-  logger.error('Failed to build dataset indexes', { error });
-}
+defineIndex(DatasetSchema, { key: { teamId: 1, createTime: 1 } });
+defineIndex(DatasetSchema, { key: { teamId: 1, updateTime: -1 } });
+defineIndex(DatasetSchema, { key: { teamId: 1, parentId: 1 } });
+defineIndex(DatasetSchema, { key: { type: 1 } }); // Admin count
+defineIndex(DatasetSchema, { key: { deleteTime: 1 } }); // 添加软删除字段索引
+
+defineIndex(DatasetSchema, { key: { teamId: 1 }, deprecated: true });
 
 export const MongoDataset = getMongoModel<DatasetSchemaType>(DatasetCollectionName, DatasetSchema);

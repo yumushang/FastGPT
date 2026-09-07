@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Flex, Box, useDisclosure } from '@chakra-ui/react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import Avatar from '@fastgpt/web/components/common/Avatar';
-import ToolMenu from './ToolMenu';
+import MarkdownExportButton from './MarkdownExportButton';
 import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import { useTranslation } from 'next-i18next';
 
@@ -61,12 +61,13 @@ const ChatHeader = ({
   const isPlugin = chatData.app.type === AppTypeEnum.workflowTool;
   const isShare = source === 'share';
   const chatType = isShare ? ChatTypeEnum.share : ChatTypeEnum.chat;
+  const hasHistory = history.length > 0;
 
   return isPc && isPlugin ? null : (
     <Flex
       alignItems={'center'}
       px={[3, 5]}
-      minH={['46px', '60px']}
+      minH={['48px', '60px']}
       borderBottom={'sm'}
       color={'myGray.900'}
       fontSize={'sm'}
@@ -102,7 +103,9 @@ const ChatHeader = ({
         {!isVariableVisible && <VariablePopover chatType={chatType} />}
 
         {/* control */}
-        {!isPlugin && !hideMenu && <ToolMenu history={history} reserveSpace={reserveSpace} />}
+        {!isPlugin && !hideMenu && hasHistory && (
+          <MarkdownExportButton history={history} reserveSpace={reserveSpace} />
+        )}
       </Flex>
     </Flex>
   );
@@ -115,8 +118,11 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
   }
   const { t } = useTranslation();
 
-  const { setChatId } = useChatStore();
   const myApps = useContextSelector(ChatPageContext, (v) => v.myApps);
+  const upsertRecentlyUsedAppPlaceholder = useContextSelector(
+    ChatPageContext,
+    (v) => v.upsertRecentlyUsedAppPlaceholder
+  );
 
   const [currentTab, setCurrentTab] = useState<TabEnum>(TabEnum.recently);
 
@@ -134,9 +140,12 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
   const handlePaneChange = useContextSelector(ChatPageContext, (v) => v.handlePaneChange);
 
   const onclickApp = (id: string) => {
+    const app = myApps.find((item) => item.appId === id);
+    if (app) {
+      upsertRecentlyUsedAppPlaceholder(app);
+    }
     handlePaneChange(ChatSidebarPaneEnum.RECENTLY_USED_APPS, id);
     onCloseDrawer();
-    setChatId();
   };
 
   return (
@@ -163,6 +172,9 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
       >
         <LightRowTabs<TabEnum>
           gap={3}
+          outerPadding="4px"
+          outerHeight="40px"
+          itemHeight="32px"
           inlineStyles={{
             px: 2
           }}
@@ -193,6 +205,7 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
               myApps.map((item) => (
                 <Flex justify={'center'} key={item.appId}>
                   <Flex
+                    gap={2}
                     py={2.5}
                     px={2}
                     width={'100%'}
@@ -208,7 +221,7 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
                         })}
                   >
                     <Avatar src={item.avatar} w={'24px'} borderRadius={'sm'} />
-                    <Box ml={2} className={'textEllipsis'}>
+                    <Box className={'textEllipsis'}>
                       {item.name}
                     </Box>
                   </Flex>
@@ -221,6 +234,11 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
             value={appId}
             onSelect={(item) => {
               if (!item) return;
+              upsertRecentlyUsedAppPlaceholder({
+                appId: item.id,
+                name: item.name,
+                avatar: item.avatar
+              });
               onclickApp(item.id);
             }}
             server={getAppList}
@@ -259,10 +277,10 @@ const MobileHeader = ({
         />
       )}
       <Flex px={3} alignItems={'center'} flex={'1 0 0'} w={0} justifyContent={'center'}>
-        <Flex alignItems={'center'} onClick={toggleDrawer}>
+        <Flex alignItems={'center'} gap={1} onClick={toggleDrawer}>
           <Avatar borderRadius={'sm'} src={avatar} w={'1rem'} />
 
-          <Box ml={1} className="textEllipsis">
+          <Box overflow={'hidden'} whiteSpace={'nowrap'} textOverflow={'clip'}>
             {name}
           </Box>
 
@@ -297,23 +315,23 @@ export const PcHeader = ({
 
   return (
     <>
-      <MyTooltip label={chatId ? t('common:chat_chatId', { chatId }) : ''}>
-        <Box
-          mr={3}
-          maxW={'200px'}
-          className="textEllipsis"
-          color={'myGray.1000'}
-          cursor={'pointer'}
-          onClick={() => {
-            copyData(chatId);
-          }}
-        >
-          {title}
-        </Box>
-      </MyTooltip>
-      <MyTag>
+      <Box pr={3} maxW={'200px'} minW={0}>
+        <MyTooltip label={chatId ? t('common:chat_chatId', { chatId }) : ''}>
+          <Box
+            className="textEllipsis"
+            color={'myGray.900'}
+            cursor={'pointer'}
+            onClick={() => {
+              copyData(chatId);
+            }}
+          >
+            {title}
+          </Box>
+        </MyTooltip>
+      </Box>
+      <MyTag gap={1}>
         <MyIcon name={'history'} w={'14px'} />
-        <Box ml={1}>
+        <Box>
           {totalRecordsCount === 0
             ? t('common:core.chat.New Chat')
             : t('common:core.chat.History Amount', { amount: totalRecordsCount })}
@@ -321,12 +339,14 @@ export const PcHeader = ({
       </MyTag>
       {!!chatModels && chatModels.length > 0 && (
         <MyTooltip label={chatModels.join(',')}>
-          <MyTag ml={2} colorSchema={'green'}>
-            <MyIcon name={'core/chat/chatModelTag'} w={'14px'} />
-            <Box ml={1} maxW={'200px'} className="textEllipsis">
-              {chatModels.join(',')}
-            </Box>
-          </MyTag>
+          <Box pl={2}>
+            <MyTag gap={1} colorSchema={'green'}>
+              <MyIcon name={'core/chat/chatModelTag'} w={'14px'} />
+              <Box maxW={'200px'} className="textEllipsis">
+                {chatModels.join(',')}
+              </Box>
+            </MyTag>
+          </Box>
         </MyTooltip>
       )}
     </>

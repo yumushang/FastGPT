@@ -6,7 +6,8 @@ import {
   checkTeamDatasetFolderLimit,
   checkDatasetIndexLimit,
   checkTeamDatasetLimit,
-  checkTeamDatasetSyncPermission
+  checkTeamDatasetSyncPermission,
+  checkTeamSandboxPermission
 } from '@fastgpt/service/support/permission/teamLimit';
 import * as walletUtils from '@fastgpt/service/support/wallet/sub/utils';
 import { MongoApp } from '@fastgpt/service/core/app/schema';
@@ -54,6 +55,27 @@ describe('checkTeamAIPoints', () => {
     expect(result).toEqual({
       totalPoints: 2000,
       usedPoints: 500
+    });
+  });
+
+  it('积分额度为 null 时不限制', async () => {
+    (global as any).subPlans = {
+      standard: {
+        [StandardSubLevelEnum.basic]: {
+          totalPoints: 2000
+        }
+      }
+    };
+
+    vi.spyOn(walletUtils.teamPoint, 'getTeamPoints').mockResolvedValue({
+      totalPoints: null,
+      surplusPoints: null,
+      usedPoints: null
+    });
+
+    await expect(checkTeamAIPoints(mockTeamId)).resolves.toEqual({
+      totalPoints: null,
+      usedPoints: null
     });
   });
 
@@ -508,6 +530,25 @@ describe('checkDatasetIndexLimit', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('积分和知识库额度为 null 时不限制', async () => {
+    vi.spyOn(walletUtils, 'getTeamPlanStatus').mockResolvedValue({
+      standard: {
+        maxDatasetSize: 10000
+      },
+      totalPoints: null,
+      usedPoints: null,
+      datasetMaxSize: null
+    } as any);
+    vi.spyOn(vectorController, 'getVectorCountByTeamId').mockResolvedValue(50000);
+
+    await expect(
+      checkDatasetIndexLimit({
+        teamId: mockTeamId,
+        insertLen: 1000
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it('当数据集大小超限时抛出错误', async () => {
     const mockPlanStatus = {
       standard: {
@@ -829,5 +870,67 @@ describe('checkTeamDatasetSyncPermission', () => {
     vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
     await expect(checkTeamDatasetSyncPermission(mockTeamId)).resolves.toBeUndefined();
+  });
+});
+
+describe('checkTeamSandboxPermission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete (global as any).subPlans;
+  });
+
+  it('当 global.subPlans.standard 不存在时直接返回', async () => {
+    const getTeamStandPlanSpy = vi.spyOn(walletUtils, 'getTeamStandPlan');
+
+    await expect(checkTeamSandboxPermission(mockTeamId)).resolves.toBeUndefined();
+    expect(getTeamStandPlanSpy).not.toHaveBeenCalled();
+  });
+
+  it('当 enableSandbox 为 false 时抛出错误', async () => {
+    (global as any).subPlans = {
+      standard: {
+        [StandardSubLevelEnum.basic]: {}
+      }
+    };
+    const mockStandard = {
+      standard: {
+        enableSandbox: false
+      }
+    };
+    vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
+
+    await expect(checkTeamSandboxPermission(mockTeamId)).rejects.toBe(
+      TeamErrEnum.sandboxNotSupport
+    );
+  });
+
+  it('当 standard 不存在时不抛出错误', async () => {
+    (global as any).subPlans = {
+      standard: {
+        [StandardSubLevelEnum.basic]: {}
+      }
+    };
+    const mockStandard = {
+      standard: undefined
+    };
+    vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
+
+    await expect(checkTeamSandboxPermission(mockTeamId)).resolves.toBeUndefined();
+  });
+
+  it('当 enableSandbox 为 true 时正常通过', async () => {
+    (global as any).subPlans = {
+      standard: {
+        [StandardSubLevelEnum.basic]: {}
+      }
+    };
+    const mockStandard = {
+      standard: {
+        enableSandbox: true
+      }
+    };
+    vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
+
+    await expect(checkTeamSandboxPermission(mockTeamId)).resolves.toBeUndefined();
   });
 });

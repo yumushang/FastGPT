@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Menu,
   MenuList,
@@ -7,6 +7,7 @@ import {
   useOutsideClick,
   MenuButton,
   type MenuItemProps,
+  type MenuListProps,
   type PlacementWithLogical,
   type AvatarProps,
   type BoxProps,
@@ -30,7 +31,9 @@ export type MenuItemData = {
     label: string | React.ReactNode;
     description?: string;
     onClick?: () => any;
+    closeOnClick?: boolean;
     menuItemStyles?: MenuItemProps;
+    iconStyles?: AvatarProps;
     disabled?: boolean;
     disabledTip?: string;
   }>;
@@ -39,6 +42,8 @@ export type Props = {
   width?: number | string;
   offset?: [number, number];
   Button: React.ReactNode;
+  buttonBoxProps?: BoxProps;
+  menuListProps?: MenuListProps;
   trigger?: 'hover' | 'click';
   size?: MenuSizeType;
 
@@ -198,6 +203,8 @@ const MyMenu = ({
   size = 'sm',
   offset,
   Button,
+  buttonBoxProps,
+  menuListProps,
   menuList,
   placement = 'bottom-start'
 }: Props) => {
@@ -208,9 +215,16 @@ const MyMenu = ({
 
   const formatTrigger = !isPc ? 'click' : trigger;
 
+  const isIgnoreOutsideClickTarget = (event: Event) => {
+    return event.composedPath().some((target) => {
+      return target instanceof HTMLElement && target.dataset.myMenuIgnoreOutsideClick !== undefined;
+    });
+  };
+
   useOutsideClick({
     ref: ref,
-    handler: () => {
+    handler: (event) => {
+      if (isIgnoreOutsideClickTarget(event)) return;
       setIsOpen(false);
     }
   });
@@ -244,7 +258,7 @@ const MyMenu = ({
           if (formatTrigger === 'hover') {
             closeTimer.current = setTimeout(() => {
               setIsOpen(false);
-            }, 100);
+            }, 250);
           }
         }}
       >
@@ -272,6 +286,7 @@ const MyMenu = ({
             w="fit-content"
             h="fit-content"
             borderRadius="sm"
+            {...buttonBoxProps}
           >
             {Button}
           </Box>
@@ -283,6 +298,7 @@ const MyMenu = ({
           p={'6px'}
           border={'1px solid #fff'}
           boxShadow={'3'}
+          {...menuListProps}
         >
           {menuList.map((item, i) => {
             return (
@@ -293,6 +309,7 @@ const MyMenu = ({
                   const menuItem = (
                     <MenuItem
                       key={index}
+                      w={'100%'}
                       borderRadius={'sm'}
                       isDisabled={child.disabled}
                       onClick={(e) => {
@@ -301,7 +318,9 @@ const MyMenu = ({
                           return;
                         }
                         if (child.onClick) {
-                          setIsOpen(false);
+                          if (child.closeOnClick !== false) {
+                            setIsOpen(false);
+                          }
                           child.onClick();
                         }
                       }}
@@ -318,6 +337,7 @@ const MyMenu = ({
                           src={child.icon as any}
                           mr={2}
                           {...sizeMapStyle[size].iconStyle}
+                          {...child.iconStyles}
                           color={
                             child.isActive
                               ? 'inherit'
@@ -351,7 +371,7 @@ const MyMenu = ({
                   if (child.disabled && child.disabledTip) {
                     return (
                       <MyTooltip shouldWrapChildren={false} key={index} label={child.disabledTip}>
-                        {menuItem}
+                        <Box>{menuItem}</Box>
                       </MyTooltip>
                     );
                   }

@@ -4,23 +4,29 @@ import {
   ParentTreePathItemSchema
 } from '../../../../common/parentFolder/type';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
-import { OutLinkChatAuthSchema } from '../../../../support/permission/chat';
 import {
   DatasetCollectionSyncResultEnum,
-  DatasetCollectionTypeEnum,
   DatasetCollectionDataProcessModeEnum,
   TrainingModeEnum
 } from '../../../../core/dataset/constants';
 import {
-  ChunkSettingsSchema,
+  CollectionTrainingStatusSchema,
   DatasetCollectionItemSchema,
   DatasetCollectionSchema
 } from '../../../../core/dataset/type';
 import { PermissionSchema } from '../../../../support/permission/controller';
 import { PaginationResponseSchema, PaginationSchema } from '../../../api';
 import z from 'zod';
+import {
+  createOptionalOutLinkChatTargetInputSchema,
+  transformChatAuthTargetInput,
+  transformOptionalChatAuthTargetInput
+} from '../../chat/api';
 
 // ============= Scroll Collections =============
+/**
+ * @deprecated Use ListCollectionV2BodySchema and /core/dataset/collection/listV2 instead.
+ */
 export const ScrollCollectionsBodySchema = z.object({
   datasetId: z.string(),
   parentId: z.string().nullable().optional().default(null),
@@ -50,6 +56,29 @@ const BasicExportSchema = z
   .object({
     collectionId: ObjectIdSchema.describe('集合ID')
   })
+  .passthrough()
+  .superRefine((data, ctx) => {
+    // 先检查原始键再清洗，避免无效聊天鉴权参数被 union 降级为普通登录态导出。
+    const chatExportKeys = [
+      'appId',
+      'skillId',
+      'sourceType',
+      'outLinkAuthData',
+      'chatId',
+      'chatItemDataId',
+      'chatTime'
+    ] as const;
+    const invalidKey = chatExportKeys.find((key) => data[key] !== undefined);
+
+    if (invalidKey) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [invalidKey],
+        message: '聊天态导出字段不能用于普通导出'
+      });
+    }
+  })
+  .transform(({ collectionId }) => ({ collectionId }))
   .meta({
     description: '通过身份鉴权导出集合',
     example: {
@@ -57,28 +86,46 @@ const BasicExportSchema = z
     }
   });
 
-// Schema 2: Export from chat context with outlink authentication
-const ChatExportSchema = OutLinkChatAuthSchema.extend({
+// Schema 2: Export from chat context with app/skill/outLink authentication
+const ChatExportRawSchema = createOptionalOutLinkChatTargetInputSchema({
   collectionId: ObjectIdSchema.describe('集合ID'),
-  appId: ObjectIdSchema.describe('应用ID'),
-  chatId: ObjectIdSchema.describe('会话ID'),
-  chatItemDataId: z.string().describe('对话ID'),
+  chatId: z.string().min(1).max(256).describe('会话ID'),
+  chatItemDataId: z.string().min(1).max(256).describe('对话ID'),
   chatTime: z.coerce.date().optional().describe('对话时间')
-}).meta({
-  description: '对话中导出集合，可通过 chatId 等身份信息',
-  example: {
-    collectionId: '1234567890',
-    appId: '1234567890',
-    chatId: '1234567890',
-    chatItemDataId: '1234567890',
-    chatTime: '2025-12-30T00:00:00.000Z',
-    shareId: '1234567890',
-    outLinkUid: '1234567890'
-  }
-});
+})
+  .superRefine((data, ctx) => {
+    const hasAppTarget = !!data.appId;
+    const hasSkillTarget = !!data.skillId;
+    const hasShareAuth = !!(data.outLinkAuthData?.shareId && data.outLinkAuthData?.outLinkUid);
 
-export const ExportCollectionBodySchema = z.union([BasicExportSchema, ChatExportSchema]);
-export type ExportCollectionBodyType = z.infer<typeof ExportCollectionBodySchema>;
+    if (!hasAppTarget && !hasSkillTarget && !hasShareAuth) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '对话导出必须提供 appId、skillId 或 share auth'
+      });
+    }
+  })
+  .meta({
+    description: '对话中导出集合，可通过 chatId 等身份信息',
+    example: {
+      collectionId: '1234567890',
+      chatId: '1234567890',
+      chatItemDataId: '1234567890',
+      chatTime: '2025-12-30T00:00:00.000Z',
+      outLinkAuthData: {
+        shareId: '1234567890',
+        outLinkUid: '1234567890'
+      }
+    }
+  });
+
+export const ExportCollectionBodyRawSchema = z.union([ChatExportRawSchema, BasicExportSchema]);
+export const ExportCollectionBodySchema = z.union([
+  ChatExportRawSchema.transform(transformChatAuthTargetInput),
+  BasicExportSchema
+]);
+export type ExportCollectionBodyType = z.infer<typeof ExportCollectionBodyRawSchema>;
+export type ExportCollectionRuntimeBodyType = z.infer<typeof ExportCollectionBodySchema>;
 
 // ============= Delete Collection =============
 export const DeleteCollectionQuerySchema = z.object({
@@ -114,27 +161,27 @@ export const ListCollectionV2BodySchema = PaginationSchema.extend({
 export type ListCollectionV2BodyType = z.infer<typeof ListCollectionV2BodySchema>;
 
 // ============= List Collections V2 Response =============
-export const DatasetCollectionsListItemSchema = z.object({
-  _id: ObjectIdSchema.meta({ description: '集合 ID' }),
-  parentId: DatasetCollectionSchema.shape.parentId,
-  tmbId: DatasetCollectionSchema.shape.tmbId,
-  name: DatasetCollectionSchema.shape.name,
-  type: DatasetCollectionSchema.shape.type,
-  createTime: DatasetCollectionSchema.shape.createTime,
-  updateTime: DatasetCollectionSchema.shape.updateTime,
-  forbid: DatasetCollectionSchema.shape.forbid,
-  trainingType: DatasetCollectionSchema.shape.trainingType,
-  tags: z.array(z.string()).optional().meta({ description: '标签' }),
+export const DatasetCollectionsListItemSchema = z
+  .object({
+    _id: ObjectIdSchema.meta({ description: '集合 ID' }),
+    parentId: DatasetCollectionSchema.shape.parentId,
+    tmbId: DatasetCollectionSchema.shape.tmbId,
+    name: DatasetCollectionSchema.shape.name,
+    type: DatasetCollectionSchema.shape.type,
+    createTime: DatasetCollectionSchema.shape.createTime,
+    updateTime: DatasetCollectionSchema.shape.updateTime,
+    forbid: DatasetCollectionSchema.shape.forbid,
+    trainingType: DatasetCollectionSchema.shape.trainingType,
+    tags: z.array(z.string()).optional().meta({ description: '标签' }),
 
-  externalFileId: z.string().optional().meta({ description: '外部文件 ID' }),
+    externalFileId: z.string().optional().meta({ description: '外部文件 ID' }),
 
-  fileId: z.string().optional().meta({ description: '文件 ID' }),
-  rawLink: z.string().optional().meta({ description: '原始链接' }),
-  permission: PermissionSchema,
-  dataAmount: z.number().meta({ description: '数据数量' }),
-  trainingAmount: z.number().meta({ description: '训练数量' }),
-  hasError: z.boolean().optional().meta({ description: '是否错误' })
-});
+    fileId: z.string().optional().meta({ description: '文件 ID' }),
+    rawLink: z.string().optional().meta({ description: '原始链接' }),
+    permission: PermissionSchema,
+    dataAmount: z.number().meta({ description: '数据数量' })
+  })
+  .merge(CollectionTrainingStatusSchema);
 export type DatasetCollectionsListItemType = z.infer<typeof DatasetCollectionsListItemSchema>;
 export const ListCollectionV2ResponseSchema = PaginationResponseSchema(
   DatasetCollectionsListItemSchema
@@ -149,13 +196,16 @@ export const GetCollectionPathsResponseSchema = z.array(ParentTreePathItemSchema
 export type GetCollectionPathsResponseType = z.infer<typeof GetCollectionPathsResponseSchema>;
 
 // ============= Read Collection Source =============
-export const ReadCollectionSourceBodySchema = OutLinkChatAuthSchema.extend({
+export const ReadCollectionSourceBodyRawSchema = createOptionalOutLinkChatTargetInputSchema({
   collectionId: ObjectIdSchema.meta({ description: '集合 ID' }),
-  appId: ObjectIdSchema.optional().meta({ description: '应用 ID（对话中使用）' }),
   chatId: z.string().min(1).optional().meta({ description: '对话 ID（对话中使用）' }),
   chatItemDataId: z.string().min(1).optional().meta({ description: '对话消息 ID（对话中使用）' })
 });
-export type ReadCollectionSourceBodyType = z.infer<typeof ReadCollectionSourceBodySchema>;
+export const ReadCollectionSourceBodySchema = ReadCollectionSourceBodyRawSchema.transform(
+  transformOptionalChatAuthTargetInput
+);
+export type ReadCollectionSourceBodyType = z.infer<typeof ReadCollectionSourceBodyRawSchema>;
+export type ReadCollectionSourceRuntimeBodyType = z.infer<typeof ReadCollectionSourceBodySchema>;
 
 export const ReadCollectionSourceResponseSchema = z.object({
   type: z.literal('url').meta({ description: '资源类型' }),

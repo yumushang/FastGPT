@@ -2,12 +2,9 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import type { RenderInputProps } from '../type';
 import { Flex, Box, type ButtonProps, Grid } from '@chakra-ui/react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import { getNodeAllSource, filterWorkflowNodeOutputsByType } from '@/web/core/workflow/utils';
-import { useTranslation } from 'next-i18next';
-import {
-  NodeOutputKeyEnum,
-  WorkflowIOValueTypeEnum
-} from '@fastgpt/global/core/workflow/constants';
+import { getNodeAllSource, filterSelectableWorkflowNodeOutputs } from '@/web/core/workflow/utils';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import { WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import type {
   ReferenceArrayValueType,
   ReferenceItemValueType,
@@ -15,15 +12,9 @@ import type {
 } from '@fastgpt/global/core/workflow/type/io';
 import dynamic from 'next/dynamic';
 import { useContextSelector } from 'use-context-selector';
-import {
-  FlowNodeOutputTypeEnum,
-  isNestedParentNodeType
-} from '@fastgpt/global/core/workflow/node/constant';
+import { isNestedParentNodeType } from '@fastgpt/global/core/workflow/node/constant';
 import { AppContext } from '@/pageComponents/app/detail/context';
-import {
-  WorkflowBufferDataContext,
-  WorkflowNodeDataContext
-} from '../../../../../context/workflowInitContext';
+import { WorkflowBufferDataContext } from '../../../../../context/workflowInitContext';
 import { WorkflowActionsContext } from '@/pageComponents/app/detail/WorkflowComponents/context/workflowActionsContext';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 
@@ -69,10 +60,10 @@ export const useReference = ({
   // Include the container's own children as reference sources.
   includeChildren?: boolean;
 }) => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const appDetail = useContextSelector(AppContext, (v) => v.appDetail);
   const edges = useContextSelector(WorkflowBufferDataContext, (v) => v.edges);
-  const { getNodeById, systemConfigNode, childrenNodeIdListMap } = useContextSelector(
+  const { getNodeById, childrenNodeIdListMap } = useContextSelector(
     WorkflowBufferDataContext,
     (v) => v
   );
@@ -81,7 +72,6 @@ export const useReference = ({
   const referenceList = useMemoEnhance(() => {
     const sourceNodes = getNodeAllSource({
       nodeId,
-      systemConfigNode,
       getNodeById,
       edges: edges,
       chatConfig: appDetail.chatConfig,
@@ -99,24 +89,21 @@ export const useReference = ({
           label: (
             <Flex alignItems={'center'}>
               <Avatar src={node.avatar} w={isArray ? '1rem' : '1.05rem'} borderRadius={'xs'} />
-              <Box ml={1}>{t(node.name as any)}</Box>
+              <Box ml={1}>{node.name}</Box>
             </Flex>
           ),
           value: node.nodeId,
-          children: filterWorkflowNodeOutputsByType(node.outputs, valueType)
-            .filter((output) => {
-              if (output.type === FlowNodeOutputTypeEnum.error) {
-                return node.catchError === true;
-              }
-              return output.id !== NodeOutputKeyEnum.addOutputParam && output.invalid !== true;
-            })
-            .map((output) => {
-              return {
-                label: t(output.label as any),
-                value: output.id,
-                valueType: output.valueType
-              };
-            })
+          children: filterSelectableWorkflowNodeOutputs({
+            outputs: node.outputs,
+            valueType,
+            catchError: node.catchError
+          }).map((output) => {
+            return {
+              label: t(output.label as any),
+              value: output.id,
+              valueType: output.valueType
+            };
+          })
         };
       })
       .filter((item) => item.children.length > 0);
@@ -124,7 +111,6 @@ export const useReference = ({
     return list;
   }, [
     nodeId,
-    systemConfigNode,
     getNodeById,
     edges,
     appDetail.chatConfig,
@@ -140,7 +126,7 @@ export const useReference = ({
 };
 
 const Reference = ({ item, nodeId }: RenderInputProps) => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
 
   const getNodeById = useContextSelector(WorkflowBufferDataContext, (v) => v.getNodeById);
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);

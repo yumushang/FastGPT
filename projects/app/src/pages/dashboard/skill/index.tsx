@@ -4,16 +4,21 @@ import { Box, Button, Flex } from '@chakra-ui/react';
 import { serviceSideProps } from '@/web/common/i18n/utils';
 import { useTranslation } from 'next-i18next';
 import { useContextSelector } from 'use-context-selector';
+import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import MyMenu from '@fastgpt/web/components/common/MyMenu';
 import DashboardContainer from '@/pageComponents/dashboard/Container';
 import SkillListContextProvider, {
   SkillListContext
 } from '@/pageComponents/dashboard/skill/context';
 import List from '@/pageComponents/dashboard/skill/List';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import {
+  canCreateSubFolder,
+  DEFAULT_MAX_FOLDER_DEPTH
+} from '@fastgpt/global/common/parentFolder/depth';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { postCreateSkillFolder } from '@/web/core/skill/api';
 import dynamic from 'next/dynamic';
@@ -21,6 +26,9 @@ import type { EditFolderFormType } from '@fastgpt/web/components/common/MyModal/
 import FolderPath from '@/components/common/folder/Path';
 import { useRouter } from 'next/router';
 import type { ParentIdType } from '@fastgpt/global/common/parentFolder/type';
+import { useSkillSandboxOperationGuard } from '@/components/core/skill/useSkillSandboxOperationGuard';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import ResourceListFilters from '@/pageComponents/dashboard/agent/filters/ResourceListFilters';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
@@ -28,20 +36,37 @@ const EditFolderModal = dynamic(
 const CreateSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/CreateSkillModal'));
 const ImportSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/ImportSkillModal'));
 
-const SkillPageContent = () => {
+const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
   const { t } = useTranslation();
   const router = useRouter();
+  const { isPc } = useSystem();
   const { userInfo } = useUserStore();
+  const { feConfigs } = useSystemStore();
   const [editFolder, setEditFolder] = useState<EditFolderFormType>();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const { guardSkillSandboxOperation, SkillSandboxOperationGuardModal } =
+    useSkillSandboxOperationGuard();
 
-  const { skills, isFetchingSkills, loadSkills, searchKey, setSearchKey, parentId, paths } =
-    useContextSelector(SkillListContext, (v) => v);
+  const {
+    skills,
+    isFetchingSkills,
+    refreshSkills,
+    searchKey,
+    setSearchKey,
+    parentId,
+    paths,
+    folderDetail,
+    listFilters,
+    setListFilters
+  } = useContextSelector(SkillListContext, (v) => v);
+  const maxFolderDepth = feConfigs?.limit?.maxFolderDepth ?? DEFAULT_MAX_FOLDER_DEPTH;
+  const canCreateFolder = canCreateSubFolder(parentId, paths, maxFolderDepth);
+  const folderDepthLimitTip = t('common:folder_depth_limit_tip');
 
   const { runAsync: onCreateFolder } = useRequest(postCreateSkillFolder, {
     onSuccess() {
-      loadSkills();
+      refreshSkills();
     },
     errorToast: 'Error'
   });
@@ -55,110 +80,123 @@ const SkillPageContent = () => {
     });
   };
 
-  const hasCreatePer = userInfo?.team.permission.hasSkillCreatePer;
+  const hasCreatePer = folderDetail
+    ? folderDetail.permission.hasWritePer
+    : userInfo?.team.permission.hasSkillCreatePer;
 
   return (
     <Flex flexDirection={'column'} h={'100%'}>
-      <Flex
-        flex={'1 0 0'}
-        flexDirection={'column'}
-        h={'100%'}
-        pr={6}
-        pl={6}
-        pt={6}
-        overflowY={'auto'}
-        overflowX={'hidden'}
-      >
-        {/* Header */}
-        <Flex alignItems={'center'}>
-          {paths.length > 0 ? (
-            <Box>
-              <FolderPath
-                paths={paths}
-                hoverStyle={{ bg: 'myGray.200' }}
-                forbidLastClick
-                onClick={onNavigate}
-              />
-            </Box>
-          ) : (
-            <Box fontSize={'18px'} fontWeight={'bold'}>
-              Skill
-            </Box>
-          )}
-          <Flex flex={1} />
-          <Flex alignItems={'center'} gap={3}>
-            <SearchInput
-              w={'250px'}
-              value={searchKey}
-              bg={'white'}
-              onChange={(e) => setSearchKey(e.target.value)}
-              placeholder={t('skill:search_skill')}
-              maxLength={30}
-            />
-            {hasCreatePer && (
-              <>
-                <Button variant={'whitePrimary'} onClick={() => setEditFolder({})}>
-                  {t('skill:create_folder')}
-                </Button>
-                <MyMenu
-                  trigger={'hover'}
-                  Button={
-                    <Button leftIcon={<MyIcon name={'common/addLight'} w={'18px'} />}>
-                      {t('skill:create_skill')}
-                    </Button>
-                  }
-                  menuList={[
-                    {
-                      children: [
-                        {
-                          label: (
-                            <Flex alignItems={'center'} gap={3}>
-                              <MyIcon name={'core/skill/default'} w={'32px'} flexShrink={0} />
-                              <Box>
-                                <Box color={'#333'} fontWeight={'bold'} fontSize={'sm'}>
-                                  {t('skill:custom_skill')}
-                                </Box>
-                                <Box color={'#666'} fontSize={'xs'} mt={1}>
-                                  {t('skill:custom_skill_desc')}
-                                </Box>
-                              </Box>
-                            </Flex>
-                          ),
-                          onClick: () => setShowCreateModal(true)
-                        }
-                      ]
-                    },
-                    {
-                      children: [
-                        {
-                          label: (
-                            <Flex alignItems={'center'} gap={2}>
-                              <MyIcon
-                                name={'common/folderImport'}
-                                w={'24px'}
-                                flexShrink={0}
-                                color={'#475466'}
-                              />
-                              <Box fontSize={'sm'} color={'#333'}>
-                                {t('skill:import_skill_zip')}
-                              </Box>
-                            </Flex>
-                          ),
-                          onClick: () => setShowImportModal(true)
-                        }
-                      ]
-                    }
-                  ]}
+      <Flex gap={5} flex={'1 0 0'} h={0}>
+        <Flex
+          flex={'1 0 0'}
+          flexDirection={'column'}
+          h={'100%'}
+          pr={[3, 6]}
+          pl={6}
+          pt={6}
+          overflowY={'auto'}
+          overflowX={'hidden'}
+        >
+          <Flex alignItems={'center'} gap={3} minW={0}>
+            {!isPc ? (
+              MenuIcon
+            ) : paths.length > 0 ? (
+              <Box>
+                <FolderPath
+                  paths={paths}
+                  hoverStyle={{ bg: 'myGray.200' }}
+                  forbidLastClick
+                  onClick={onNavigate}
                 />
+              </Box>
+            ) : (
+              <Box color={'myGray.900'} fontSize={'20px'} fontWeight={'medium'}>
+                {t('common:navbar.Skill')}
+              </Box>
+            )}
+            {isPc && (
+              <>
+                <Box flexShrink={0} maxW={'250px'}>
+                  <SearchInput
+                    maxW={'250px'}
+                    value={searchKey}
+                    bg={'white'}
+                    onChange={(e) => setSearchKey(e.target.value)}
+                    placeholder={t('skill:search_skill')}
+                    maxLength={30}
+                  />
+                </Box>
+                <ResourceListFilters value={listFilters} onChange={setListFilters} />
               </>
             )}
+            <Flex flex={1} />
+            <Flex alignItems={'center'} gap={3}>
+              {hasCreatePer && (
+                <>
+                  <MyTooltip label={canCreateFolder ? '' : folderDepthLimitTip}>
+                    <Button
+                      variant={'grayBase'}
+                      leftIcon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
+                      onClick={() => setEditFolder({})}
+                      isDisabled={!canCreateFolder}
+                      px={5}
+                    >
+                      {t('common:Folder')}
+                    </Button>
+                  </MyTooltip>
+                  <Button
+                    variant={'grayBase'}
+                    leftIcon={<MyIcon name={'common/importLight'} w={'14px'} />}
+                    onClick={() => {
+                      if (guardSkillSandboxOperation()) {
+                        setShowImportModal(true);
+                      }
+                    }}
+                    px={5}
+                  >
+                    {t('common:Import')}
+                  </Button>
+                </>
+              )}
+            </Flex>
           </Flex>
-        </Flex>
 
-        {/* List */}
-        <MyBox flex={'1 0 0'} isLoading={skills.length === 0 && isFetchingSkills}>
-          <List />
-        </MyBox>
+          {!isPc && (
+            <Box mt={2}>
+              <SearchInput
+                maxW={['auto', '250px']}
+                value={searchKey}
+                onChange={(e) => setSearchKey(e.target.value)}
+                placeholder={t('skill:search_skill')}
+                maxLength={30}
+              />
+            </Box>
+          )}
+
+          <MyBox flex={'1 0 0'} isLoading={skills.length === 0 && isFetchingSkills}>
+            <List
+              onClickCreate={
+                hasCreatePer
+                  ? () => {
+                      if (guardSkillSandboxOperation()) {
+                        setShowCreateModal(true);
+                      }
+                    }
+                  : undefined
+              }
+              onClickImport={
+                hasCreatePer
+                  ? () => {
+                      if (guardSkillSandboxOperation()) {
+                        setShowImportModal(true);
+                      }
+                    }
+                  : undefined
+              }
+              guardSkillSandboxOperation={guardSkillSandboxOperation}
+            />
+          </MyBox>
+        </Flex>
       </Flex>
 
       {!!editFolder && (
@@ -174,7 +212,7 @@ const SkillPageContent = () => {
         <CreateSkillModal
           parentId={parentId}
           onClose={() => setShowCreateModal(false)}
-          onSuccess={() => loadSkills()}
+          onSuccess={refreshSkills}
         />
       )}
 
@@ -182,9 +220,11 @@ const SkillPageContent = () => {
         <ImportSkillModal
           parentId={parentId}
           onClose={() => setShowImportModal(false)}
-          onSuccess={() => loadSkills()}
+          onSuccess={refreshSkills}
         />
       )}
+
+      {SkillSandboxOperationGuardModal}
     </Flex>
   );
 };
@@ -192,9 +232,9 @@ const SkillPageContent = () => {
 function ContextRender() {
   return (
     <DashboardContainer>
-      {() => (
+      {({ MenuIcon }) => (
         <SkillListContextProvider>
-          <SkillPageContent />
+          <SkillPageContent MenuIcon={MenuIcon} />
         </SkillListContextProvider>
       )}
     </DashboardContainer>
@@ -206,7 +246,7 @@ export default ContextRender;
 export async function getServerSideProps(content: any) {
   return {
     props: {
-      ...(await serviceSideProps(content, ['app', 'common', 'file', 'skill']))
+      ...(await serviceSideProps(content, ['app', 'common', 'file', 'skill', 'user']))
     }
   };
 }

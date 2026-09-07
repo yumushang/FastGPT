@@ -15,10 +15,15 @@ import {
 } from '@chakra-ui/react';
 import type { ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
 import { ChatSourceMap } from '@fastgpt/global/core/chat/constants';
-import MultipleSelect from '@fastgpt/web/components/common/MySelect/MultipleSelect';
-import React, { useCallback, useMemo, useState } from 'react';
-import { useTranslation } from 'next-i18next';
 import DateRangePicker from '@fastgpt/web/components/common/DateRangePicker';
+import {
+  MultiSelectFilter,
+  createMultiSelectFilter,
+  toMultiSelectFilterQuery,
+  useCommonFilterLabels
+} from '@fastgpt/web/components/common/TagFilter';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'next-i18next';
 import { useLocalStorageState } from 'ahooks';
 import { getLogKeys } from '@/web/core/app/api/log';
 import type { AppLogKeysType } from '@fastgpt/global/core/app/logs/type';
@@ -28,7 +33,7 @@ import {
   AppLogKeysEnumMap,
   DefaultAppLogKeys
 } from '@fastgpt/global/core/app/logs/constants';
-import { isEqual } from 'lodash';
+import { isEqual } from 'lodash-es';
 import SyncLogKeysPopover from './SyncLogKeysPopover';
 import LogKeysConfigPopover from './LogKeysConfigPopover';
 import PopoverConfirm from '@fastgpt/web/components/common/MyPopover/PopoverConfirm';
@@ -46,7 +51,7 @@ import type { HeaderControlProps } from './LogChart';
 import FeedbackTypeFilter from './FeedbackTypeFilter';
 import UserIpTypeFilter, { type UserIpTypeValue } from './UserIpTypeFilter';
 import ErrorCountFilter from './ErrorCountFilter';
-import UserFilter, { type SelectedUserType } from './UserFilter';
+import UserFilter, { parseUserKey } from './UserFilter';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useContextSelector } from 'use-context-selector';
@@ -59,29 +64,36 @@ import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
 
 const DetailLogsModal = dynamic(() => import('./DetailLogsModal'));
 
+type LogTableProps = HeaderControlProps & {
+  pageSizeCacheKey: string;
+};
+
 const LogTable = ({
   appId,
-  chatSources,
-  setChatSources,
-  isSelectAllSource,
-  setIsSelectAllSource,
+  sourceFilter,
+  setSourceFilter,
   dateRange,
   setDateRange,
+  pageSizeCacheKey,
   showSourceSelector = true,
   px = [4, 8]
-}: HeaderControlProps) => {
+}: LogTableProps) => {
   const { t } = useTranslation();
+  const labels = useCommonFilterLabels();
   const { feConfigs } = useSystemStore();
 
-  const [detailLogsId, setDetailLogsId] = useState<string>();
+  const [detailLogData, setDetailLogData] = useState<{
+    chatId: string;
+    feedbackUserName?: string;
+  }>();
   const appName = useContextSelector(AppContext, (v) => v.appDetail.name);
   const [unreadOnly, setUnreadOnly] = useState<boolean>(false);
   const [userIpType, setUserIpType] = useState<UserIpTypeValue>('all');
   const [feedbackType, setFeedbackType] = useState<'all' | 'has_feedback' | 'good' | 'bad'>('all');
   const [errorFilter, setErrorFilter] = useState<'all' | 'has_error'>('all');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // source
-  const sourceList = useMemo(
+  const sourceOptions = useMemo(
     () =>
       Object.entries(ChatSourceMap).map(([key, value]) => ({
         label: t(value.name as any),
@@ -91,8 +103,7 @@ const LogTable = ({
   );
 
   // user filter
-  const [selectedUsers, setSelectedUsers] = useState<SelectedUserType[]>([]);
-  const [isSelectAllUser, setIsSelectAllUser] = useState(true);
+  const [userFilter, setUserFilter] = useState(createMultiSelectFilter());
 
   // chat
   const [chatSearch, setChatSearch] = useState('');
@@ -127,14 +138,15 @@ const LogTable = ({
   }, [teamLogKeys, logKeys]);
 
   const { tmbIds, outLinkUids } = useMemo(() => {
-    if (isSelectAllUser || selectedUsers.length === 0) {
+    if (userFilter.mode !== 'selected') {
       return { tmbIds: undefined, outLinkUids: undefined };
     }
+    const selectedUsers = userFilter.values.map(parseUserKey);
     return {
       tmbIds: selectedUsers.filter((u) => u.tmbId && !u.outLinkUid).map((u) => u.tmbId!),
       outLinkUids: selectedUsers.filter((u) => u.outLinkUid).map((u) => u.outLinkUid!)
     };
-  }, [selectedUsers, isSelectAllUser]);
+  }, [userFilter]);
 
   const { runAsync: exportLogs } = useRequest(async () => {
     const enabledKeys = logKeys.filter((item) => item.enable).map((item) => item.key);
@@ -146,9 +158,9 @@ const LogTable = ({
         appId,
         dateStart: dayjs(dateRange.from || new Date()).format(),
         dateEnd: dayjs(dateRange.to || new Date()).format(),
-        sources: isSelectAllSource ? undefined : chatSources,
-        tmbIds: tmbIds?.length ? tmbIds : undefined,
-        outLinkUids: outLinkUids?.length ? outLinkUids : undefined,
+        sources: toMultiSelectFilterQuery(sourceFilter),
+        tmbIds,
+        outLinkUids,
         chatSearch,
         title: `${headerTitle},${t('app:logs_keys_chatDetails')}`,
         logKeys: enabledKeys,
@@ -171,9 +183,9 @@ const LogTable = ({
       appId,
       dateStart: dateRange.from!,
       dateEnd: dateRange.to!,
-      sources: isSelectAllSource ? undefined : chatSources,
-      tmbIds: tmbIds?.length ? tmbIds : undefined,
-      outLinkUids: outLinkUids?.length ? outLinkUids : undefined,
+      sources: toMultiSelectFilterQuery(sourceFilter),
+      tmbIds,
+      outLinkUids,
       chatSearch,
       feedbackType,
       unreadOnly: feedbackType === 'all' ? undefined : unreadOnly,
@@ -181,10 +193,9 @@ const LogTable = ({
     }),
     [
       appId,
-      chatSources,
+      sourceFilter,
       dateRange.from,
       dateRange.to,
-      isSelectAllSource,
       tmbIds,
       outLinkUids,
       chatSearch,
@@ -204,14 +215,17 @@ const LogTable = ({
     pageSize
   } = usePagination(getAppChatLogs, {
     defaultPageSize: 20,
+    pageSizeCacheKey,
     params,
-    refreshDeps: [params]
+    refreshDeps: [params],
+    scrollContainerRef
   });
 
   const {
     selectedItems,
     toggleSelect,
     isSelected,
+    getRowSelectionProps,
     FloatingActionBar,
     isSelecteAll,
     selectAllTrigger
@@ -392,13 +406,13 @@ const LogTable = ({
           <Flex gap={3} px={1}>
             {!!item?.userGoodFeedbackCount && (
               <Flex alignItems={'center'}>
-                <MyIcon mr={1} name={'core/chat/feedback/goodLight'} color={'green.500'} w={4} />
+                <MyIcon mr={1} name={'core/chat/feedback/goodLight'} color={'myGray.400'} w={4} />
                 {item.userGoodFeedbackCount}
               </Flex>
             )}
             {!!item?.userBadFeedbackCount && (
               <Flex alignItems={'center'}>
-                <MyIcon mr={1} name={'core/chat/feedback/badLight'} color={'yellow.500'} w={4} />
+                <MyIcon mr={1} name={'core/chat/feedback/badLight'} color={'myGray.400'} w={4} />
                 {item.userBadFeedbackCount}
               </Flex>
             )}
@@ -436,58 +450,27 @@ const LogTable = ({
     <MyBox isLoading={isLoading} display={'flex'} flexDir={'column'} h={'full'} px={px}>
       <Flex alignItems={'center'} gap={3} flexWrap={'wrap'}>
         {showSourceSelector && (
-          <Flex>
-            <MultipleSelect<ChatSourceEnum>
-              list={sourceList}
-              value={chatSources}
-              onSelect={setChatSources}
-              isSelectAll={isSelectAllSource}
-              setIsSelectAll={setIsSelectAllSource}
-              h={10}
-              w={'200px'}
-              rounded={'8px'}
-              tagStyle={{
-                px: 1,
-                py: 1,
-                borderRadius: 'sm',
-                bg: 'myGray.100',
-                color: 'myGray.900'
-              }}
-              borderColor={'myGray.200'}
-              formLabel={t('app:logs_source')}
-              formLabelFontSize={'sm'}
-            />
-          </Flex>
-        )}
-        <Flex>
-          <DateRangePicker
-            defaultDate={dateRange}
-            onSuccess={(date) => {
-              setDateRange(date);
-            }}
-            bg={'white'}
-            h={10}
-            flex={'0 1 250px'}
-            rounded={'8px'}
-            borderColor={'myGray.200'}
-            formLabel={t('app:logs_date')}
-            _hover={{
-              borderColor: 'primary.300'
-            }}
+          <MultiSelectFilter
+            title={t('app:logs_source')}
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            options={sourceOptions}
+            labels={labels}
           />
-        </Flex>
+        )}
+        <DateRangePicker
+          defaultDate={dateRange}
+          onSuccess={setDateRange}
+          formLabel={t('app:logs_date')}
+        />
         {feConfigs?.isPlus && (
-          <Flex>
-            <UserFilter
-              appId={appId}
-              dateRange={dateRange}
-              sources={isSelectAllSource ? undefined : chatSources}
-              selectedUsers={selectedUsers}
-              setSelectedUsers={setSelectedUsers}
-              isSelectAll={isSelectAllUser}
-              setIsSelectAll={setIsSelectAllUser}
-            />
-          </Flex>
+          <UserFilter
+            appId={appId}
+            dateRange={dateRange}
+            sources={toMultiSelectFilterQuery(sourceFilter)}
+            value={userFilter}
+            onChange={setUserFilter}
+          />
         )}
         <Flex
           flex={'0 1 230px'}
@@ -548,7 +531,7 @@ const LogTable = ({
         />
       </Flex>
 
-      <TableContainer mt={[2, 4]} flex={'1 0 0'} overflowY={'auto'}>
+      <TableContainer ref={scrollContainerRef} mt={[2, 4]} flex={'1 0 0'} overflowY={'auto'}>
         <Table variant={'simple'} fontSize={'sm'}>
           <Thead>
             <Tr>
@@ -568,8 +551,14 @@ const LogTable = ({
                 <Tr
                   key={item._id}
                   _hover={{ bg: 'myWhite.600' }}
-                  cursor={'pointer'}
-                  onClick={() => setDetailLogsId(item.chatId)}
+                  {...getRowSelectionProps(item, {
+                    onClick: () =>
+                      setDetailLogData({
+                        chatId: item.chatId,
+                        feedbackUserName:
+                          item.outLinkUid || item.sourceMember?.name || item.tmbId || undefined
+                      })
+                  })}
                 >
                   <Td>
                     <HStack onClick={(e) => e.stopPropagation()}>
@@ -626,12 +615,13 @@ const LogTable = ({
         )}
       </FloatingActionBar>
 
-      {!!detailLogsId && (
+      {!!detailLogData && (
         <DetailLogsModal
           appId={appId}
-          chatId={detailLogsId}
+          chatId={detailLogData.chatId}
+          feedbackUserName={detailLogData.feedbackUserName}
           onClose={() => {
-            setDetailLogsId(undefined);
+            setDetailLogData(undefined);
             getData(pageNum);
           }}
         />

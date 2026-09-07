@@ -1,16 +1,17 @@
 import { MongoApp } from '@fastgpt/service/core/app/schema';
-import { type AppListItemType } from '@fastgpt/global/core/app/type';
 import { NextAPI } from '@/service/middleware/entry';
-import { MongoResourcePermission } from '@fastgpt/service/support/permission/schema';
 import {
   PerResourceTypeEnum,
   ReadPermissionVal
 } from '@fastgpt/global/support/permission/constant';
 import { AppPermission } from '@fastgpt/global/support/permission/app/controller';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
-import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { parseParentIdInMongo } from '@fastgpt/global/common/parentFolder/utils';
-import { AppFolderTypeList, AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import {
+  AppListSortEnum,
+  appListSortMongoMap,
+  AppTypeEnum
+} from '@fastgpt/global/core/app/constants';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
 import { authUserPer } from '@fastgpt/service/support/permission/user/auth';
 import { replaceRegChars } from '@fastgpt/global/common/string/tools';
@@ -18,26 +19,32 @@ import { getGroupsByTmbId } from '@fastgpt/service/support/permission/memberGrou
 import { getOrgIdSetWithParentByTmbId } from '@fastgpt/service/support/permission/org/controllers';
 import { addSourceMember } from '@fastgpt/service/support/user/utils';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { sumPer } from '@fastgpt/global/support/permission/utils';
-
-export type ListAppBody = {
-  parentId?: ParentIdType;
-  type?: AppTypeEnum | AppTypeEnum[];
-  searchKey?: string;
-};
+import { isPrivateResourceByCollaborators, sumPer } from '@fastgpt/global/support/permission/utils';
+import { getResourcePermissionsByTeam } from '@fastgpt/service/support/permission/resourcePermissionService';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import {
+  ListAppBodySchema,
+  ListAppResponseSchema,
+  type ListAppBodyType,
+  type ListAppResponseType
+} from '@fastgpt/global/openapi/core/app/common/api';
+import { Types } from '@fastgpt/service/common/mongo';
 
 /*
   获取 APP 列表权限
   1. 校验 folder 权限和获取 team 权限（owner 单独处理）
   2. 获取 team 下所有 app 权限。获取我的所有组。并计算出我所有的app权限。
-  3. 过滤我有的权限的 app，以及当前 parentId 的 app（由于权限继承问题，这里没法一次性根据 id 去获取）
+  3. 过滤我有权限的 app，并按 parentId 过滤目录层级
   4. 根据过滤条件获取 app 列表
-  5. 遍历搜索出来的 app，并赋予权限（继承的 app，使用 parent 的权限）
+  5. 遍历搜索出来的 app，并赋予资源自身 ACL 对应的权限
   6. 再根据 read 权限进行一次过滤。
 */
 
-async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemType[]> {
-  const { parentId, type, searchKey } = req.body;
+async function handler(req: ApiRequestProps<ListAppBodyType>): Promise<ListAppResponseType> {
+  const { parentId, type, searchKey, sort, tmbIds } = parseApiInput({
+    req,
+    bodySchema: ListAppBodySchema
+  }).body;
 
   // Auth user permission
   const [{ tmbId, teamId, permission: teamPer }] = await Promise.all([
@@ -60,15 +67,17 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       : [])
   ]);
 
+  // 空数组表示用户清空了创建者且未点「全部」，鉴权后直接返回空列表。
+  if (Array.isArray(tmbIds) && tmbIds.length === 0) {
+    return ListAppResponseSchema.parse([]);
+  }
+
   // Get team all app permissions
   const [roleList, myGroupMap, myOrgSet] = await Promise.all([
-    MongoResourcePermission.find({
+    getResourcePermissionsByTeam({
       resourceType: PerResourceTypeEnum.app,
-      teamId,
-      resourceId: {
-        $exists: true
-      }
-    }).lean(),
+      teamId
+    }),
     getGroupsByTmbId({
       tmbId,
       teamId
@@ -84,6 +93,13 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       tmbId
     })
   ]);
+  const roleListMap = new Map<string, (typeof roleList)[number][]>();
+  roleList.forEach((item) => {
+    const resourceId = String(item.resourceId);
+    const list = roleListMap.get(resourceId) ?? [];
+    list.push(item);
+    roleListMap.set(resourceId, list);
+  });
   // Get my permissions
   const myPerList = roleList.filter(
     (item) =>
@@ -91,19 +107,18 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       myGroupMap.has(String(item.groupId)) ||
       myOrgSet.has(String(item.orgId))
   );
+  const myPerListMap = new Map<string, (typeof myPerList)[number][]>();
+  myPerList.forEach((item) => {
+    const resourceId = String(item.resourceId);
+    const list = myPerListMap.get(resourceId) ?? [];
+    list.push(item);
+    myPerListMap.set(resourceId, list);
+  });
 
   const findAppsQuery = (() => {
     // Filter apps by permission, if not owner, only get apps that I have permission to access
     const idList = { _id: { $in: myPerList.map((item) => item.resourceId) } };
-    const appPerQuery = teamPer.isOwner
-      ? {
-          parentId: parentId ? parseParentIdInMongo(parentId) : null
-        }
-      : parentId
-        ? {
-            $or: [idList, parseParentIdInMongo(parentId)]
-          }
-        : { $or: [idList, { parentId: null }] };
+    const appPerQuery = teamPer.isOwner ? {} : idList;
 
     const searchMatch = searchKey
       ? {
@@ -113,6 +128,9 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
           ]
         }
       : {};
+
+    const creatorMatch =
+      Array.isArray(tmbIds) && tmbIds.length > 0 ? { tmbId: { $in: tmbIds } } : {};
 
     const _type = (() => {
       if (type) {
@@ -128,7 +146,8 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
         ...appPerQuery,
         teamId,
         ...searchMatch,
-        type: _type
+        type: _type,
+        ...creatorMatch
       };
 
       // @ts-ignore
@@ -140,6 +159,7 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       ...appPerQuery,
       teamId,
       type: _type,
+      ...creatorMatch,
       ...parseParentIdInMongo(parentId)
     };
   })();
@@ -150,14 +170,12 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
 
   const myApps = await MongoApp.find(
     { ...findAppsQuery, deleteTime: null },
-    '_id parentId avatar type name intro tmbId updateTime pluginData inheritPermission modules',
+    '_id parentId avatar type name intro tmbId createTime updateTime pluginData inheritPermission modules.flowNodeType',
     {
       limit: limit
     }
   )
-    .sort({
-      updateTime: -1
-    })
+    .sort(appListSortMongoMap[sort ?? AppListSortEnum.updateTimeDesc])
     .lean();
 
   // Add app permission and filter apps by read permission
@@ -165,14 +183,12 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
     .map((app) => {
       const { Per, privateApp } = (() => {
         const getPer = (appId: string) => {
-          const tmbRole = myPerList.find(
-            (item) => String(item.resourceId) === appId && !!item.tmbId
-          )?.permission;
+          // 权限已按资源预分组，避免列表中每个 App 都重新扫描团队全部 ACL。
+          const appPerList = myPerListMap.get(appId) ?? [];
+          const tmbRole = appPerList.find((item) => !!item.tmbId)?.permission;
           const groupAndOrgRole = sumPer(
-            ...myPerList
-              .filter(
-                (item) => String(item.resourceId) === appId && (!!item.groupId || !!item.orgId)
-              )
+            ...appPerList
+              .filter((item) => !!item.groupId || !!item.orgId)
               .map((item) => item.permission)
           );
 
@@ -182,21 +198,13 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
           });
         };
 
-        const getClbCount = (appId: string) => {
-          return roleList.filter((item) => String(item.resourceId) === String(appId)).length;
-        };
-
-        // Inherit app, check parent folder clb and it's own clb
-        if (!AppFolderTypeList.includes(app.type) && app.parentId && app.inheritPermission) {
-          return {
-            Per: getPer(String(app.parentId)).addRole(getPer(String(app._id)).role),
-            privateApp: getClbCount(String(app.parentId)) <= 1
-          };
-        }
+        const resourceClbs = roleListMap.get(String(app._id)) ?? [];
 
         return {
           Per: getPer(String(app._id)),
-          privateApp: getClbCount(String(app._id)) <= 1
+          privateApp: isPrivateResourceByCollaborators({
+            resourceClbs
+          })
         };
       })();
 
@@ -207,6 +215,9 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
 
       return {
         ...rest,
+        createTime: app.createTime ?? new Types.ObjectId(String(app._id)).getTimestamp(),
+        avatar: app.avatar ?? '',
+        intro: app.intro ?? '',
         parentId: app.parentId,
         permission: Per,
         private: privateApp,
@@ -215,9 +226,11 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
     })
     .filter((app) => app.permission.hasReadPer);
 
-  return addSourceMember({
+  const list = await addSourceMember({
     list: formatApps
   });
+
+  return ListAppResponseSchema.parse(list);
 }
 
 export default NextAPI(handler);

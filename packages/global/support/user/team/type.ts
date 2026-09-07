@@ -1,15 +1,10 @@
 import type { TeamMetaType, UserModelSchema } from '../type';
+import { ObjectIdSchema } from '../../../common/type/mongo';
 import { TeamMemberRoleEnum, TeamMemberStatusEnum } from './constant';
 import type { GroupMemberRole } from '../../permission/memberGroup/constant';
 import { TeamPermission } from '../../permission/user/controller';
 import { z } from 'zod';
-
-export const LafAccountSchema = z.object({
-  appid: z.string(),
-  token: z.string(),
-  pat: z.string()
-});
-export type LafAccountType = z.infer<typeof LafAccountSchema>;
+import { TeamAccountCancellationStatusSchema } from '../account/cancellation/type';
 
 export const OpenaiAccountSchema = z.object({
   key: z.string(),
@@ -18,7 +13,6 @@ export const OpenaiAccountSchema = z.object({
 export type OpenaiAccountType = z.infer<typeof OpenaiAccountSchema>;
 
 export const ThidPartyAccountSchema = z.object({
-  lafAccount: LafAccountSchema.optional(),
   openaiAccount: OpenaiAccountSchema.optional(),
   externalWorkflowVariables: z.record(z.string(), z.string()).optional()
 });
@@ -31,7 +25,6 @@ export type TeamSchema = {
   avatar: string;
   createTime: Date;
   balance: number;
-  teamDomain: string;
   limit: {
     lastExportDatasetTime: Date;
     lastWebsiteSyncTime: Date;
@@ -40,18 +33,6 @@ export type TeamSchema = {
   meta?: TeamMetaType;
   deleteTime?: Date;
 } & ThirdPartyAccountType;
-
-export type tagsType = {
-  label: string;
-  key: string;
-};
-
-export type TeamTagSchema = TeamTagItemType & {
-  _id: string;
-  teamId: string;
-  createTime: Date;
-  updateTime?: Date;
-};
 
 export type TeamMemberSchema = {
   _id: string;
@@ -71,20 +52,25 @@ export type TeamMemberWithTeamAndUserSchema = TeamMemberSchema & {
 };
 
 export const TeamTmbItemSchema = ThidPartyAccountSchema.extend({
-  userId: z.string(),
-  teamId: z.string(),
-  teamAvatar: z.string().optional(),
+  userId: ObjectIdSchema,
+  teamId: ObjectIdSchema,
+  teamAvatar: z.string().nullish(),
   teamName: z.string(),
   memberName: z.string(),
-  avatar: z.string(),
+  avatar: z.string().nullish(),
   balance: z.number().optional(),
-  tmbId: z.string(),
-  teamDomain: z.string(),
-  role: z.enum(TeamMemberRoleEnum),
+  tmbId: ObjectIdSchema,
+  role: z.enum(TeamMemberRoleEnum).nullish(),
   status: z.enum(TeamMemberStatusEnum),
-  notificationAccount: z.string().optional(),
+  notificationAccount: z.string().nullish(),
   permission: z.instanceof(TeamPermission),
-  isWecomTeam: z.boolean().optional()
+  isWecomTeam: z.boolean().optional(),
+  accountCancellation: z
+    .object({
+      status: TeamAccountCancellationStatusSchema,
+      scheduledCancelAt: z.union([z.date(), z.iso.datetime({ offset: true })]).optional()
+    })
+    .optional()
 });
 export type TeamTmbItemType = z.infer<typeof TeamTmbItemSchema>;
 
@@ -102,29 +88,24 @@ export type TeamMemberItemType<
   avatar: string;
   role: `${TeamMemberRoleEnum}`;
   status: `${TeamMemberStatusEnum}`;
-  contact?: string;
+  contact?: string | null;
   createTime: Date;
   updateTime?: Date;
 } & (Options extends { withPermission: true }
   ? {
       permission: TeamPermission;
     }
-  : {}) &
+  : unknown) &
   (Options extends { withOrgs: true }
     ? {
         orgs?: string[]; // full path name, pattern: /teamName/orgname1/orgname2
       }
-    : {}) &
+    : unknown) &
   (Options extends { withGroupRole: true }
     ? {
         groupRole?: `${GroupMemberRole}`;
       }
-    : {});
-
-export type TeamTagItemType = {
-  label: string;
-  key: string;
-};
+    : unknown);
 
 export type TeamInvoiceHeaderType = {
   teamName: string;

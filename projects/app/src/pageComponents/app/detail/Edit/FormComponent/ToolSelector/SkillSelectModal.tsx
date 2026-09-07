@@ -1,8 +1,8 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import MyModal from '@fastgpt/web/components/common/MyModal';
+import React, { useCallback, useState } from 'react';
+import dynamic from 'next/dynamic';
+import MyModal from '@fastgpt/web/components/v2/common/MyModal';
 import { useTranslation } from 'next-i18next';
-import { Box, Button, Flex, Grid } from '@chakra-ui/react';
-import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { Box, Button, Flex, Grid, IconButton } from '@chakra-ui/react';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyBox from '@fastgpt/web/components/common/MyBox';
@@ -10,16 +10,72 @@ import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
 import MyAvatar from '@fastgpt/web/components/common/Avatar';
 import type { SelectedAgentSkillItemType } from '@fastgpt/global/core/app/formEdit/type';
-import { getSkillList } from '@/web/core/skill/api';
-import { AgentSkillTypeEnum } from '@fastgpt/global/core/agentSkills/constants';
-import type { ListSkillsResponse } from '@fastgpt/global/core/agentSkills/api';
+import { AgentSkillTypeEnum } from '@fastgpt/global/core/ai/skill/constants';
 import FolderPath from '@/components/common/folder/Path';
-import type { ParentIdType } from '@fastgpt/global/common/parentFolder/type';
+import { useSkillSelectData, type SkillSelectItemType } from './hooks/useSkillSelectData';
+import { useSkillSandboxOperationGuard } from '@/components/core/skill/useSkillSandboxOperationGuard';
+import { useUserStore } from '@/web/support/user/useUserStore';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { getSkillDetail } from '@/web/core/skill/api';
+
+const ImportSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/ImportSkillModal'));
+const CreateSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/CreateSkillModal'));
 
 const MAX_SKILL_COUNT = 100;
 
-type SkillItem = ListSkillsResponse['list'][number];
-type NavItem = { id: string; name: string };
+const SkillSelectActionButton = ({
+  icon,
+  onClick,
+  children
+}: {
+  icon: React.ReactElement;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <Button variant={'grayBase'} leftIcon={icon} onClick={onClick} px={5}>
+    {children}
+  </Button>
+);
+
+const SkillSelectEmptyState = ({
+  onCreate,
+  onImport
+}: {
+  onCreate: () => void;
+  onImport: () => void;
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <Flex
+      flex={'1 0 0'}
+      alignSelf={'stretch'}
+      flexDirection={'column'}
+      justifyContent={'center'}
+      alignItems={'center'}
+      gap={6}
+      w={'full'}
+      h={'full'}
+      minH={0}
+    >
+      <EmptyTip text={t('skill:no_skills')} iconSize={20} textGap={'25px'} mt={0} py={0} />
+      <Flex gap={3} flexWrap={'wrap'} justifyContent={'center'}>
+        <SkillSelectActionButton
+          icon={<MyIcon name={'common/importLight'} w={'14px'} />}
+          onClick={onImport}
+        >
+          {t('common:Import')}
+        </SkillSelectActionButton>
+        <SkillSelectActionButton
+          icon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
+          onClick={onCreate}
+        >
+          {t('common:new_create')}
+        </SkillSelectActionButton>
+      </Flex>
+    </Flex>
+  );
+};
 
 const SkillSelectModal = ({
   selectedSkills,
@@ -33,111 +89,220 @@ const SkillSelectModal = ({
   onClose: () => void;
 }) => {
   const { t } = useTranslation();
-  const [searchKey, setSearchKey] = useState('');
-  // 导航栈：每个元素代表一级文件夹 {id, name}，空数组表示根目录
-  const [navStack, setNavStack] = useState<NavItem[]>([]);
+  const { toast } = useToast();
+  const { userInfo } = useUserStore();
+  const hasSkillCreatePer = !!userInfo?.team.permission.hasSkillCreatePer;
+  const { guardSkillSandboxOperation, SkillSandboxOperationGuardModal } =
+    useSkillSandboxOperationGuard();
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // 根目录传 ''（空字符串），与 context.tsx 的调用保持一致
-  const parentId = navStack.length > 0 ? navStack[navStack.length - 1].id : '';
-
-  const { data: skillList = [], loading: isLoading } = useRequest(
-    () =>
-      getSkillList({
-        source: 'mine',
-        parentId: parentId,
-        searchKey: searchKey || undefined
-      }).then((res) => res.list),
-    {
-      manual: false,
-      refreshDeps: [parentId, searchKey],
-      throttleWait: 300
-    }
-  );
-
-  const onEnterFolder = useCallback((item: SkillItem) => {
-    setNavStack((prev) => [...prev, { id: item._id, name: item.name }]);
-    setSearchKey('');
-  }, []);
-
-  // 将 navStack 转为 FolderPath 所需的 paths 格式
-  const paths = useMemo(
-    () => navStack.map((item) => ({ parentId: item.id, parentName: item.name })),
-    [navStack]
-  );
-
-  // FolderPath 点击某一层级时，根据 parentId 裁剪 navStack
-  const onUpdateParentId = useCallback((targetParentId: ParentIdType) => {
-    if (!targetParentId) {
-      setNavStack([]);
-    } else {
-      setNavStack((prev) => {
-        const idx = prev.findIndex((item) => item.id === targetParentId);
-        return idx >= 0 ? prev.slice(0, idx + 1) : prev;
-      });
-    }
-    setSearchKey('');
-  }, []);
-
+  const {
+    skillList,
+    isLoadingSkillList,
+    searchKey,
+    setSearchKey,
+    paths,
+    parentId,
+    refreshSkillList,
+    onEnterFolder,
+    onUpdateParentId
+  } = useSkillSelectData();
   const isAtLimit = selectedSkills.length >= MAX_SKILL_COUNT;
+  const showEmptyActions =
+    !isLoadingSkillList &&
+    skillList.length === 0 &&
+    !searchKey &&
+    paths.length === 0 &&
+    hasSkillCreatePer;
+  const showHeaderCreateImportActions = hasSkillCreatePer && !searchKey && !showEmptyActions;
+  const modalHeight = showEmptyActions
+    ? ['min(560px, calc(100vh - 128px))', '560px']
+    : ['min(560px, calc(100vh - 64px))', '560px'];
+  const modalMaxHeight = showEmptyActions ? '560px' : '85vh';
+
+  const handleOpenImport = useCallback(() => {
+    if (guardSkillSandboxOperation()) {
+      setShowImportModal(true);
+    }
+  }, [guardSkillSandboxOperation]);
+
+  const handleOpenCreate = useCallback(() => {
+    if (guardSkillSandboxOperation()) {
+      setShowCreateModal(true);
+    }
+  }, [guardSkillSandboxOperation]);
+
+  /** 创建/导入成功后回到选择弹窗，并自动勾选本次新增的 Skill */
+  const handleAddCreatedOrImportedSkill = useCallback(
+    async (skillId: string) => {
+      // 关联与列表刷新解耦：刷新仅 best-effort，不作为关联的前置条件，
+      // 刷新失败也不会阻断 getSkillDetail + onAddSkill。
+      const associateSkill = async () => {
+        if (selectedSkills.some((skill) => skill.skillId === skillId)) return;
+
+        if (isAtLimit) {
+          toast({
+            status: 'warning',
+            title: t('skill:skill_select_limit_tip')
+          });
+          return;
+        }
+
+        const detail = await getSkillDetail({ skillId });
+        onAddSkill({
+          skillId: detail._id,
+          name: detail.name,
+          description: detail.description,
+          avatar: detail.avatar,
+          isDeleted: false
+        });
+      };
+
+      try {
+        await associateSkill();
+      } catch {
+        toast({
+          status: 'error',
+          title: t('common:load_failed')
+        });
+      } finally {
+        refreshSkillList().catch(() => {});
+      }
+    },
+    [isAtLimit, onAddSkill, refreshSkillList, selectedSkills, t, toast]
+  );
 
   return (
-    <MyModal
-      isOpen
-      title={t('skill:select_skill')}
-      iconSrc="common/skill"
-      iconColor="#487FFF"
-      onClose={onClose}
-      maxW={['90vw', '700px']}
-      w={'700px'}
-      h={['90vh', '80vh']}
-    >
-      {/* Header: search */}
-      <Box px={[3, 6]} pt={4} display={'flex'} justifyContent={'flex-end'} w={'full'}>
-        <Box w={200}>
-          <SearchInput
-            value={searchKey}
-            onChange={(e) => setSearchKey(e.target.value)}
-            placeholder={t('skill:search_skill')}
-          />
-        </Box>
-      </Box>
+    <>
+      <MyModal
+        isOpen
+        title={t('skill:select_skill')}
+        onClose={onClose}
+        isCentered
+        size={'lg'}
+        h={modalHeight}
+        maxH={modalMaxHeight}
+        overflow={'hidden'}
+        bodyStyles={{
+          gap: 6,
+          minH: 0,
+          overflow: 'hidden'
+        }}
+      >
+        {showEmptyActions ? (
+          <MyBox
+            isLoading={isLoadingSkillList}
+            flex={'1 0 0'}
+            alignSelf={'stretch'}
+            display={'flex'}
+            flexDirection={'column'}
+            w={'full'}
+            minH={0}
+          >
+            <SkillSelectEmptyState onCreate={handleOpenCreate} onImport={handleOpenImport} />
+          </MyBox>
+        ) : (
+          <>
+            <Flex
+              alignItems={'center'}
+              gap={3}
+              flexWrap={['wrap', 'nowrap']}
+              w={'full'}
+              flexShrink={0}
+            >
+              <Box flex={1} minW={['100%', '200px']}>
+                <SearchInput
+                  value={searchKey}
+                  onChange={(e) => setSearchKey(e.target.value)}
+                  placeholder={t('skill:search_skill')}
+                />
+              </Box>
+              {showHeaderCreateImportActions && (
+                <Flex gap={3} flexShrink={0}>
+                  <SkillSelectActionButton
+                    icon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
+                    onClick={handleOpenCreate}
+                  >
+                    {t('common:new_create')}
+                  </SkillSelectActionButton>
+                  <SkillSelectActionButton
+                    icon={<MyIcon name={'common/importLight'} w={'14px'} />}
+                    onClick={handleOpenImport}
+                  >
+                    {t('common:Import')}
+                  </SkillSelectActionButton>
+                </Flex>
+              )}
+            </Flex>
 
-      {/* 面包屑导航 */}
-      {!searchKey && navStack.length > 0 && (
-        <Flex mt={1} px={[3, 6]}>
-          <FolderPath paths={paths} FirstPathDom={null} onClick={onUpdateParentId} />
-        </Flex>
+            {!searchKey && paths.length > 0 && (
+              <Box w={'full'} flexShrink={0}>
+                <FolderPath paths={paths} FirstPathDom={null} onClick={onUpdateParentId} />
+              </Box>
+            )}
+
+            <MyBox isLoading={isLoadingSkillList} flex={'1 0 0'} w={'full'} minH={0}>
+              <Box overflow={'overlay'} h={'100%'} w={'full'}>
+                {skillList.length > 0 ? (
+                  <Grid
+                    gridTemplateColumns={['minmax(0, 1fr)', 'repeat(2, minmax(0, 1fr))']}
+                    columnGap={6}
+                    rowGap={3}
+                    w={'full'}
+                  >
+                    {skillList.map((item) => (
+                      <SkillCard
+                        key={item._id}
+                        item={item}
+                        isSelected={selectedSkills.some((s) => s.skillId === item._id)}
+                        isAtLimit={isAtLimit}
+                        onAdd={() =>
+                          onAddSkill({
+                            skillId: item._id,
+                            name: item.name,
+                            description: item.description,
+                            avatar: item.avatar,
+                            isDeleted: false
+                          })
+                        }
+                        onRemove={() => onRemoveSkill(item._id)}
+                        onOpenFolder={() => onEnterFolder(item)}
+                      />
+                    ))}
+                  </Grid>
+                ) : (
+                  <EmptyTip
+                    text={
+                      hasSkillCreatePer ? t('skill:no_skills') : t('skill:no_skills_no_permission')
+                    }
+                  />
+                )}
+              </Box>
+            </MyBox>
+          </>
+        )}
+      </MyModal>
+
+      {showImportModal && (
+        <ImportSkillModal
+          parentId={parentId}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={handleAddCreatedOrImportedSkill}
+        />
       )}
 
-      <MyBox isLoading={isLoading} mt={2} pb={3} flex={'1 0 0'} h={0}>
-        <Box overflow={'overlay'} height={'100%'}>
-          {skillList.length > 0 ? (
-            <Grid gridTemplateColumns={['1fr', '1fr 1fr']} gap={3} px={[3, 6]}>
-              {skillList.map((item) => (
-                <SkillCard
-                  key={item._id}
-                  item={item}
-                  isSelected={selectedSkills.some((s) => s.skillId === item._id)}
-                  isAtLimit={isAtLimit}
-                  onAdd={() =>
-                    onAddSkill({
-                      skillId: item._id,
-                      name: item.name,
-                      description: item.description,
-                      avatar: item.avatar
-                    })
-                  }
-                  onRemove={() => onRemoveSkill(item._id)}
-                  onOpenFolder={() => onEnterFolder(item)}
-                />
-              ))}
-            </Grid>
-          ) : (
-            <EmptyTip text={t('skill:no_skills')} />
-          )}
-        </Box>
-      </MyBox>
-    </MyModal>
+      {showCreateModal && (
+        <CreateSkillModal
+          parentId={parentId}
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={handleAddCreatedOrImportedSkill}
+          openDetailInNewTab
+        />
+      )}
+
+      {SkillSandboxOperationGuardModal}
+    </>
   );
 };
 
@@ -151,7 +316,7 @@ const SkillCard = React.memo(function SkillCard({
   onRemove,
   onOpenFolder
 }: {
-  item: SkillItem;
+  item: SkillSelectItemType;
   isSelected: boolean;
   isAtLimit: boolean;
   onAdd: () => void;
@@ -181,7 +346,14 @@ const SkillCard = React.memo(function SkillCard({
                 borderRadius={'sm'}
               />
             )}
-            <Box fontWeight={'bold'} ml={3} color={'myGray.900'} flex={'1 0 0'} overflow={'hidden'}>
+            <Box
+              fontWeight={'bold'}
+              ml={2}
+              color={'myGray.900'}
+              flex={'1 0 0'}
+              minW={0}
+              noOfLines={1}
+            >
               {item.name}
             </Box>
           </Flex>
@@ -191,8 +363,12 @@ const SkillCard = React.memo(function SkillCard({
         </Box>
       }
     >
-      <Flex
+      <Grid
         alignItems={'center'}
+        gridTemplateColumns={'auto minmax(0, 1fr) auto'}
+        columnGap={2}
+        minW={0}
+        minH={'54px'}
         py={3}
         px={3}
         _hover={{ bg: 'myWhite.600' }}
@@ -209,13 +385,11 @@ const SkillCard = React.memo(function SkillCard({
             flexShrink={0}
           />
         )}
-        <Box flex={'1 0 0'} ml={3}>
-          <Box color={'myGray.900'} fontWeight={'500'} fontSize={'sm'} className={'textEllipsis'}>
+        <Box minW={0} overflow={'hidden'}>
+          <Box color={'myGray.900'} fontWeight={'500'} fontSize={'sm'} noOfLines={1}>
             {item.name}
           </Box>
         </Box>
-        <Box flex={1} />
-
         {isFolder ? (
           <Button
             size={'sm'}
@@ -228,16 +402,15 @@ const SkillCard = React.memo(function SkillCard({
             {t('common:Open')}
           </Button>
         ) : isSelected ? (
-          <Button
-            size={'sm'}
-            variant={'grayDanger'}
-            leftIcon={<MyIcon name={'delete'} w={'16px'} mr={-1} />}
+          <IconButton
+            aria-label={t('common:Remove')}
+            size={'xsSquare'}
+            color={'myGray.600'}
+            minW={6}
+            variant={'whiteDanger'}
+            icon={<MyIcon name={'delete'} w={'13px'} />}
             onClick={onRemove}
-            px={2}
-            fontSize={'mini'}
-          >
-            {t('common:Remove')}
-          </Button>
+          />
         ) : (
           <MyTooltip label={isAtLimit ? t('skill:skill_select_limit_tip') : undefined}>
             <Button
@@ -253,7 +426,7 @@ const SkillCard = React.memo(function SkillCard({
             </Button>
           </MyTooltip>
         )}
-      </Flex>
+      </Grid>
     </MyTooltip>
   );
 });

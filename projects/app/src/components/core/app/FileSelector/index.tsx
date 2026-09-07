@@ -29,15 +29,20 @@ import { getNanoid } from '@fastgpt/global/common/string/tools';
 import MyDivider from '@fastgpt/web/components/common/MyDivider';
 import MyAvatar from '@fastgpt/web/components/common/Avatar';
 import z from 'zod';
-import { getPresignedChatFileGetUrl, getUploadChatFilePresignedUrl } from '@/web/common/file/api';
+import {
+  getPresignedChatFileGetUrl,
+  getUploadChatFilePresignedUrl,
+  getUploadDraftChatFilePresignedUrl
+} from '@/web/common/file/api';
 import { useContextSelector } from 'use-context-selector';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { formatFileSize } from '@fastgpt/global/common/file/tools';
 import { WorkflowRuntimeContext } from '@/components/core/chat/ChatContainer/context/workflowRuntimeContext';
 import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
-import { putFileToS3 } from '@fastgpt/web/common/file/utils';
+import { S3FileUploader } from '@fastgpt/web/common/file/uploader';
 import {
   getFileSelectorDisplayIcon,
+  hasFileSelectorError,
   inferFileSelectorType,
   isFileSelectorCleanValueEcho,
   isFileSelectorPreviewUrlMissing,
@@ -45,9 +50,16 @@ import {
   markFileSelectorUploadError,
   markFileSelectorUploading,
   markFileSelectorUploadSuccess,
+  mergeFileSelectorExternalValue,
   sanitizeFileSelectValue
 } from './utils';
-import { isEqual } from 'lodash';
+import { isEqual } from 'lodash-es';
+import {
+  getChatAuthTargetInput,
+  hasChatTargetInput,
+  useChatApiTarget
+} from '@/web/core/chat/utils';
+import { getFileAmountLimit, getFileSizeLimitBytes } from '@fastgpt/global/core/workflow/fileLimit';
 
 type WebkitFileSystemFileEntry = {
   isFile: true;
@@ -164,11 +176,13 @@ const FileSelector = ({
   customFileExtensionList,
   canLocalUpload,
   canUrlUpload,
+  onFileErrorChange,
   isDisabled = false,
   isInvalid = false
 }: AppFileSelectConfigType & {
   value: FileSelectorInputValueType;
-  onChange: (e: FileSelectorValueItemType[]) => void;
+  onChange?: (e: FileSelectorValueItemType[]) => void;
+  onFileErrorChange?: (hasError: boolean) => void;
   canLocalUpload?: boolean;
   canUrlUpload?: boolean;
   isDisabled?: boolean;
@@ -179,9 +193,15 @@ const FileSelector = ({
   const { toast } = useToast();
   const { t } = useSafeTranslation();
 
-  const appId = useContextSelector(WorkflowRuntimeContext, (v) => v.appId);
+  const sourceTarget = useContextSelector(WorkflowRuntimeContext, (v) => v.sourceTarget);
+  const chatTarget = useChatApiTarget(sourceTarget);
   const chatId = useContextSelector(WorkflowRuntimeContext, (v) => v.chatId);
   const outLinkAuthData = useContextSelector(WorkflowRuntimeContext, (v) => v.outLinkAuthData);
+  const fileUploadMode = useContextSelector(WorkflowRuntimeContext, (v) => v.fileUploadMode);
+  const chatAuthTarget = useMemo(
+    () => getChatAuthTargetInput({ ...chatTarget, outLinkAuthData }),
+    [chatTarget, outLinkAuthData]
+  );
   const setFileUploadingCount = useContextSelector(
     WorkflowRuntimeContext,
     (v) => v.setFileUploadingCount
@@ -189,10 +209,29 @@ const FileSelector = ({
 
   const lastEmittedValue = useRef<FileSelectorValueItemType[]>();
   const skipNextCleanEcho = useRef(false);
+  const onChangeRef = useRef(onChange);
+  const onFileErrorChangeRef = useRef(onFileErrorChange);
   const fetchingPreviewUrlKeys = useRef(new Set<string>());
   const [fileList, setFileList] = useState<FileSelectorRenderItemType[]>(() =>
     formatFileSelectorInternalValue(value)
   );
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onFileErrorChangeRef.current = onFileErrorChange;
+  }, [onFileErrorChange]);
+
+  const hasFileError = hasFileSelectorError(fileList);
+  useEffect(() => {
+    onFileErrorChangeRef.current?.(hasFileError);
+
+    return () => {
+      onFileErrorChangeRef.current?.(false);
+    };
+  }, [hasFileError]);
 
   useEffect(() => {
     const cleanedValue = sanitizeFileSelectValue(value);
@@ -210,14 +249,17 @@ const FileSelector = ({
 
     skipNextCleanEcho.current = false;
     setFileList((currentFiles) => {
-      const nextFiles = formatFileSelectorInternalValue(value, currentFiles);
+      const nextFiles = mergeFileSelectorExternalValue({
+        currentFiles,
+        externalFiles: formatFileSelectorInternalValue(value, currentFiles)
+      });
       return isEqual(nextFiles, currentFiles) ? currentFiles : nextFiles;
     });
     lastEmittedValue.current = cleanedValue;
     if (!isEqual(cleanedValue, value)) {
-      onChange(cleanedValue);
+      onChangeRef.current?.(cleanedValue);
     }
-  }, [onChange, value]);
+  }, [value]);
 
   const handleChangeFiles = useCallback(
     (files: FileSelectorRenderItemType[], emitChange = true) => {
@@ -227,16 +269,16 @@ const FileSelector = ({
         const cleanedFiles = sanitizeFileSelectValue(files);
         lastEmittedValue.current = cleanedFiles;
         skipNextCleanEcho.current = true;
-        onChange(cleanedFiles);
+        onChangeRef.current?.(cleanedFiles);
       }
     },
-    [onChange]
+    []
   );
 
   // 后端存储值只保留 key；组件渲染时再为 key-only 文件补临时预览 URL。
   // 这里不会触发 onChange，避免把预览 URL 写回全局变量或表单存储值。
   useEffect(() => {
-    if (!appId) return;
+    if (!hasChatTargetInput(chatTarget)) return;
 
     const filesNeedPreviewUrl = fileList.filter(
       (file): file is FileSelectorRenderItemType & { key: string; url?: undefined } =>
@@ -255,8 +297,8 @@ const FileSelector = ({
         const key = file.key;
         const url = await getPresignedChatFileGetUrl({
           key,
-          appId,
-          outLinkAuthData
+          ...chatAuthTarget,
+          chatId
         });
 
         return {
@@ -303,7 +345,7 @@ const FileSelector = ({
     return () => {
       isUnmounted = true;
     };
-  }, [appId, fileList, outLinkAuthData]);
+  }, [chatTarget, chatAuthTarget, chatId, fileList]);
 
   const fileType = useMemo(() => {
     return getUploadFileType({
@@ -342,17 +384,17 @@ const FileSelector = ({
       customFileExtensionList
     ]
   );
-  // 文件数量限制：组件参数 || 团队套餐 || 系统配置 || 默认值
-  const maxSelectFiles =
-    maxFiles ||
-    teamPlanStatus?.standard?.maxUploadFileCount ||
-    feConfigs?.uploadFileMaxAmount ||
-    10;
-  // 文件大小限制（MB）：团队套餐 || 系统配置 || 默认值
-  const maxSize =
-    (teamPlanStatus?.standard?.maxUploadFileSize || feConfigs?.uploadFileMaxSize || 500) *
-    1024 *
-    1024;
+  // Form/Plugin 文件输入的模块配额与用户配额取更小值。
+  const maxSelectFiles = getFileAmountLimit({
+    moduleMaxFileAmount: maxFiles,
+    defaultModuleMaxFileAmount: 5,
+    teamMaxFileAmount: teamPlanStatus?.standard?.maxUploadFileCount,
+    systemMaxFileAmount: feConfigs?.uploadFileMaxAmount ?? 10
+  });
+  const maxSize = getFileSizeLimitBytes({
+    teamMaxFileSize: teamPlanStatus?.standard?.maxUploadFileSize,
+    systemMaxFileSize: feConfigs?.uploadFileMaxSize ?? 500
+  });
   const canSelectFileAmount = Math.max(maxSelectFiles - fileList.length, 0);
   const isMaxSelected = canSelectFileAmount <= 0;
 
@@ -361,7 +403,8 @@ const FileSelector = ({
       const filterFiles = markFileSelectorUploading(files);
       if (filterFiles.length === 0) return;
 
-      handleChangeFiles(files);
+      // 上传完成前只更新组件内部渲染态，不能把尚无 key/url 的文件清洗成空数组回写表单。
+      handleChangeFiles(files, false);
 
       await Promise.allSettled(
         filterFiles.map(async (file) => {
@@ -370,21 +413,28 @@ const FileSelector = ({
 
           try {
             // Get Upload Post Presigned URL
-            const { url, key, headers, previewUrl } = await getUploadChatFilePresignedUrl({
+            const uploadParams = {
               filename: file.rawFile.name,
-              appId,
-              chatId,
-              fileSelectConfig,
-              outLinkAuthData
-            });
+              contentType: file.rawFile.type || undefined,
+              size: file.rawFile.size,
+              ...chatAuthTarget,
+              chatId
+            };
+            const uploadResult =
+              fileUploadMode === 'draft'
+                ? await getUploadDraftChatFilePresignedUrl({
+                    ...uploadParams,
+                    fileSelectConfig
+                  })
+                : await getUploadChatFilePresignedUrl(uploadParams);
+            const { key, previewUrl } = uploadResult;
 
-            await putFileToS3({
-              url,
+            const uploader = new S3FileUploader({
+              ...uploadResult,
               file: file.rawFile,
-              headers,
-              onUploadProgress: (e) => {
-                if (!e.total) return;
-                const percent = Math.round((e.loaded / e.total) * 100);
+              onProgress: (loaded, total) => {
+                if (!total) return;
+                const percent = Math.round((loaded / total) * 100);
                 files.forEach((item) => {
                   if (item.id === file.id) {
                     item.process = percent;
@@ -395,6 +445,7 @@ const FileSelector = ({
               t,
               maxSize
             });
+            await uploader.upload();
 
             // Update file url and key
             markFileSelectorUploadSuccess({
@@ -420,10 +471,10 @@ const FileSelector = ({
     [
       handleChangeFiles,
       setFileUploadingCount,
-      appId,
+      chatAuthTarget,
       chatId,
       fileSelectConfig,
-      outLinkAuthData,
+      fileUploadMode,
       t,
       maxSize
     ]
@@ -437,7 +488,7 @@ const FileSelector = ({
       if (remainingFileAmount === 0) {
         toast({
           status: 'warning',
-          title: t('chat:file_amount_over', { max: maxSelectFiles })
+          title: t('file:some_file_count_exceeds_limit', { maxCount: maxSelectFiles })
         });
         return;
       }
@@ -445,7 +496,7 @@ const FileSelector = ({
         files = files.slice(0, remainingFileAmount);
         toast({
           status: 'warning',
-          title: t('chat:file_amount_over', { max: maxSelectFiles })
+          title: t('file:some_file_count_exceeds_limit', { maxCount: maxSelectFiles })
         });
       }
       const filterFilesByMaxSize = files.filter((file) => file.size <= maxSize);
@@ -491,7 +542,7 @@ const FileSelector = ({
         )
       );
       const newFiles = [...loadFiles, ...fileList];
-      handleChangeFiles(newFiles);
+      handleChangeFiles(newFiles, false);
       uploadFiles(newFiles);
     },
     [maxSelectFiles, fileList, handleChangeFiles, uploadFiles, toast, t, maxSize]

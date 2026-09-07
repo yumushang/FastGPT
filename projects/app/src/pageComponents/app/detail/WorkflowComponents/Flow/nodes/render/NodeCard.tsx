@@ -1,10 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Box, Button, Flex, useDisclosure, type FlexProps } from '@chakra-ui/react';
+import { Box, Button, Flex, type FlexProps } from '@chakra-ui/react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import Avatar from '@fastgpt/web/components/common/Avatar';
+import InlineEdit from './InlineEdit';
 import type { FlowNodeItemType, StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import { useTranslation } from 'next-i18next';
-import { useEditTitle } from '@/web/common/hooks/useEditTitle';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import type { NodeGradients } from '@fastgpt/global/core/workflow/node/constant';
 import {
@@ -20,11 +20,13 @@ import {
 import { useReactFlow } from 'reactflow';
 import { LOGO_ICON } from '@fastgpt/global/common/system/constants';
 import { ToolSourceHandle, ToolTargetHandle } from './Handle/ToolHandle';
-import { useEditTextarea } from '@fastgpt/web/hooks/useEditTextarea';
 import { ConnectionSourceHandle, ConnectionTargetHandle } from './Handle/ConnectionHandle';
 import { useDebug } from '../../hooks/useDebug';
-import { getToolPreviewNode, getToolVersionList } from '@/web/core/app/api/tool';
+import { getClientToolPreviewNode } from '@/web/core/app/api/tool';
+import { getAppVersionList } from '@/web/core/app/api/version';
+import { getTeamToolVersions } from '@/web/core/plugin/team/api';
 import { storeNode2FlowNode } from '@/web/core/workflow/utils';
+import { getWorkflowCheckIssueUIStatus } from '@/web/core/workflow/workflowCheck';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { useContextSelector } from 'use-context-selector';
 import { moduleTemplatesFlat } from '@fastgpt/global/core/workflow/template/constants';
@@ -36,7 +38,6 @@ import MyImage from '@fastgpt/web/components/common/Image/MyImage';
 import MyIconButton from '@fastgpt/web/components/common/Icon/button';
 import UseGuideModal from '@/components/common/Modal/UseGuideModal';
 import NodeDebugResponse from './RenderDebug/NodeDebugResponse';
-import { useScrollPagination } from '@fastgpt/web/hooks/useScrollPagination';
 import MyTag from '@fastgpt/web/components/common/Tag/index';
 import MySelect from '@fastgpt/web/components/common/MySelect';
 import { useBoolean, useCreation } from 'ahooks';
@@ -45,7 +46,6 @@ import HighlightText from '@fastgpt/web/components/common/String/HighlightText';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import SecretInputModal from '@/pageComponents/app/tool/SecretInputModal';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
-import { WorkflowUtilsContext } from '../../../context/workflowUtilsContext';
 import { WorkflowActionsContext } from '../../../context/workflowActionsContext';
 import { WorkflowUIContext } from '../../../context/workflowUIContext';
 import {
@@ -53,9 +53,19 @@ import {
   PluginStatusMap,
   type PluginStatusType
 } from '@fastgpt/global/core/plugin/type';
-import { splitCombineToolId, getToolRawId } from '@fastgpt/global/core/app/tool/utils';
+import {
+  splitCombineToolId,
+  getToolRawId,
+  isDebugToolSource
+} from '@fastgpt/global/core/app/tool/utils';
+import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import { getAppPermission } from '@/web/core/app/api';
 import { ObjectIdSchema } from '@fastgpt/global/common/type/mongo';
+import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
+import type { SystemToolVersionType } from '@fastgpt/global/core/app/tool/systemTool/type/base';
+import DebugToolTag from '@fastgpt/web/components/core/plugin/tool/DebugToolTag';
+import type { WorkflowCheckIssue } from '@fastgpt/global/core/workflow/type/node';
+import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
 
 type Props = FlowNodeItemType & {
   children?: React.ReactNode | React.ReactNode[] | string;
@@ -78,6 +88,23 @@ type Props = FlowNodeItemType & {
   colorSchema?: keyof typeof NodeGradients;
 };
 
+const getCurrentSystemToolTemplate = async (node?: FlowNodeItemType) => {
+  if (!node?.pluginId || node.pluginData?.error || isDebugToolSource(node.source)) return;
+
+  try {
+    const { source } = splitCombineToolId(node.pluginId);
+    if (source !== AppToolSourceEnum.systemTool && source !== AppToolSourceEnum.commercial) return;
+
+    return getClientToolPreviewNode({
+      appId: node.pluginId,
+      versionId: node.version ?? '',
+      source: node.source
+    });
+  } catch {
+    return;
+  }
+};
+
 const NodeCard = (props: Props) => {
   const { t } = useTranslation();
   const {
@@ -97,6 +124,7 @@ const NodeCard = (props: Props) => {
     menuForbid,
     isTool = false,
     isError = false,
+    workflowCheckIssues,
     debugResult,
     isFolded,
     customStyle,
@@ -185,11 +213,16 @@ const NodeCard = (props: Props) => {
           whiteSpace={'nowrap'}
           maxW={'80%'}
         >
-          {t(name as any)}
+          {name}
         </Box>
       </Flex>
     );
-  }, [isFolded, avatar, avatarLinear, name, handleDoubleClick, t]);
+  }, [isFolded, avatar, avatarLinear, name, handleDoubleClick]);
+
+  const errorIssues = useMemo(
+    () => workflowCheckIssues?.filter((issue) => issue.level === 'error') ?? [],
+    [workflowCheckIssues]
+  );
 
   const { outlineColor, outlineWidth } = useMemo(() => {
     // error mode
@@ -220,23 +253,6 @@ const NodeCard = (props: Props) => {
 
   const isAppNode = node && AppNodeFlowNodeTypeMap[node?.flowNodeType];
   const isLoopNode = isNestedParentNodeType(node?.flowNodeType ?? '');
-  const showVersion = useMemo(() => {
-    // 1. MCP tool, HTTP tool set and system tool set do not have version
-    if (
-      isAppNode &&
-      (node.toolConfig?.mcpToolSet ||
-        node.toolConfig?.mcpTool ||
-        node?.toolConfig?.httpToolSet ||
-        node?.toolConfig?.systemToolSet)
-    )
-      return false;
-    // 2. Team app/System commercial plugin
-    if (isAppNode && node?.pluginId && !node?.pluginData?.error) return true;
-    // 3. System tool
-    if (isAppNode && node?.toolConfig?.systemTool) return true;
-
-    return false;
-  }, [isAppNode, node]);
 
   const { data: nodeTemplate } = useRequest(
     async () => {
@@ -245,7 +261,21 @@ const NodeCard = (props: Props) => {
       }
 
       if (isAppNode) {
-        return { ...node, ...node.pluginData };
+        const currentSystemToolTemplate = await getCurrentSystemToolTemplate(node);
+
+        return {
+          ...node,
+          ...node.pluginData,
+          ...(currentSystemToolTemplate
+            ? {
+                status: currentSystemToolTemplate.status,
+                courseUrl: currentSystemToolTemplate.courseUrl,
+                readmeUrl: currentSystemToolTemplate.readmeUrl,
+                userGuide: currentSystemToolTemplate.userGuide,
+                diagram: currentSystemToolTemplate.diagram
+              }
+            : {})
+        };
       } else {
         const template = moduleTemplatesFlat.find(
           (item) => item.flowNodeType === node?.flowNodeType
@@ -256,17 +286,66 @@ const NodeCard = (props: Props) => {
     {
       onSuccess(res) {
         if (!res) return;
-        // Execute forcibly updates the courseUrl field
-        onChangeNode({
-          nodeId,
-          type: 'attr',
-          key: 'courseUrl',
-          value: res?.courseUrl
-        });
+        // 教程元信息由工具详情实时回写，兼容已保存的旧节点。
+        onChangeNode([
+          {
+            nodeId,
+            type: 'attr',
+            key: 'courseUrl',
+            value: res?.courseUrl
+          },
+          {
+            nodeId,
+            type: 'attr',
+            key: 'readmeUrl',
+            value: res?.readmeUrl
+          },
+          {
+            nodeId,
+            type: 'attr',
+            key: 'userGuide',
+            value: res?.userGuide
+          }
+        ]);
       },
-      manual: false
+      manual: false,
+      errorToast: '',
+      refreshDeps: [
+        isAppNode,
+        node?.pluginData?.error,
+        node?.pluginData?.status,
+        node?.pluginId,
+        node?.source,
+        node?.version
+      ]
     }
   );
+
+  const toolStatus = nodeTemplate?.status ?? node?.pluginData?.status;
+  const showVersion = useMemo(() => {
+    if (toolStatus === PluginStatusEnum.Offline || node?.pluginData?.error) return false;
+
+    const source = node?.pluginId ? splitCombineToolId(node.pluginId).source : undefined;
+    if (isDebugToolSource(node?.source)) return false;
+    // 1. MCP/HTTP single tools use the latest toolset content and do not expose version selection.
+    if (source === AppToolSourceEnum.mcp || source === AppToolSourceEnum.http) return false;
+
+    // 2. MCP/HTTP tool sets do not have version
+    if (
+      isAppNode &&
+      (node.toolConfig?.mcpToolSet ||
+        node.toolConfig?.mcpTool ||
+        node?.toolConfig?.httpToolSet ||
+        node?.toolConfig?.httpTool)
+    )
+      return false;
+    // 3. Team app/System commercial plugin
+    if (isAppNode && node?.pluginId && !node?.pluginData?.error) return true;
+    // 4. System tool
+    if (isAppNode && node?.toolConfig?.systemTool) return true;
+
+    return false;
+  }, [isAppNode, node, toolStatus]);
 
   /* Node header - 重构后的版本,依赖项大幅减少 */
   const error = useMemo(() => formatToolError(node?.pluginData?.error), [node?.pluginData?.error]);
@@ -282,6 +361,7 @@ const NodeCard = (props: Props) => {
 
   return (
     <Flex
+      position={'relative'}
       outline={selected && (presentationMode || isFolded) ? '16px solid' : undefined}
       outlineColor={'rgba(17, 24, 36, 0.05)'}
       borderRadius={isFolded ? 26 : 'lg'}
@@ -356,11 +436,14 @@ const NodeCard = (props: Props) => {
 
                     <Box mr={1} />
 
+                    {isDebugToolSource(node?.source) && <DebugToolTag mr={2} />}
+
                     {showVersion && <NodeVersion node={node!} />}
 
                     <NodeActionButtons
                       nodeTemplate={nodeTemplate}
                       courseUrl={node?.courseUrl}
+                      readmeUrl={node?.readmeUrl}
                       rtDoms={rtDoms}
                     />
 
@@ -386,8 +469,10 @@ const NodeCard = (props: Props) => {
                       nodeId={nodeId}
                       isFolder={node?.isFolder}
                       courseUrl={node?.courseUrl}
+                      readmeUrl={node?.readmeUrl}
                       hasSystemSecret={node?.hasSystemSecret}
                       pluginId={node?.pluginId}
+                      source={node?.source}
                       systemKeyCost={node?.systemKeyCost}
                       inputConfig={inputConfig}
                     />
@@ -422,13 +507,95 @@ const NodeCard = (props: Props) => {
           />
         )}
       </Flex>
+      {!isFolded && errorIssues.length > 0 && (
+        <Box position={'absolute'} top={'100%'} left={0} w={'100%'}>
+          <NodeWorkflowCheckIssues issues={errorIssues} />
+        </Box>
+      )}
     </Flex>
   );
 };
 
 export default React.memo(NodeCard);
 
-const NODE_NAME_MAX_LENGTH = 50;
+/** 待处理/待完善状态图标：待完善用设计稿虚线圆环，待处理用圆形 info。 */
+const WorkflowCheckIssueStatusIcon = React.memo(function WorkflowCheckIssueStatusIcon({
+  status
+}: {
+  status: ReturnType<typeof getWorkflowCheckIssueUIStatus>;
+}) {
+  return (
+    <MyIcon
+      name={status === 'pending_handle' ? 'infoRounded' : 'core/app/workflow/checkPendingImprove'}
+      w={'24px'}
+      h={'24px'}
+      flexShrink={0}
+      color={'#485264'}
+    />
+  );
+});
+
+const workflowCheckIssueTextStyle = {
+  color: 'myGray.600',
+  fontFamily: 'PingFang SC, PingFang, sans-serif',
+  fontSize: '16px',
+  fontStyle: 'normal',
+  fontWeight: 500,
+  lineHeight: '24px',
+  letterSpacing: '0.15px'
+} as const;
+
+/** 节点下方校验问题提示条，使用灰色轻量样式而非红色错误条。 */
+const NodeWorkflowCheckIssues = React.memo(function NodeWorkflowCheckIssues({
+  issues
+}: {
+  issues: WorkflowCheckIssue[];
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Flex flexDirection={'column'} alignItems={'flex-start'} gap={'8px'} mt={2}>
+      {issues.map((issue, index) => {
+        const status = getWorkflowCheckIssueUIStatus(issue.code);
+        // 显式保留静态 key，避免 i18n 清理脚本误删状态前缀文案。
+        const statusPrefixText =
+          status === 'pending_handle'
+            ? t('common:core.workflow.check.status.pending_handle')
+            : t('common:core.workflow.check.status.pending_improve');
+
+        return (
+          <Flex
+            key={`${issue.code}-${issue.inputKey ?? ''}-${index}`}
+            display={'inline-flex'}
+            alignItems={'center'}
+            gap={'8px'}
+            px={'16px'}
+            py={'8px'}
+            w={'fit-content'}
+            maxW={'min(720px, 100%)'}
+            bg={'#E8EBF0'}
+            opacity={0.8}
+            borderRadius={'8px'}
+          >
+            <WorkflowCheckIssueStatusIcon status={status} />
+            <Box as={'span'} flexShrink={0} {...workflowCheckIssueTextStyle}>
+              {statusPrefixText}:
+            </Box>
+            <Box
+              as={'span'}
+              minW={0}
+              whiteSpace={'normal'}
+              wordBreak={'break-word'}
+              {...workflowCheckIssueTextStyle}
+            >
+              {issue.message.trim()}
+            </Box>
+          </Flex>
+        );
+      })}
+    </Flex>
+  );
+});
 
 // 节点标题区域组件
 const NodeTitleSection = React.memo<{
@@ -452,32 +619,6 @@ const NodeTitleSection = React.memo<{
     return undefined;
   }, [appId]);
 
-  // custom title edit
-  const { onOpenModal: onOpenCustomTitleModal, EditModal: EditTitleModal } = useEditTitle({
-    title: t('common:custom_title'),
-    placeholder: t('app:module.Custom Title Tip') || ''
-  });
-
-  const handleRenameClick = useCallback(() => {
-    onOpenCustomTitleModal({
-      defaultVal: name,
-      onSuccess: (newName) => {
-        if (!newName) {
-          return toast({
-            title: t('app:modules.Title is required'),
-            status: 'warning'
-          });
-        }
-        onChangeNode({
-          nodeId,
-          type: 'attr',
-          key: 'name',
-          value: newName
-        });
-      }
-    });
-  }, [onOpenCustomTitleModal, name, onChangeNode, nodeId, toast, t]);
-
   const { runAsync: onGetPermission } = useRequest(getAppPermission, {
     onSuccess(permission) {
       if (permission.hasWritePer) {
@@ -491,35 +632,52 @@ const NodeTitleSection = React.memo<{
     }
   });
 
+  const handleSave = useCallback(
+    (newVal: string) => {
+      const trimmed = newVal.trim();
+      if (!trimmed) {
+        toast({
+          title: t('app:modules.Title is required'),
+          status: 'warning'
+        });
+        return false;
+      }
+      if (trimmed !== name) {
+        onChangeNode({
+          nodeId,
+          type: 'attr',
+          key: 'name',
+          value: trimmed
+        });
+      }
+      return true;
+    },
+    [name, onChangeNode, nodeId, toast, t]
+  );
+
+  const renderDisplay = useCallback(
+    (val: string) => (
+      <HighlightText rawText={val} matchText={searchedText ?? ''} mode={'bg'} color={'#ffe82d'} />
+    ),
+    [searchedText]
+  );
+
   return (
     <Flex alignItems={'center'} flex={'1 1 0'} minW={0}>
       <Avatar src={avatar} borderRadius={'sm'} objectFit={'contain'} w={'24px'} h={'24px'} />
-      <Box
-        ml={2}
-        flex={1}
-        minW={0}
-        fontSize={'18px'}
-        fontWeight={'medium'}
-        color={'myGray.900'}
-        overflow={'hidden'}
-        textOverflow={'ellipsis'}
-        whiteSpace={'nowrap'}
-        title={t(name as any)}
-        sx={{
-          '& > div': {
-            display: 'inline'
-          }
-        }}
-      >
-        <HighlightText
-          rawText={t(name as any)}
-          matchText={searchedText ?? ''}
-          mode={'bg'}
-          color={'#ffe82d'}
+      <Box ml={2} flex={1} minW={0}>
+        <InlineEdit
+          value={name}
+          onSave={handleSave}
+          fontSize={'18px'}
+          fontWeight={'medium'}
+          maxLength={50}
+          h={'28px'}
+          innerH={'26px'}
+          lineHeight={'26px'}
+          px={'6px'}
+          renderDisplay={renderDisplay}
         />
-      </Box>
-      <Box ml={1} flexShrink={0} visibility={'hidden'}>
-        <MyIconButton className="node-hover-controller" icon="edit" onClick={handleRenameClick} />
       </Box>
       {childAppId && (
         <Box ml={1} flexShrink={0} visibility={'hidden'}>
@@ -531,8 +689,6 @@ const NodeTitleSection = React.memo<{
           />
         </Box>
       )}
-
-      <EditTitleModal maxLength={NODE_NAME_MAX_LENGTH} />
     </Flex>
   );
 });
@@ -547,85 +703,102 @@ const NodeIntro = React.memo(function NodeIntro({
   intro?: string;
 }) {
   const { t } = useTranslation();
-  const nodeIsTool = useContextSelector(
-    WorkflowUtilsContext,
-    (ctx) => ctx.splitToolInputs([], nodeId)?.isTool
-  );
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
 
-  // edit intro
-  const { onOpenModal: onOpenIntroModal, EditModal: EditIntroModal } = useEditTextarea({
-    title: t('common:core.module.Edit intro'),
-    tip: t('common:info.node_info'),
-    canEmpty: false
-  });
+  const handleSave = useCallback(
+    (newVal: string) => {
+      const trimmed = newVal.trim();
+      if (trimmed !== intro) {
+        onChangeNode({
+          nodeId,
+          type: 'attr',
+          key: 'intro',
+          value: trimmed
+        });
+      }
+      return true;
+    },
+    [intro, onChangeNode, nodeId]
+  );
 
-  const Render = useMemo(() => {
-    return (
-      <>
-        <Flex alignItems={'center'}>
-          <Box fontSize={'sm'} color={'myGray.500'} flex={'1 0 0'}>
-            {t(intro as any) || t('app:node_not_intro')}
-          </Box>
-          <Flex
-            className="node-hover-controller"
-            visibility={nodeIsTool ? 'visible' : 'hidden'}
-            p={'7px'}
-            rounded={'sm'}
-            alignItems={'center'}
-            _hover={{
-              bg: 'myGray.100'
-            }}
-            cursor={'pointer'}
-            onClick={() => {
-              onOpenIntroModal({
-                defaultVal: intro,
-                onSuccess(e) {
-                  onChangeNode({
-                    nodeId,
-                    type: 'attr',
-                    key: 'intro',
-                    value: e
-                  });
-                }
-              });
-            }}
-          >
-            <MyIcon name={'edit'} w={'18px'} />
-          </Flex>
-        </Flex>
-        <EditIntroModal maxLength={500} />
-      </>
-    );
-  }, [EditIntroModal, intro, nodeIsTool, nodeId, onChangeNode, onOpenIntroModal, t]);
-
-  return Render;
+  return (
+    <Box w={'100%'} minW={0} overflow={'hidden'}>
+      <InlineEdit
+        value={intro}
+        onSave={handleSave}
+        type={'textarea'}
+        maxLength={500}
+        placeholder={t('app:node_not_intro')}
+        fontSize={'sm'}
+        lineHeight={'short'}
+        color={'myGray.500'}
+        minH={'20px'}
+        py={'3px'}
+        px={'6px'}
+      />
+    </Box>
+  );
 });
 
 const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeItemType }) {
   const { t } = useTranslation();
 
   const onResetNode = useContextSelector(WorkflowActionsContext, (v) => v.onResetNode);
-
-  const { isOpen, onOpen, onClose } = useDisclosure();
-
-  // Load version list
-  const { ScrollData, data: versionList } = useScrollPagination(getToolVersionList, {
-    pageSize: 20,
-    params: {
-      pluginId: node.pluginId
-    },
-    refreshDeps: [node.pluginId, isOpen],
-    disabled: !isOpen,
-    manual: false
+  const { openConfirm: openKeepLatestConfirm, ConfirmModal: KeepLatestConfirmModal } = useConfirm({
+    content: t('app:keep_the_latest_confirm_tip')
   });
+  const toolSource = useMemo(
+    () => (node.pluginId ? splitCombineToolId(node.pluginId).source : undefined),
+    [node.pluginId]
+  );
+
+  const {
+    runAsync: loadVersions,
+    data: versionList = [],
+    loading: isLoadingVersions
+  } = useRequest(
+    async () => {
+      if (!node.pluginId) return [];
+
+      const { authAppId } = splitCombineToolId(node.pluginId);
+      if (toolSource === AppToolSourceEnum.mcp || toolSource === AppToolSourceEnum.http) return [];
+
+      if (toolSource === AppToolSourceEnum.personal) {
+        if (!authAppId) return [];
+
+        const { list = [] } = await getAppVersionList({
+          appId: authAppId,
+          isPublish: true,
+          offset: 0,
+          pageSize: 100
+        });
+
+        return list.map<SystemToolVersionType>((item) => ({
+          version: item._id,
+          versionDescription: item.versionName
+        }));
+      }
+
+      return getTeamToolVersions({
+        toolId: node.pluginId,
+        source: toolSource === AppToolSourceEnum.personal ? 'team' : 'system'
+      });
+    },
+    {
+      refreshDeps: [node.pluginId, toolSource]
+    }
+  );
 
   const { runAsync: onUpdateVersion, loading: isUpdating } = useRequest(
     async (versionId: string) => {
       if (!node) return;
 
       if (node.pluginId) {
-        const template = await getToolPreviewNode({ appId: node.pluginId, versionId });
+        const template = await getClientToolPreviewNode({
+          appId: node.pluginId,
+          versionId,
+          source: node.source
+        });
 
         if (!!template) {
           onResetNode({
@@ -646,6 +819,19 @@ const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeIt
       refreshDeps: [node, onResetNode]
     }
   );
+  const onSelectVersion = useCallback(
+    (versionId: string) => {
+      if (!versionId) {
+        openKeepLatestConfirm({
+          onConfirm: () => onUpdateVersion('')
+        })();
+        return;
+      }
+
+      return onUpdateVersion(versionId);
+    },
+    [onUpdateVersion, openKeepLatestConfirm]
+  );
 
   const renderVersionList = useCreation(
     () => [
@@ -654,8 +840,8 @@ const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeIt
         value: ''
       },
       ...versionList.map((item) => ({
-        label: item.versionName,
-        value: item._id
+        label: item.versionDescription || item.version,
+        value: item.version
       }))
     ],
     [node.isLatestVersion, node.version, t, versionList]
@@ -663,7 +849,7 @@ const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeIt
   const valueLabel = useMemo(() => {
     return (
       <Flex alignItems={'center'} gap={0.5}>
-        {node?.version === '' ? t('app:keep_the_latest') : node?.versionLabel}
+        {!node?.version ? t('app:keep_the_latest') : node?.versionLabel}
         {!node.isLatestVersion && (
           <MyTag type="fill" colorSchema={'adora'} fontSize={'mini'} borderRadius={'lg'}>
             {t('app:not_the_newest')}
@@ -673,30 +859,22 @@ const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeIt
     );
   }, [node.isLatestVersion, node.version, node.versionLabel, t]);
 
-  const ScrollDataWrapper = useCallback(
-    (props: { children: React.ReactNode }) => (
-      <ScrollData minH={'100px'} maxH={'40vh'}>
-        {props.children}
-      </ScrollData>
-    ),
-    [ScrollData]
-  );
-
   return (
-    <MySelect
-      className="nowheel"
-      value={node.version}
-      onChange={onUpdateVersion}
-      isLoading={isUpdating}
-      customOnOpen={onOpen}
-      customOnClose={onClose}
-      placeholder={node?.versionLabel}
-      variant={'whitePrimaryOutline'}
-      size={'sm'}
-      list={renderVersionList}
-      ScrollData={ScrollDataWrapper}
-      valueLabel={valueLabel}
-    />
+    <>
+      <MySelect
+        className="nowheel"
+        value={node.version}
+        onChange={onSelectVersion}
+        isLoading={isUpdating || isLoadingVersions}
+        customOnOpen={loadVersions}
+        placeholder={node?.versionLabel}
+        variant={'whitePrimaryOutline'}
+        size={'sm'}
+        list={renderVersionList}
+        valueLabel={valueLabel}
+      />
+      <KeepLatestConfirmModal isLoading={isUpdating} />
+    </>
   );
 });
 
@@ -708,6 +886,7 @@ const MenuRender = React.memo(function MenuRender({
   menuForbid?: Props['menuForbid'];
 }) {
   const { t } = useTranslation();
+  const { llmModelList } = useUserModelLists();
   const { openDebugNode, DebugInputModal } = useDebug();
   const { setNodes, getNodeById } = useContextSelector(WorkflowBufferDataContext, (v) => v);
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
@@ -748,6 +927,7 @@ const MenuRender = React.memo(function MenuRender({
           outputs: node.data.outputs,
 
           pluginId: node.data.pluginId,
+          source: node.data.source,
           isFolder: node.data.isFolder,
           pluginData: node.data.pluginData,
 
@@ -756,7 +936,8 @@ const MenuRender = React.memo(function MenuRender({
           currentCost: node.data.currentCost,
           systemKeyCost: node.data.systemKeyCost,
           hasTokenFee: node.data.hasTokenFee,
-          hasSystemSecret: node.data.hasSystemSecret
+          hasSystemSecret: node.data.hasSystemSecret,
+          readmeUrl: node.data.readmeUrl
         };
 
         return [
@@ -776,6 +957,7 @@ const MenuRender = React.memo(function MenuRender({
               position: { x: node.position.x + 200, y: node.position.y + 50 },
               showStatus: template.showStatus,
               pluginId: template.pluginId,
+              source: template.source,
               inputs: template.inputs,
               outputs: template.outputs,
               version: template.version,
@@ -786,12 +968,13 @@ const MenuRender = React.memo(function MenuRender({
             },
             selected: true,
             parentNodeId: template.parentNodeId,
+            llmModelList,
             t
           })
         ];
       });
     },
-    [computedNewNodeName, setNodes, t]
+    [computedNewNodeName, llmModelList, setNodes, t]
   );
   const Render = useMemo(() => {
     const menuList = [
@@ -904,10 +1087,12 @@ const NodeActionButtons = React.memo<{
     name?: string;
     avatar?: string;
     courseUrl?: string;
+    readmeUrl?: string;
   };
   courseUrl?: string;
+  readmeUrl?: string;
   rtDoms?: React.ReactNode[];
-}>(({ nodeTemplate, courseUrl, rtDoms }) => {
+}>(({ nodeTemplate, courseUrl, readmeUrl, rtDoms }) => {
   const { t } = useTranslation();
 
   const buttons = useMemo(() => {
@@ -928,14 +1113,18 @@ const NodeActionButtons = React.memo<{
       );
     }
 
-    if (courseUrl || nodeTemplate?.userGuide) {
+    const guideReadmeUrl = nodeTemplate?.readmeUrl || readmeUrl;
+    const guideCourseUrl = nodeTemplate?.courseUrl || courseUrl;
+
+    if (guideCourseUrl || guideReadmeUrl || nodeTemplate?.userGuide) {
       result.push(
         <UseGuideModal
           key="userGuide"
           title={nodeTemplate?.name}
           iconSrc={nodeTemplate?.avatar}
           text={nodeTemplate?.userGuide}
-          link={nodeTemplate?.courseUrl || courseUrl}
+          link={guideCourseUrl}
+          readmeUrl={guideReadmeUrl}
         >
           {({ onClick }) => (
             <MyTooltip label={t('workflow:Node.Open_Node_Course')}>
@@ -951,7 +1140,7 @@ const NodeActionButtons = React.memo<{
     }
 
     return result;
-  }, [nodeTemplate, courseUrl, rtDoms, t]);
+  }, [nodeTemplate, courseUrl, readmeUrl, rtDoms, t]);
 
   if (buttons.length === 0) {
     return null;
@@ -974,8 +1163,10 @@ NodeActionButtons.displayName = 'NodeActionButtons';
 const NodeStatusBadge = React.memo<{ status?: PluginStatusType; error?: string | null }>(
   ({ status, error }) => {
     const { t } = useTranslation();
+    const errorText =
+      error || (status === PluginStatusEnum.Offline ? 'common:error.tool_not_exist' : undefined);
 
-    if (error) {
+    if (errorText) {
       return (
         <Flex
           bg={'red.50'}
@@ -987,25 +1178,23 @@ const NodeStatusBadge = React.memo<{ status?: PluginStatusType; error?: string |
           fontWeight={'medium'}
         >
           <MyIcon name={'common/errorFill'} w={'14px'} mr={1} />
-          <Box color={'red.600'}>{t(error as any)}</Box>
+          <Box color={'red.600'}>{t(errorText as any)}</Box>
         </Flex>
       );
     }
     if (status !== undefined && status !== PluginStatusEnum.Normal) {
+      const statusLabelMap: Partial<Record<PluginStatusType, string>> = {
+        [PluginStatusEnum.Hidden]: t('app:toolkit_status_hidden'),
+        [PluginStatusEnum.SoonOffline]: t('app:toolkit_status_soon_offline')
+      };
+      const statusTooltipMap: Partial<Record<PluginStatusType, string>> = {
+        [PluginStatusEnum.Hidden]: t('app:tool_hidden_tips'),
+        [PluginStatusEnum.SoonOffline]: t('app:tool_soon_offset_tips')
+      };
       return (
-        <MyTooltip
-          label={
-            status === PluginStatusEnum.Offline
-              ? t('app:tool_offset_tips')
-              : t('app:tool_soon_offset_tips')
-          }
-        >
-          <MyTag
-            mr={2}
-            colorSchema={status === PluginStatusEnum.Offline ? 'red' : 'yellow'}
-            type="borderFill"
-          >
-            {t(PluginStatusMap[status].label)}
+        <MyTooltip label={statusTooltipMap[status]}>
+          <MyTag mr={2} colorSchema={PluginStatusMap[status].tagColor} type="borderFill">
+            {statusLabelMap[status]}
           </MyTag>
         </MyTooltip>
       );
@@ -1020,16 +1209,20 @@ const NodeSecret = React.memo(function NodeSecret({
   nodeId,
   isFolder,
   courseUrl,
+  readmeUrl,
   hasSystemSecret,
   pluginId,
+  source,
   systemKeyCost,
   inputConfig
 }: {
   nodeId: string;
   isFolder?: boolean;
   courseUrl?: string;
+  readmeUrl?: string;
   hasSystemSecret?: boolean;
   pluginId?: string;
+  source?: string;
   systemKeyCost?: number;
   inputConfig: FlowNodeInputItemType | undefined;
 }) {
@@ -1076,9 +1269,11 @@ const NodeSecret = React.memo(function NodeSecret({
             onCloseToolParamConfigModal();
           }}
           courseUrl={courseUrl}
+          readmeUrl={readmeUrl}
           inputConfig={inputConfig}
           hasSystemSecret={hasSystemSecret}
           parentId={pluginId}
+          source={source}
           secretCost={systemKeyCost}
         />
       )}
@@ -1100,7 +1295,6 @@ const PresentationModeOverlay = React.memo(function PresentationModeOverlay({
   isLoopNode: boolean;
   onDoubleClick: () => void;
 }) {
-  const { t } = useTranslation();
   const [presentationHeight, setPresentationHeight] = useState<number>(0);
 
   const presentationOverlayRef = useCallback((node: HTMLDivElement | null) => {
@@ -1166,7 +1360,7 @@ const PresentationModeOverlay = React.memo(function PresentationModeOverlay({
             whiteSpace={'nowrap'}
             maxW={'80%'}
           >
-            {t(name as any)}
+            {name}
           </Box>
         )}
         {intro && presentationHeight > 320 && (
@@ -1179,7 +1373,7 @@ const PresentationModeOverlay = React.memo(function PresentationModeOverlay({
             whiteSpace={'nowrap'}
             maxW={'80%'}
           >
-            {t(intro as any)}
+            {intro}
           </Box>
         )}
       </Flex>

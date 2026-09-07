@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { Box, Button, Flex, Grid } from '@chakra-ui/react';
-import { useTranslation } from 'next-i18next';
+import { Trans } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import { StandardSubLevelEnum, SubModeEnum } from '@fastgpt/global/support/wallet/sub/constants';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { standardSubLevelMap } from '@fastgpt/global/support/wallet/sub/constants';
@@ -19,33 +20,147 @@ import {
 } from '@fastgpt/global/support/wallet/sub/discountCoupon/constants';
 import { formatActivityExpirationTime } from './utils';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import {
+  getStandardPackageChangeStatus,
+  PackageChangeStatusEnum,
+  type PricePurchaseIntent
+} from './purchaseIntent';
 
-export enum PackageChangeStatusEnum {
-  buy = 'buy',
-  renewal = 'renewal',
-  upgrade = 'upgrade'
-}
 const NEW_PLAN_LEVELS = [
   StandardSubLevelEnum.free,
   StandardSubLevelEnum.basic,
   StandardSubLevelEnum.advanced,
   StandardSubLevelEnum.custom
 ];
+const PLAN_CARD_MIN_WIDTH = 260;
+const PLAN_CARD_MAX_WIDTH = 400;
+const PLAN_CARD_GAP = 24;
+
+type ResponsivePlanLayout = {
+  columnCount: 1 | 2 | 4;
+  cardWidth: number;
+  gap: number;
+};
+
+/** 按月/按年切换开关，可在页面 header 区域复用 */
+export const BillingModeSwitch = ({
+  value,
+  onChange
+}: {
+  value: `${SubModeEnum}`;
+  onChange: (mode: `${SubModeEnum}`) => void;
+}) => {
+  const { t } = useClientTranslation('price');
+  const isYear = value === SubModeEnum.year;
+
+  return (
+    <Flex flexDirection={['column', 'row']} alignItems={'center'} gap={[2, 3]}>
+      <Flex alignItems={'center'} gap={3} whiteSpace={'nowrap'}>
+        <Box
+          fontFamily={'Inter'}
+          fontSize={'14px'}
+          fontStyle={'normal'}
+          fontWeight={400}
+          lineHeight={'21px'}
+          color={'#020617'}
+          userSelect={'none'}
+        >
+          {t('price:support.wallet.subscription.mode.Month pay')}
+        </Box>
+        <Flex
+          role={'switch'}
+          aria-checked={isYear}
+          tabIndex={0}
+          w={'40px'}
+          h={'24px'}
+          p={'0 4px'}
+          alignItems={'center'}
+          flexShrink={0}
+          borderRadius={'full'}
+          bg={'#E8EBF0'}
+          cursor={'pointer'}
+          justifyContent={isYear ? 'flex-end' : 'flex-start'}
+          onClick={() => onChange(isYear ? SubModeEnum.month : SubModeEnum.year)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onChange(isYear ? SubModeEnum.month : SubModeEnum.year);
+            }
+          }}
+        >
+          <Box
+            w={'16px'}
+            h={'16px'}
+            borderRadius={'full'}
+            bg={'white'}
+            boxShadow={'0 1px 2px rgba(19, 51, 107, 0.15)'}
+          />
+        </Flex>
+        <Box
+          fontFamily={'Inter'}
+          fontSize={'14px'}
+          fontStyle={'normal'}
+          fontWeight={400}
+          lineHeight={'20px'}
+          color={'#475569'}
+          userSelect={'none'}
+        >
+          {t('price:support.wallet.subscription.mode.Year pay')}
+        </Box>
+      </Flex>
+      <Box
+        as={'span'}
+        textAlign={'center'}
+        sx={{
+          color: '#3B82F6',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: '14px',
+          fontStyle: 'normal',
+          fontWeight: 400,
+          lineHeight: '20px'
+        }}
+      >
+        <Trans
+          i18nKey={'price:pay_year_tip'}
+          values={{ count: 10 }}
+          components={{
+            italic: <Box as={'span'} fontStyle={'italic'} />
+          }}
+        />
+      </Box>
+    </Flex>
+  );
+};
 
 const Standard = ({
   standardPlan: myStandardPlan,
-  onPaySuccess
+  onPaySuccess,
+  selectSubMode: controlledSubMode,
+  onSelectSubModeChange,
+  onLoginRequired,
+  resumePurchaseIntent,
+  onResumePurchaseIntentHandled,
+  hideBillingToggle = false,
+  responsiveCardLayout = false
 }: {
   standardPlan?: TeamPlanStandardType;
   onPaySuccess?: () => void;
+  selectSubMode?: `${SubModeEnum}`;
+  onSelectSubModeChange?: (mode: `${SubModeEnum}`) => void;
+  onLoginRequired?: (intent: PricePurchaseIntent) => void;
+  resumePurchaseIntent?: PricePurchaseIntent;
+  onResumePurchaseIntentHandled?: () => void;
+  hideBillingToggle?: boolean;
+  responsiveCardLayout?: boolean;
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useClientTranslation('price');
   const { userInfo } = useUserStore();
+  const isChinese = i18n.language.startsWith('zh');
 
   const packagePayTextMap = {
-    [PackageChangeStatusEnum.buy]: t('common:pay.package_tip.buy'),
-    [PackageChangeStatusEnum.renewal]: t('common:pay.package_tip.renewal'),
-    [PackageChangeStatusEnum.upgrade]: t('common:pay.package_tip.upgrade')
+    [PackageChangeStatusEnum.buy]: t('price:pay.package_tip.buy'),
+    [PackageChangeStatusEnum.renewal]: t('price:pay.package_tip.renewal'),
+    [PackageChangeStatusEnum.upgrade]: t('price:pay.package_tip.upgrade')
   };
 
   // Check if it's a wecom team
@@ -53,9 +168,17 @@ const Standard = ({
 
   const [packageChange, setPackageChange] = useState<PackageChangeStatusEnum>();
   const { subPlans, feConfigs } = useSystemStore();
-  const [selectSubMode, setSelectSubMode] = useState<`${SubModeEnum}`>(
+  const [internalSubMode, setInternalSubMode] = useState<`${SubModeEnum}`>(
     isWecomTeam ? SubModeEnum.year : SubModeEnum.month
   );
+  const planContainerRef = useRef<HTMLDivElement>(null);
+  const [responsivePlanLayout, setResponsivePlanLayout] = useState<ResponsivePlanLayout>({
+    columnCount: 4,
+    cardWidth: PLAN_CARD_MIN_WIDTH,
+    gap: PLAN_CARD_GAP
+  });
+  const selectSubMode = controlledSubMode ?? internalSubMode;
+  const setSelectSubMode = onSelectSubModeChange ?? setInternalSubMode;
   const hasActivityExpiration =
     !!subPlans?.activityExpirationTime && selectSubMode === SubModeEnum.year;
 
@@ -66,10 +189,68 @@ const Standard = ({
     } else {
       setSelectSubMode(subPlans?.activityExpirationTime ? SubModeEnum.year : SubModeEnum.month);
     }
-  }, [subPlans?.activityExpirationTime, isWecomTeam]);
+  }, [isWecomTeam, setSelectSubMode, subPlans?.activityExpirationTime]);
+
+  useEffect(() => {
+    if (!responsiveCardLayout || !planContainerRef.current) return;
+
+    const container = planContainerRef.current;
+    const updatePlanLayout = () => {
+      const availableWidth = container.clientWidth;
+      if (availableWidth <= 0) return;
+
+      const fourColumnMinWidth = PLAN_CARD_MIN_WIDTH * 4 + PLAN_CARD_GAP * 3;
+      const twoColumnMinWidth = PLAN_CARD_MIN_WIDTH * 2 + PLAN_CARD_GAP;
+      const nextLayout: ResponsivePlanLayout = (() => {
+        if (availableWidth >= fourColumnMinWidth) {
+          return {
+            columnCount: 4,
+            cardWidth: Math.min(
+              PLAN_CARD_MAX_WIDTH,
+              Math.floor((availableWidth - PLAN_CARD_GAP * 3) / 4)
+            ),
+            gap: PLAN_CARD_GAP
+          };
+        }
+        if (availableWidth >= twoColumnMinWidth) {
+          return {
+            columnCount: 2,
+            cardWidth: Math.min(
+              PLAN_CARD_MAX_WIDTH,
+              Math.floor((availableWidth - PLAN_CARD_GAP) / 2)
+            ),
+            gap: PLAN_CARD_GAP
+          };
+        }
+        return {
+          columnCount: 1,
+          cardWidth: Math.max(PLAN_CARD_MIN_WIDTH, Math.min(PLAN_CARD_MAX_WIDTH, availableWidth)),
+          gap: PLAN_CARD_GAP
+        };
+      })();
+
+      setResponsivePlanLayout((previous) =>
+        previous.columnCount === nextLayout.columnCount &&
+        previous.cardWidth === nextLayout.cardWidth &&
+        previous.gap === nextLayout.gap
+          ? previous
+          : nextLayout
+      );
+    };
+
+    updatePlanLayout();
+    const resizeObserver = new ResizeObserver(updatePlanLayout);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [responsiveCardLayout]);
 
   // 获取优惠券
-  const { data: coupons = [], runAsync: getCoupons } = useRequest(
+  const {
+    data: coupons = [],
+    runAsync: getCoupons,
+    loading: couponsLoading
+  } = useRequest(
     async () => {
       if (!myStandardPlan?.teamId) return [];
       return getDiscountCouponList(myStandardPlan.teamId);
@@ -132,7 +313,7 @@ const Standard = ({
           })
       : [];
   }, [
-    subPlans?.standard,
+    subPlans,
     isWecomTeam,
     selectSubMode,
     myStandardPlan?.maxTeamMember,
@@ -159,6 +340,45 @@ const Standard = ({
     }
   });
 
+  const submitStandardPurchase = useCallback(
+    ({ packageChange, level, subMode }: Extract<PricePurchaseIntent, { type: 'standard' }>) => {
+      if (!userInfo && onLoginRequired) {
+        onLoginRequired({ type: 'standard', packageChange, level, subMode });
+        return;
+      }
+
+      setPackageChange(packageChange);
+      void onPay({
+        type: BillTypeEnum.standSubPlan,
+        level: level as StandardSubLevelEnum,
+        subMode: subMode as SubModeEnum,
+        discountCouponId: matchedCoupon?._id
+      });
+    },
+    [matchedCoupon?._id, onLoginRequired, onPay, userInfo]
+  );
+
+  useEffect(() => {
+    if (resumePurchaseIntent?.type !== 'standard' || couponsLoading) return;
+
+    queueMicrotask(() => {
+      onResumePurchaseIntentHandled?.();
+      submitStandardPurchase({
+        ...resumePurchaseIntent,
+        packageChange: getStandardPackageChangeStatus({
+          currentLevel: myStandardPlan?.currentSubLevel,
+          targetLevel: resumePurchaseIntent.level
+        })
+      });
+    });
+  }, [
+    couponsLoading,
+    myStandardPlan?.currentSubLevel,
+    onResumePurchaseIntentHandled,
+    resumePurchaseIntent,
+    submitStandardPurchase
+  ]);
+
   // 计算活动时间
   const { text: activityExpirationTime } = formatActivityExpirationTime(
     subPlans?.activityExpirationTime
@@ -166,67 +386,49 @@ const Standard = ({
 
   return (
     <>
-      <Flex flexDirection={'column'} alignItems={'center'} position={'relative'}>
-        {!isWecomTeam && (
-          <Flex>
-            <Box>
-              <Box
-                textAlign={'right'}
-                color="#DC7E03"
-                fontWeight="500"
-                fontStyle="italic"
-                fontFamily={'JiangChengXieHei'}
-                fontSize={'14px'}
-                lineHeight={'20px'}
-                letterSpacing={'0.1px'}
-                textTransform={'lowercase'}
-                mb={2}
-                mr={'-2'}
-              >
-                {t('common:pay_year_tip')}
-              </Box>
-              <RowTabs
-                list={[
-                  {
-                    label: t('common:support.wallet.subscription.mode.Month'),
-                    value: SubModeEnum.month
-                  },
-                  {
-                    label: (
-                      <Box whiteSpace={'nowrap'}>
-                        {t('common:support.wallet.subscription.mode.Year')}
-                      </Box>
-                    ),
-                    value: SubModeEnum.year
-                  }
-                ]}
-                value={selectSubMode}
-                onChange={(e) => setSelectSubMode(e as `${SubModeEnum}`)}
-              />
-            </Box>
-            <MyIcon name={'price/pricearrow'} mt={'10px'} ml={'6px'} />
-          </Flex>
+      <Flex
+        ref={planContainerRef}
+        flexDirection={'column'}
+        alignItems={'center'}
+        position={'relative'}
+        w={'100%'}
+      >
+        {!hideBillingToggle && !isWecomTeam && (
+          <BillingModeSwitch value={selectSubMode} onChange={setSelectSubMode} />
         )}
 
-        {/* card */}
-        <Grid
-          mt={[10, '48px']}
-          gridTemplateColumns={['1fr', 'repeat(2,1fr)', `repeat(${standardSubList.length},1fr)`]}
-          gap={[4, 6, 8]}
-          w={'100%'}
-          maxW={'1440px'}
-          minH={'550px'}
+        <Flex
+          mt={hideBillingToggle ? 0 : '24px'}
+          display={responsiveCardLayout ? 'grid' : 'flex'}
+          gridTemplateColumns={
+            responsiveCardLayout
+              ? `repeat(${responsivePlanLayout.columnCount}, minmax(0, ${responsivePlanLayout.cardWidth}px))`
+              : undefined
+          }
+          gap={responsiveCardLayout ? `${responsivePlanLayout.gap}px` : [4, 6, 8]}
+          w={
+            responsiveCardLayout
+              ? `${
+                  responsivePlanLayout.cardWidth * responsivePlanLayout.columnCount +
+                  responsivePlanLayout.gap * (responsivePlanLayout.columnCount - 1)
+                }px`
+              : '100%'
+          }
+          maxW={'100%'}
+          flexWrap={responsiveCardLayout ? undefined : ['wrap', 'nowrap']}
+          justifyContent={'center'}
         >
           {standardSubList.map((item) => {
-            const isCurrentPlan = item.level === myStandardPlan?.currentSubLevel;
+            const packageChangeStatus = getStandardPackageChangeStatus({
+              currentLevel: myStandardPlan?.currentSubLevel,
+              targetLevel: item.level
+            });
+            const isCurrentPlan = packageChangeStatus === PackageChangeStatusEnum.renewal;
             const isActivityPlan =
               item.level === StandardSubLevelEnum.advanced ||
               item.level === StandardSubLevelEnum.basic;
 
-            const isHigherLevel =
-              standardSubLevelMap[item.level].weight >
-              standardSubLevelMap[myStandardPlan?.currentSubLevel || StandardSubLevelEnum.free]
-                .weight;
+            const isHigherLevel = packageChangeStatus === PackageChangeStatusEnum.upgrade;
 
             // For wecom teams with advanced plan, cannot buy basic plan
             const isWecomDowngrade =
@@ -238,21 +440,25 @@ const Standard = ({
               <Box
                 key={item.level}
                 pos={'relative'}
-                flex={'1 0 0'}
-                bg={'rgba(255, 255, 255, 0.90)'}
-                p={'28px'}
-                borderRadius={'xl'}
-                borderWidth={isCurrentPlan ? '2px' : '1.5px'}
-                boxShadow={'1.5'}
                 overflow={'hidden'}
-                {...(isCurrentPlan
-                  ? {
-                      borderColor:
-                        hasActivityExpiration && isActivityPlan ? '#BB182C' : 'primary.600'
-                    }
-                  : {
-                      borderColor: 'myGray.150'
-                    })}
+                display={'flex'}
+                flexDirection={'column'}
+                alignItems={'flex-start'}
+                flexShrink={0}
+                w={responsiveCardLayout ? '100%' : ['100%', '300px']}
+                h={['auto', '777px']}
+                p={'28px'}
+                borderRadius={'16px'}
+                borderWidth={isCurrentPlan ? '2px' : '1.5px'}
+                borderColor={
+                  isCurrentPlan
+                    ? hasActivityExpiration && isActivityPlan
+                      ? '#BB182C'
+                      : 'primary.600'
+                    : '#F0F1F6'
+                }
+                bg={'rgba(255, 255, 255, 0.90)'}
+                boxShadow={'0 1px 2px 0 rgba(19, 51, 107, 0.10), 0 0 1px 0 rgba(19, 51, 107, 0.15)'}
               >
                 {hasActivityExpiration &&
                   (item.level === StandardSubLevelEnum.basic ||
@@ -332,7 +538,7 @@ const Standard = ({
                     fontWeight={'500'}
                     borderLeftRadius={'sm'}
                   >
-                    {t('common:is_using')}
+                    {t('price:is_using')}
                   </Box>
                 )}
                 <Box
@@ -353,7 +559,7 @@ const Standard = ({
                       fontWeight={'bold'}
                       color={'myGray.900'}
                     >
-                      {t('common:custom_plan_price')}
+                      {t('price:custom_plan_price')}
                     </Box>
                   ) : (
                     <Box
@@ -385,7 +591,7 @@ const Standard = ({
                             fontWeight={'500'}
                             whiteSpace={'nowrap'}
                           >
-                            {t('common:support.wallet.subscription.per_year')}
+                            {t('price:support.wallet.subscription.per_year')}
                           </Box>
                         )}
                         {item.level !== StandardSubLevelEnum.free && matchedCoupon && (
@@ -396,7 +602,13 @@ const Standard = ({
                             fontWeight={'500'}
                             whiteSpace={'nowrap'}
                           >
-                            {`${(matchedCoupon.discount * 10).toFixed(0)} 折`}
+                            {isChinese
+                              ? t('price:coupon_discount_rate', {
+                                  discount: (matchedCoupon.discount * 10).toFixed(0)
+                                })
+                              : t('price:coupon_percent_off', {
+                                  discount: ((1 - matchedCoupon.discount) * 100).toFixed(0)
+                                })}
                           </Box>
                         )}
                       </Flex>
@@ -405,7 +617,7 @@ const Standard = ({
                 </Flex>
                 <Box color={'myGray.500'} minH={'40px'} fontSize={'xs'}>
                   {isWecomTeam && item.level === StandardSubLevelEnum.free
-                    ? t('common:support.wallet.subscription.standardSubLevel.trial_desc')
+                    ? t('price:support.wallet.subscription.standardSubLevel.trial_desc')
                     : t(item.desc as any, { title: feConfigs?.systemTitle })}
                 </Box>
 
@@ -429,7 +641,7 @@ const Standard = ({
                         isDisabled
                         variant={'whiteBase'}
                       >
-                        {t('common:free')}
+                        {t('price:free')}
                       </Button>
                     );
                   }
@@ -447,7 +659,7 @@ const Standard = ({
                           }
                         }}
                       >
-                        {t('common:contact_business')}
+                        {t('price:contact_business')}
                       </Button>
                     );
                   }
@@ -488,16 +700,15 @@ const Standard = ({
                           }
                         })}
                         onClick={() => {
-                          setPackageChange(PackageChangeStatusEnum.renewal);
-                          onPay({
-                            type: BillTypeEnum.standSubPlan,
+                          submitStandardPurchase({
+                            type: 'standard',
+                            packageChange: PackageChangeStatusEnum.renewal,
                             level: item.level as StandardSubLevelEnum,
-                            subMode: selectSubMode as SubModeEnum,
-                            discountCouponId: matchedCoupon?._id
+                            subMode: selectSubMode
                           });
                         }}
                       >
-                        {t('user:bill.renew_plan')}
+                        {t('price:bill.renew_plan')}
                       </Button>
                     );
                   }
@@ -511,16 +722,15 @@ const Standard = ({
                         variant={'primaryGhost'}
                         isLoading={isLoading}
                         onClick={() => {
-                          setPackageChange(PackageChangeStatusEnum.upgrade);
-                          onPay({
-                            type: BillTypeEnum.standSubPlan,
+                          submitStandardPurchase({
+                            type: 'standard',
+                            packageChange: PackageChangeStatusEnum.upgrade,
                             level: item.level as StandardSubLevelEnum,
-                            subMode: selectSubMode as SubModeEnum,
-                            discountCouponId: matchedCoupon?._id
+                            subMode: selectSubMode
                           });
                         }}
                       >
-                        {t('common:support.wallet.subscription.Upgrade plan')}
+                        {t('price:support.wallet.subscription.Upgrade plan')}
                       </Button>
                     );
                   }
@@ -538,7 +748,7 @@ const Standard = ({
                         _active={{}}
                         cursor={'not-allowed'}
                       >
-                        {t('user:bill.buy_plan')}
+                        {t('price:bill.buy_plan')}
                       </Button>
                     );
                   }
@@ -560,16 +770,15 @@ const Standard = ({
                           })}
                       isLoading={isLoading}
                       onClick={() => {
-                        setPackageChange(PackageChangeStatusEnum.buy);
-                        onPay({
-                          type: BillTypeEnum.standSubPlan,
+                        submitStandardPurchase({
+                          type: 'standard',
+                          packageChange: PackageChangeStatusEnum.buy,
                           level: item.level as StandardSubLevelEnum,
-                          subMode: selectSubMode as SubModeEnum,
-                          discountCouponId: matchedCoupon?._id
+                          subMode: selectSubMode
                         });
                       }}
                     >
-                      {t('user:bill.buy_plan')}
+                      {t('price:bill.buy_plan')}
                     </Button>
                   );
                 })()}
@@ -579,19 +788,19 @@ const Standard = ({
                   <Grid gap={4} fontSize={'sm'}>
                     <Flex alignItems={'center'}>
                       <MyIcon name={'price/right'} w={'16px'} mr={3} color={'primary.600'} />
-                      <Box color={'myGray.600'}>{t('common:custom_plan_feature_1')}</Box>
+                      <Box color={'myGray.600'}>{t('price:custom_plan_feature_1')}</Box>
                     </Flex>
                     <Flex alignItems={'center'}>
                       <MyIcon name={'price/right'} w={'16px'} mr={3} color={'primary.600'} />
-                      <Box color={'myGray.600'}>{t('common:custom_plan_feature_2')}</Box>
+                      <Box color={'myGray.600'}>{t('price:custom_plan_feature_2')}</Box>
                     </Flex>
                     <Flex alignItems={'center'}>
                       <MyIcon name={'price/right'} w={'16px'} mr={3} color={'primary.600'} />
-                      <Box color={'myGray.600'}>{t('common:custom_plan_feature_3')}</Box>
+                      <Box color={'myGray.600'}>{t('price:custom_plan_feature_3')}</Box>
                     </Flex>
                     <Flex alignItems={'center'}>
                       <MyIcon name={'price/right'} w={'16px'} mr={3} color={'primary.600'} />
-                      <Box color={'myGray.600'}>{t('common:custom_plan_feature_4')}</Box>
+                      <Box color={'myGray.600'}>{t('price:custom_plan_feature_4')}</Box>
                     </Flex>
                   </Grid>
                 ) : (
@@ -600,7 +809,7 @@ const Standard = ({
               </Box>
             );
           })}
-        </Grid>
+        </Flex>
 
         {!!qrPayData && packageChange && (
           <QRCodePayModal
@@ -620,56 +829,3 @@ const Standard = ({
 };
 
 export default React.memo(Standard);
-
-const RowTabs = ({
-  list,
-  value,
-  onChange
-}: {
-  list: {
-    icon?: string;
-    label: string | React.ReactNode;
-    value: string;
-  }[];
-  value: string;
-  onChange: (e: string) => void;
-}) => {
-  return (
-    <Box
-      display={'inline-flex'}
-      px={'3px'}
-      py={'3px'}
-      borderRadius={'md'}
-      borderWidth={'1px'}
-      borderColor={'primary.300'}
-      bg={'primary.50'}
-      gap={'4px'}
-    >
-      {list.map((item) => (
-        <Flex
-          key={item.value}
-          alignItems={'center'}
-          justifyContent={'center'}
-          cursor={'pointer'}
-          borderRadius={'sm'}
-          px={'12px'}
-          py={'7px'}
-          userSelect={'none'}
-          w={['150px', '190px']}
-          {...(value === item.value
-            ? {
-                color: 'white',
-                boxShadow: '1.5',
-                bg: 'primary.600'
-              }
-            : {
-                onClick: () => onChange(item.value)
-              })}
-        >
-          {item.icon && <MyIcon name={item.icon as any} mr={1} w={'14px'} />}
-          <Box fontWeight={'500'}>{item.label}</Box>
-        </Flex>
-      ))}
-    </Box>
-  );
-};

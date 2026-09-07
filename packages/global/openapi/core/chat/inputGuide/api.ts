@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import { PaginationSchema } from '../../../api';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
+import { ChatSourceTypeEnum } from '../../../../core/chat/constants';
 import { OutLinkChatAuthSchema } from '../../../../support/permission/chat';
 
 /* ============================================================================
  * API: 获取对话输入引导列表
  * Route: POST /api/core/chat/inputGuide/list
  * Method: POST
- * Description: 获取指定应用的对话输入引导列表，支持关键词搜索
+ * Description: 获取对话输入引导列表，支持关键词搜索
  * Tags: ['Chat', 'InputGuide', 'Read']
  * ============================================================================ */
 
@@ -36,7 +37,7 @@ export type ChatInputGuideListResponseType = z.infer<typeof ChatInputGuideListRe
  * API: 统计对话输入引导总数
  * Route: GET /api/core/chat/inputGuide/countTotal
  * Method: GET
- * Description: 获取指定应用的对话输入引导总数
+ * Description: 获取对话输入引导总数
  * Tags: ['Chat', 'InputGuide', 'Read']
  * ============================================================================ */
 
@@ -80,8 +81,8 @@ export type CreateChatInputGuideResponseType = z.infer<typeof CreateChatInputGui
 
 /* ============================================================================
  * API: 删除对话输入引导
- * Route: DELETE /api/core/chat/inputGuide/delete
- * Method: DELETE
+ * Route: POST /api/core/chat/inputGuide/delete
+ * Method: POST
  * Description: 批量删除指定的对话输入引导
  * Tags: ['Chat', 'InputGuide', 'Delete']
  * ============================================================================ */
@@ -98,14 +99,14 @@ export const DeleteChatInputGuideBodySchema = z.object({
 });
 export type DeleteChatInputGuideBodyType = z.infer<typeof DeleteChatInputGuideBodySchema>;
 
-export const DeleteChatInputGuideResponseSchema = z.object({});
+export const DeleteChatInputGuideResponseSchema = z.undefined().meta({ description: '删除成功' });
 export type DeleteChatInputGuideResponseType = z.infer<typeof DeleteChatInputGuideResponseSchema>;
 
 /* ============================================================================
- * API: 删除应用所有对话输入引导
- * Route: DELETE /api/core/chat/inputGuide/deleteAll
- * Method: DELETE
- * Description: 删除指定应用的所有对话输入引导
+ * API: 删除所有对话输入引导
+ * Route: POST /api/core/chat/inputGuide/deleteAll
+ * Method: POST
+ * Description: 删除所有对话输入引导
  * Tags: ['Chat', 'InputGuide', 'Delete']
  * ============================================================================ */
 
@@ -114,7 +115,9 @@ export const DeleteAllChatInputGuideBodySchema = z.object({
 });
 export type DeleteAllChatInputGuideBodyType = z.infer<typeof DeleteAllChatInputGuideBodySchema>;
 
-export const DeleteAllChatInputGuideResponseSchema = z.object({});
+export const DeleteAllChatInputGuideResponseSchema = z
+  .undefined()
+  .meta({ description: '删除成功' });
 export type DeleteAllChatInputGuideResponseType = z.infer<
   typeof DeleteAllChatInputGuideResponseSchema
 >;
@@ -123,15 +126,25 @@ export type DeleteAllChatInputGuideResponseType = z.infer<
  * API: 查询对话输入引导（公开接口）
  * Route: POST /api/core/chat/inputGuide/query
  * Method: POST
- * Description: 根据搜索词查询对话输入引导，支持分享链接和团队 Token 鉴权
+ * Description: 根据搜索词查询对话输入引导，支持应用和分享链接鉴权
  * Tags: ['Chat', 'InputGuide', 'Read']
  * ============================================================================ */
 
-export const QueryChatInputGuideBodySchema = OutLinkChatAuthSchema.extend({
-  appId: z.string().meta({ example: '68ad85a7463006c963799a05', description: '应用 ID' }),
+export const QueryChatInputGuideBodyRawSchema = z.object({
+  sourceType: z.enum(ChatSourceTypeEnum).meta({
+    example: ChatSourceTypeEnum.app,
+    description: '会话归属资源类型'
+  }),
+  sourceId: ObjectIdSchema.meta({
+    example: '68ad85a7463006c963799a05',
+    description: '会话归属资源 ID'
+  }),
+  outLinkAuthData: OutLinkChatAuthSchema.optional().describe('外链鉴权数据'),
   searchKey: z.string().meta({ example: '如何使用', description: '搜索关键词' })
 });
-export type QueryChatInputGuideBodyType = z.infer<typeof QueryChatInputGuideBodySchema>;
+export const QueryChatInputGuideBodySchema = QueryChatInputGuideBodyRawSchema;
+export type QueryChatInputGuideBodyType = z.infer<typeof QueryChatInputGuideBodyRawSchema>;
+export type QueryChatInputGuideRuntimeBodyType = z.infer<typeof QueryChatInputGuideBodySchema>;
 
 export const QueryChatInputGuideResponseSchema = z.array(
   z.string().meta({ example: '如何开始使用？', description: '引导文本' })
@@ -153,5 +166,5 @@ export const UpdateChatInputGuideBodySchema = z.object({
 });
 export type UpdateChatInputGuideBodyType = z.infer<typeof UpdateChatInputGuideBodySchema>;
 
-export const UpdateChatInputGuideResponseSchema = z.object({});
+export const UpdateChatInputGuideResponseSchema = z.undefined().meta({ description: '更新成功' });
 export type UpdateChatInputGuideResponseType = z.infer<typeof UpdateChatInputGuideResponseSchema>;

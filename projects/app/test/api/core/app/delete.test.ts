@@ -21,16 +21,42 @@ import { MongoResourcePermission } from '@fastgpt/service/support/permission/sch
 import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
 import { MongoAppLogKeys } from '@fastgpt/service/core/app/logs/logkeysSchema';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatSourceEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { MongoSystemTool } from '@fastgpt/service/core/plugin/tool/systemToolSchema';
 
 // Mock dependencies for queue functionality
-vi.mock('@fastgpt/service/common/bullmq', () => ({
-  getQueue: vi.fn(),
-  getWorker: vi.fn(),
-  QueueNames: {
-    appDelete: 'app-delete'
-  }
-}));
+vi.mock('@fastgpt/dal/redis/bullmq', () => {
+  const bullMQ = {
+    getQueue: vi.fn(),
+    getWorker: vi.fn()
+  };
+
+  return {
+    bullMQ,
+    appDeleteMQService: {
+      addJob: (data: AppDeleteJobData) =>
+        bullMQ
+          .getQueue('appDelete', {
+            defaultJobOptions: {
+              attempts: 10,
+              backoff: {
+                type: 'exponential',
+                delay: 5000
+              },
+              removeOnComplete: true,
+              removeOnFail: { age: 30 * 24 * 60 * 60 }
+            }
+          })
+          .add('delete_app', data, {
+            jobId: `${data.teamId}-${data.appId}`,
+            delay: 1000
+          })
+    },
+    QueueNames: {
+      appDelete: 'appDelete'
+    }
+  };
+});
 
 // Mock S3 and image removal functions
 vi.mock('@fastgpt/service/common/s3/sources/chat', () => ({
@@ -44,10 +70,9 @@ vi.mock('@fastgpt/service/common/file/image/controller', () => ({
 }));
 
 // Import mocked modules for type access
-import { getQueue, getWorker, QueueNames } from '@fastgpt/service/common/bullmq';
+import { bullMQ, QueueNames } from '@fastgpt/dal/redis/bullmq';
 
-const mockGetQueue = vi.mocked(getQueue);
-const mockGetWorker = vi.mocked(getWorker);
+const mockGetQueue = vi.mocked(bullMQ.getQueue);
 
 describe('App Delete Queue', () => {
   beforeEach(() => {
@@ -217,6 +242,45 @@ describe('App Delete API Integration', () => {
     });
   });
 
+  it('should immediately remove system tool association when deleting a workflow tool app', async () => {
+    const workflowToolApp = await MongoApp.create({
+      name: 'Workflow Tool App for API Delete',
+      teamId: rootUser.teamId,
+      tmbId: rootUser.tmbId,
+      type: AppTypeEnum.workflowTool,
+      modules: []
+    });
+    const pluginId = `commercial-api-delete-test-${Date.now()}`;
+
+    await MongoSystemTool.create({
+      pluginId,
+      customConfig: {
+        name: 'API Delete System Workflow Tool',
+        version: 'test-version',
+        associatedPluginId: String(workflowToolApp._id)
+      }
+    });
+
+    const mockQueue = {
+      add: vi.fn().mockResolvedValue({ id: 'job-workflow-tool' })
+    };
+    mockGetQueue.mockReturnValue(mockQueue as any);
+
+    const result = await Call(handler, {
+      auth: rootUser,
+      query: { appId: String(workflowToolApp._id) }
+    });
+
+    expect(result.code).toBe(200);
+
+    const systemTool = await MongoSystemTool.findOne({ pluginId }).lean();
+    expect(systemTool).not.toBeNull();
+    expect(systemTool?.customConfig?.associatedPluginId).toBeUndefined();
+
+    await MongoSystemTool.deleteOne({ pluginId });
+    await MongoApp.deleteOne({ _id: workflowToolApp._id });
+  });
+
   it('should handle non-existent app gracefully', async () => {
     const nonExistentId = '507f1f77bcf86cd799439011';
 
@@ -317,8 +381,11 @@ describe('App Delete Data Cleanup Verification', () => {
       // 为子应用创建相关数据
       await createAllRelatedTestData(String(childApp._id), teamId);
 
-      // 标记父应用为删除状态
-      await MongoApp.updateOne({ _id: parentApp._id }, { deleteTime: new Date() });
+      // 删除队列只清理已经由 API 事务标记的父子应用。
+      await MongoApp.updateMany(
+        { _id: { $in: [parentApp._id, childApp._id] } },
+        { deleteTime: new Date() }
+      );
 
       // 执行删除（应该级联删除子应用）
       const mockJob = {
@@ -340,6 +407,36 @@ describe('App Delete Data Cleanup Verification', () => {
         _id: { $in: [parentApp._id, childApp._id] },
         teamId
       });
+    });
+
+    it('should reject external cleanup when a nested app is not marked for deletion', async () => {
+      const parentApp = await MongoApp.create({
+        name: 'Safety Parent App',
+        teamId,
+        tmbId: rootUser.tmbId,
+        type: AppTypeEnum.simple,
+        modules: []
+      });
+      const childApp = await MongoApp.create({
+        name: 'Safety Child App',
+        teamId,
+        tmbId: rootUser.tmbId,
+        type: AppTypeEnum.simple,
+        parentId: parentApp._id,
+        modules: []
+      });
+      await MongoApp.updateOne({ _id: parentApp._id }, { deleteTime: new Date() });
+
+      await expect(
+        appDeleteProcessor({
+          data: { teamId, appId: String(parentApp._id) },
+          id: 'test-delete-safety-job'
+        })
+      ).rejects.toThrow('App delete safety check mismatch');
+
+      expect(await MongoApp.countDocuments({ _id: parentApp._id })).toBe(1);
+      expect(await MongoApp.countDocuments({ _id: childApp._id })).toBe(1);
+      await MongoApp.deleteMany({ _id: { $in: [parentApp._id, childApp._id] } });
     });
 
     it('should handle batch deletion of multiple apps', async () => {
@@ -377,6 +474,42 @@ describe('App Delete Data Cleanup Verification', () => {
       await cleanupTestData(app2Id, teamId);
       await MongoApp.deleteOne({ _id: app2Id });
     });
+
+    it('should remove system tool association when deleting a workflow tool app', async () => {
+      const workflowToolApp = await MongoApp.create({
+        name: 'Workflow Tool App',
+        teamId,
+        tmbId: rootUser.tmbId,
+        type: AppTypeEnum.workflowTool,
+        modules: []
+      });
+      const workflowToolAppId = String(workflowToolApp._id);
+      const pluginId = `commercial-delete-test-${Date.now()}`;
+
+      await MongoSystemTool.create({
+        pluginId,
+        customConfig: {
+          name: 'System Workflow Tool',
+          version: 'test-version',
+          associatedPluginId: workflowToolAppId
+        }
+      });
+
+      await MongoApp.updateOne({ _id: workflowToolAppId }, { deleteTime: new Date() });
+
+      await appDeleteProcessor({
+        data: { teamId, appId: workflowToolAppId },
+        id: 'test-workflow-tool-cleanup-job'
+      });
+
+      const systemTool = await MongoSystemTool.findOne({ pluginId }).lean();
+      expect(systemTool).not.toBeNull();
+      expect(systemTool?.customConfig?.associatedPluginId).toBeUndefined();
+      expect(systemTool?.customConfig?.name).toBe('System Workflow Tool');
+      expect(await MongoApp.countDocuments({ _id: workflowToolAppId })).toBe(0);
+
+      await MongoSystemTool.deleteOne({ pluginId });
+    });
   });
 
   // 辅助函数：创建所有相关测试数据
@@ -388,6 +521,7 @@ describe('App Delete Data Cleanup Verification', () => {
       appId: appId,
       teamId: teamId,
       tmbId: rootUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       chatId: `test-chat-${timestamp}`,
       title: 'Test Chat',
       source: ChatSourceEnum.test,
@@ -401,6 +535,7 @@ describe('App Delete Data Cleanup Verification', () => {
       appId: appId,
       teamId: teamId,
       tmbId: rootUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       chatId: `test-chat-${timestamp}`,
       time: timestamp,
       obj: 'Human',
@@ -414,6 +549,7 @@ describe('App Delete Data Cleanup Verification', () => {
       appId: appId,
       teamId: teamId,
       tmbId: rootUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       chatItemId: `test-chat-item-${timestamp}`,
       time: timestamp,
       text: 'This is a test response',
@@ -576,6 +712,7 @@ describe('App Delete Data Cleanup Verification', () => {
         { session }
       );
       await MongoAppLogKeys.deleteMany({ appId }, { session });
+      await MongoSystemTool.deleteMany({ 'customConfig.associatedPluginId': appId }, { session });
       await MongoChatSetting.deleteMany({ teamId }, { session });
     });
   }

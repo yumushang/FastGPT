@@ -14,6 +14,7 @@ import {
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { useTranslation } from 'next-i18next';
 import React, { useMemo } from 'react';
 import { getQuoteData } from '@/web/core/dataset/api/data';
@@ -22,20 +23,23 @@ import { getCollectionSourceData } from '@fastgpt/global/core/dataset/collection
 import Markdown from '.';
 import { getSourceNameIcon } from '@fastgpt/global/core/dataset/utils';
 import { isObjectId } from '@fastgpt/global/common/string/utils';
-import type { OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
+import type { ChatAuthTargetInput } from '@/web/core/chat/utils';
+
+type MarkdownChatAuthData = ChatAuthTargetInput & {
+  chatId: string;
+  chatItemDataId: string;
+};
 
 export type AProps = {
-  chatAuthData?: {
-    appId: string;
-    chatId: string;
-    chatItemDataId: string;
-  } & OutLinkChatAuthProps;
+  chatAuthData?: MarkdownChatAuthData;
+  allowedCitationIds?: Set<string>;
   onOpenCiteModal?: (e?: {
     collectionId?: string;
     sourceId?: string;
     sourceName?: string;
     datasetId?: string;
     quoteId?: string;
+    singleQuote?: boolean;
   }) => void;
 };
 
@@ -56,6 +60,18 @@ const EmptyHrefLink = function EmptyHrefLink({ content }: { content: string }) {
   );
 };
 
+const getLinkTextContent = (children: React.ReactNode): string => {
+  if (children === undefined || children === null || typeof children === 'boolean') return '';
+  if (typeof children === 'string' || typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(getLinkTextContent).join('');
+
+  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
+    return getLinkTextContent(children.props.children);
+  }
+
+  return '';
+};
+
 const CiteLink = React.memo(function CiteLink({
   id,
   chatAuthData,
@@ -63,13 +79,9 @@ const CiteLink = React.memo(function CiteLink({
   showAnimation
 }: { id: string; showAnimation?: boolean } & AProps) {
   const { t } = useTranslation();
+  const { isPc } = useSystem();
 
   const { isOpen, onOpen, onClose } = useDisclosure();
-
-  if (!isObjectId(id)) {
-    return <></>;
-  }
-
   const {
     data: datasetCiteData,
     loading,
@@ -85,6 +97,53 @@ const CiteLink = React.memo(function CiteLink({
     () => getSourceNameIcon({ sourceId: sourceData.sourceId, sourceName: sourceData.sourceName }),
     [sourceData]
   );
+
+  const handleOpenMobileQuote = () => {
+    onOpenCiteModal?.({
+      quoteId: id,
+      singleQuote: true
+    });
+  };
+
+  if (!isObjectId(id)) {
+    return <></>;
+  }
+
+  const citeButton = (
+    <Button
+      variant={'unstyled'}
+      display={'inline-flex'}
+      minH={0}
+      minW={0}
+      ml={'4px'}
+      boxSize={'20px'}
+      p={'4px'}
+      borderRadius={'full'}
+      bg={'myGray.150'}
+      alignItems={'center'}
+      justifyContent={'center'}
+      cursor={'pointer'}
+      aria-label={t('common:chat.quote_detail_title')}
+      onClick={!isPc ? handleOpenMobileQuote : undefined}
+      _hover={{
+        '.cite-link-icon': {
+          color: 'primary.600'
+        }
+      }}
+    >
+      <MyIcon
+        className="cite-link-icon"
+        name={'common/link'}
+        w={'12px'}
+        h={'12px'}
+        color={'myGray.400'}
+      />
+    </Button>
+  );
+
+  if (!isPc) {
+    return onOpenCiteModal ? citeButton : null;
+  }
 
   return (
     <Popover
@@ -102,16 +161,7 @@ const CiteLink = React.memo(function CiteLink({
       trigger={'hover'}
       gutter={4}
     >
-      <PopoverTrigger>
-        <Button variant={'unstyled'} minH={0} minW={0} h={'auto'}>
-          <MyIcon
-            name={'core/chat/quoteSign'}
-            w={'1rem'}
-            color={'primary.700'}
-            cursor={'pointer'}
-          />
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger>{citeButton}</PopoverTrigger>
       <PopoverContent boxShadow={'lg'} w={'500px'} maxW={'90vw'} py={4}>
         <MyBox isLoading={loading || showAnimation}>
           <PopoverArrow />
@@ -155,7 +205,7 @@ const CiteLink = React.memo(function CiteLink({
                   });
                 }}
               >
-                {t('common:all_quotes')}
+                {t('chat:view_all_citations')}
               </Button>
             </Flex>
             <Box h={'300px'} overflow={'auto'} px={4}>
@@ -172,6 +222,7 @@ const CiteLink = React.memo(function CiteLink({
 const A = ({
   children,
   chatAuthData,
+  allowedCitationIds,
   onOpenCiteModal,
   showAnimation,
   ...props
@@ -180,7 +231,7 @@ const A = ({
   showAnimation: boolean;
   [key: string]: any;
 }) => {
-  const content = useMemo(() => (children === undefined ? '' : String(children)), [children]);
+  const content = useMemo(() => getLinkTextContent(children), [children]);
 
   // empty href link
   if (!props.href && typeof children?.[0] === 'string') {
@@ -192,6 +243,10 @@ const A = ({
     (props.href?.startsWith('CITE') || props.href?.startsWith('QUOTE')) &&
     typeof content === 'string'
   ) {
+    if (allowedCitationIds && !allowedCitationIds.has(content)) {
+      return null;
+    }
+
     return (
       <CiteLink
         id={content}

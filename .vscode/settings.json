@@ -1,4 +1,8 @@
 {
+    "git.autofetch": false,
+    "git.detectSubmodules": true,
+    "git.autoRepositoryDetection": "subFolders",
+    "git.repositoryScanMaxDepth": 1,
     "editor.formatOnSave": true,
     "editor.mouseWheelZoom": true,
     "editor.defaultFormatter": "esbenp.prettier-vscode",
@@ -21,6 +25,7 @@
     "i18n-ally.localesPaths": [
         "packages/web/i18n",
     ],
+    "i18n-ally.ignoredLocales": ["ko"],
     "i18n-ally.enabledParsers": [
         "json",
         "yaml",
@@ -42,13 +47,21 @@
     "[typescriptreact]": {
         "editor.defaultFormatter": "esbenp.prettier-vscode"
     },
+    "yaml.format.enable": false,
+    "[yaml]": {
+      "editor.formatOnSave": false,
+    },
     "mdx.server.enable": true,
     "markdown.copyFiles.overwriteBehavior": "nameIncrementally",
     "markdown.copyFiles.destination": {
-        "/document/content/docs/**/*": "${documentWorkspaceFolder}/document/public/imgs/"
+        "/document/content/**/*": "${documentWorkspaceFolder}/document/public/imgs/"
     },
     "files.associations": {
         "*.mdx": "markdown"
     },
-    "js/ts.tsdk.path": "node_modules/typescript/lib"
+    "js/ts.tsdk.path": "node_modules/typescript/lib",
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "[json]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
 }

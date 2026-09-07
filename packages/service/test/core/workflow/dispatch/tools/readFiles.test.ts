@@ -3,17 +3,32 @@ import { ChatRoleEnum, ChatFileTypeEnum } from '@fastgpt/global/core/chat/consta
 import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
+import { runWithContext } from '@fastgpt/service/core/workflow/utils/context';
 
 const mockparseFileContentFromUrls = vi.hoisted(() => vi.fn());
 
-vi.mock('@fastgpt/service/core/workflow/utils/file', () => ({
+vi.mock('@fastgpt/service/core/chat/fileContext', () => ({
   parseFileContentFromUrls: mockparseFileContentFromUrls
 }));
 
 import {
-  dispatchReadFiles,
+  dispatchReadFiles as dispatchReadFilesWithoutContext,
   getHistoryFileLinks
 } from '@fastgpt/service/core/workflow/dispatch/tools/readFiles';
+
+const WORKFLOW_MAX_FILE_AMOUNT = 7;
+const dispatchReadFiles: typeof dispatchReadFilesWithoutContext = (props) =>
+  runWithContext(
+    {
+      mcpClientMemory: {},
+      fileContext: {
+        limits: { maxFileAmount: WORKFLOW_MAX_FILE_AMOUNT, maxBytesPerFile: 1024 },
+        resolve: () => undefined,
+        resolveChatFile: () => undefined
+      } as any
+    },
+    () => dispatchReadFilesWithoutContext(props)
+  );
 
 const baseProps = {
   requestOrigin: 'http://localhost:3000',
@@ -44,19 +59,24 @@ describe('dispatchReadFiles', () => {
 
     expect(mockparseFileContentFromUrls).toHaveBeenCalledWith({
       urls: ['/a.pdf', '/b.pdf'],
-      requestOrigin: 'http://localhost:3000',
-      maxFiles: 20,
+      maxFiles: WORKFLOW_MAX_FILE_AMOUNT,
       teamId: 'team-1',
       tmbId: 'tmb-1',
       customPdfParse: false,
-      usageId: 'usage-1'
+      usageId: 'usage-1',
+      fileContext: expect.objectContaining({
+        limits: expect.objectContaining({ maxFileAmount: WORKFLOW_MAX_FILE_AMOUNT })
+      })
     });
 
     const text = result.data?.[NodeOutputKeyEnum.text];
+    expect(text).toContain('## a.pdf');
     expect(text).toContain('Alpha');
+    expect(text).toContain('## b.pdf');
     expect(text).toContain('Beta');
-    expect(text).toContain('a.pdf');
-    expect(text).toContain('b.pdf');
+    expect(text).not.toContain('用户本次对话上传的文件');
+    expect(text).not.toContain('可通过 read_files');
+    expect(text).not.toContain('<file>');
 
     expect(result.data?.[NodeOutputKeyEnum.rawResponse]).toEqual([
       { filename: 'a.pdf', url: '/a.pdf', text: 'Alpha' },
@@ -73,12 +93,42 @@ describe('dispatchReadFiles', () => {
     expect(nodeResponse.readFilesResult).toContain('## b.pdf');
     expect(nodeResponse.readFilesResult).toContain('Beta');
 
-    expect(result[DispatchNodeResponseKeyEnum.toolResponses]).toEqual({
-      fileContent: text
-    });
+    expect(result[DispatchNodeResponseKeyEnum.toolResponse]).toBe(text);
   });
 
-  it('chatConfig 提供 maxFiles 和 customPdfParse 时按其值传入', async () => {
+  it('单文件失败时 rawResponse 返回 error，组合文本仍包含错误内容', async () => {
+    mockparseFileContentFromUrls.mockResolvedValue([
+      { success: true, name: 'a.pdf', url: '/a.pdf', content: 'Alpha' },
+      {
+        success: false,
+        name: 'b.pdf',
+        url: '/b.pdf',
+        content: 'File exceeds maximum allowed size'
+      }
+    ]);
+
+    const result = await dispatchReadFiles({
+      ...baseProps,
+      params: { fileUrlList: ['/a.pdf', '/b.pdf'] }
+    });
+
+    expect(result.data?.[NodeOutputKeyEnum.rawResponse]).toEqual([
+      { filename: 'a.pdf', url: '/a.pdf', text: 'Alpha' },
+      {
+        filename: 'b.pdf',
+        url: '/b.pdf',
+        text: '',
+        error: 'File exceeds maximum allowed size'
+      }
+    ]);
+
+    const text = result.data?.[NodeOutputKeyEnum.text];
+    expect(text).toContain('## a.pdf\nAlpha');
+    expect(text).toContain('## b.pdf\nFile exceeds maximum allowed size');
+    expect(result[DispatchNodeResponseKeyEnum.toolResponse]).toBe(text);
+  });
+
+  it('忽略 query maxFiles，并保留 customPdfParse 配置', async () => {
     await dispatchReadFiles({
       ...baseProps,
       chatConfig: {
@@ -92,13 +142,13 @@ describe('dispatchReadFiles', () => {
 
     expect(mockparseFileContentFromUrls).toHaveBeenCalledWith(
       expect.objectContaining({
-        maxFiles: 5,
+        maxFiles: WORKFLOW_MAX_FILE_AMOUNT,
         customPdfParse: true
       })
     );
   });
 
-  it('chatConfig 缺失时 maxFiles 兜底为 20，customPdfParse 兜底为 false', async () => {
+  it('chatConfig 缺失时使用 Context limit，customPdfParse 兜底为 false', async () => {
     await dispatchReadFiles({
       ...baseProps,
       chatConfig: undefined,
@@ -106,11 +156,11 @@ describe('dispatchReadFiles', () => {
     });
 
     expect(mockparseFileContentFromUrls).toHaveBeenCalledWith(
-      expect.objectContaining({ maxFiles: 20, customPdfParse: false })
+      expect.objectContaining({ maxFiles: WORKFLOW_MAX_FILE_AMOUNT, customPdfParse: false })
     );
   });
 
-  it('fileSelectConfig.maxFiles 为 0/undefined 时仍兜底为 20', async () => {
+  it('fileSelectConfig.maxFiles 不影响 Context limit', async () => {
     await dispatchReadFiles({
       ...baseProps,
       chatConfig: { fileSelectConfig: { maxFiles: 0 } },
@@ -118,7 +168,7 @@ describe('dispatchReadFiles', () => {
     });
 
     expect(mockparseFileContentFromUrls).toHaveBeenCalledWith(
-      expect.objectContaining({ maxFiles: 20 })
+      expect.objectContaining({ maxFiles: WORKFLOW_MAX_FILE_AMOUNT })
     );
   });
 
@@ -206,7 +256,7 @@ describe('dispatchReadFiles', () => {
     const nodeResponse = result[DispatchNodeResponseKeyEnum.nodeResponse] as any;
     expect(nodeResponse.readFiles).toEqual([]);
     expect(nodeResponse.readFilesResult).toBe('');
-    expect(result[DispatchNodeResponseKeyEnum.toolResponses]).toEqual({ fileContent: '' });
+    expect(result[DispatchNodeResponseKeyEnum.toolResponse]).toBe('');
   });
 
   it('超大内容下预览仍按 sliceStrStartEnd 截断 (start/end 各 1000)', async () => {
@@ -238,7 +288,7 @@ describe('dispatchReadFiles', () => {
 
     expect((result as any).error?.[NodeOutputKeyEnum.errorText]).toBe('boom');
     expect((result[DispatchNodeResponseKeyEnum.nodeResponse] as any).errorText).toBe('boom');
-    expect((result[DispatchNodeResponseKeyEnum.toolResponses] as any).error).toBe('boom');
+    expect((result[DispatchNodeResponseKeyEnum.toolResponse] as any).error).toBe('boom');
   });
 });
 

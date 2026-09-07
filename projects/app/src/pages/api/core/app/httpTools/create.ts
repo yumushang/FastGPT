@@ -1,7 +1,7 @@
 import { authUserPer } from '@fastgpt/service/support/permission/user/auth';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
 
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { onCreateApp } from '../create';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
@@ -10,19 +10,27 @@ import { authApp } from '@fastgpt/service/support/permission/app/auth';
 import { TeamAppCreatePermissionVal } from '@fastgpt/global/support/permission/user/constant';
 import { checkTeamAppTypeLimit } from '@fastgpt/service/support/permission/teamLimit';
 import { getHTTPToolSetRuntimeNode } from '@fastgpt/global/core/app/tool/httpTool/utils';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   CreateHttpToolsBodySchema,
-  CreateHttpToolsResponseSchema,
-  type CreateHttpToolsBodyType,
-  type CreateHttpToolsResponseType
+  type CreateHttpToolsBodyType
 } from '@fastgpt/global/openapi/core/app/httpTools/api';
+import {
+  CreateAppResponseSchema,
+  type CreateAppResponseType
+} from '@fastgpt/global/openapi/core/app/common/api';
 import { HttpToolTypeEnum } from '@fastgpt/global/core/app/tool/httpTool/constants';
+import { encodeHttpToolSetNodesForStorage } from '@fastgpt/service/core/app/jsonSchemaStorage';
 
 async function handler(
-  req: ApiRequestProps<CreateHttpToolsBodyType>,
-  res: ApiResponseType
-): Promise<CreateHttpToolsResponseType> {
-  const { name, avatar, intro, parentId, createType } = CreateHttpToolsBodySchema.parse(req.body);
+  req: ApiRequestProps<CreateHttpToolsBodyType>
+): Promise<CreateAppResponseType> {
+  const {
+    body: { name, avatar, intro, parentId, createType }
+  } = parseApiInput({
+    req,
+    bodySchema: CreateHttpToolsBodySchema
+  });
 
   const { teamId, tmbId, userId } = parentId
     ? await authApp({ req, appId: parentId, per: TeamAppCreatePermissionVal, authToken: true })
@@ -31,27 +39,27 @@ async function handler(
   await checkTeamAppTypeLimit({ teamId, appCheckType: 'tool' });
 
   const httpToolsetId = await mongoSessionRun(async (session) => {
+    const toolSetRuntimeNode = getHTTPToolSetRuntimeNode({
+      name,
+      avatar: avatar ?? undefined,
+      toolList: [],
+      ...(createType === HttpToolTypeEnum.batch && {
+        baseUrl: '',
+        apiSchemaStr: '',
+        customHeaders: '{}',
+        headerSecret: {}
+      })
+    });
     const httpToolsetId = await onCreateApp({
       parentId,
       name,
-      avatar,
-      intro,
+      avatar: avatar ?? undefined,
+      intro: intro ?? undefined,
       teamId,
       tmbId,
       type: AppTypeEnum.httpToolSet,
-      modules: [
-        getHTTPToolSetRuntimeNode({
-          name,
-          avatar,
-          toolList: [],
-          ...(createType === HttpToolTypeEnum.batch && {
-            baseUrl: '',
-            apiSchemaStr: '',
-            customHeaders: '{}',
-            headerSecret: {}
-          })
-        })
-      ],
+      modules: [toolSetRuntimeNode],
+      storageModules: encodeHttpToolSetNodesForStorage([toolSetRuntimeNode]),
       session
     });
 
@@ -66,7 +74,7 @@ async function handler(
     tmbId
   });
 
-  return CreateHttpToolsResponseSchema.parse(httpToolsetId);
+  return CreateAppResponseSchema.parse(httpToolsetId);
 }
 
 export default NextAPI(handler);

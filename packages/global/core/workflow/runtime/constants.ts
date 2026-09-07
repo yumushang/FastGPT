@@ -3,6 +3,7 @@ import { FlowNodeInputTypeEnum } from '../node/constant';
 export enum SseResponseEventEnum {
   error = 'error',
   workflowDuration = 'workflowDuration', // workflow duration
+  chatTitle = 'chatTitle', // generated chat title
   answer = 'answer', // animation stream
   fastAnswer = 'fastAnswer', // direct answer text, not animation
   flowNodeStatus = 'flowNodeStatus', // update node status
@@ -23,11 +24,7 @@ export enum SseResponseEventEnum {
 
   // Sandbox lifecycle
   sandboxStatus = 'sandboxStatus', // sandbox lifecycle phase notification
-  skillCall = 'skillCall', // skill invocation announce (when SKILL.md is loaded)
-
-  // Helperbot
-  collectionForm = 'collectionForm', // collection form for HelperBot
-  topAgentConfig = 'topAgentConfig' // form data for TopAgent
+  skillCall = 'skillCall' // skill invocation announce (when SKILL.md is loaded)
 }
 
 export const StreamResumePhaseEvent = 'resumePhase';
@@ -52,7 +49,7 @@ export enum DispatchNodeResponseKeyEnum {
   nodeResponse = 'responseData', // run node response
   nodeResponses = 'nodeResponses', // node responses
   childrenResponses = 'childrenResponses', // Some nodes make recursive calls that need to be returned
-  toolResponses = 'toolResponses', // The result is passed back to the tool node for use
+  toolResponse = 'toolResponse', // The result is passed back to the tool node for use
   assistantResponses = 'assistantResponses', // assistant response
   rewriteHistories = 'rewriteHistories', // If have the response, workflow histories will be rewrite
   interactive = 'INTERACTIVE', // is interactive

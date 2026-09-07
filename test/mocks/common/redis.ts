@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { configureRedisRuntime as configureTestRedisRuntime } from '@fastgpt/dal/redis/runtime';
 
 // In-memory storage for mock Redis
 const createRedisStorage = () => {
@@ -21,7 +22,28 @@ const createRedisStorage = () => {
       if (isExpired(key)) return null;
       return storage.get(key) ?? null;
     },
-    set: (key: string, value: any, exMode?: string, exValue?: number) => {
+    set: (key: string, value: any, ...args: any[]) => {
+      let exMode: string | undefined;
+      let exValue: number | undefined;
+      let nx = false;
+
+      for (let i = 0; i < args.length; i++) {
+        const arg = String(args[i]).toUpperCase();
+        if (arg === 'NX') {
+          nx = true;
+          continue;
+        }
+        if ((arg === 'EX' || arg === 'PX') && args[i + 1] !== undefined) {
+          exMode = arg;
+          exValue = Number(args[i + 1]);
+          i++;
+        }
+      }
+
+      if (nx && !isExpired(key) && storage.has(key)) {
+        return null;
+      }
+
       storage.set(key, value);
       // Handle EX (seconds) and PX (milliseconds) options
       if (exMode === 'EX' && typeof exValue === 'number') {
@@ -49,99 +71,69 @@ const createRedisStorage = () => {
       });
       return count;
     },
+    expire: (key: string, seconds: number, mode?: string) => {
+      if (isExpired(key) || !storage.has(key)) return 0;
+      if (String(mode ?? '').toUpperCase() === 'NX' && expiryMap.has(key)) return 0;
+      expiryMap.set(key, Date.now() + seconds * 1000);
+      return 1;
+    },
+    ttl: (key: string) => {
+      if (isExpired(key) || !storage.has(key)) return -2;
+      const expiry = expiryMap.get(key);
+      if (!expiry) return -1;
+      return Math.max(0, Math.ceil((expiry - Date.now()) / 1000));
+    },
+    incr: (key: string) => {
+      if (isExpired(key)) storage.delete(key);
+      const current = Number(storage.get(key) ?? 0);
+      const next = current + 1;
+      storage.set(key, next);
+      return next;
+    },
+    incrbyfloat: (key: string, increment: number) => {
+      if (isExpired(key)) storage.delete(key);
+      const current = Number(storage.get(key) ?? 0);
+      const next = current + Number(increment);
+      storage.set(key, next);
+      return String(next);
+    },
+    incrby: (key: string, increment: number) => {
+      if (isExpired(key)) storage.delete(key);
+      const current = Number(storage.get(key) ?? 0);
+      const next = current + increment;
+      storage.set(key, next);
+      return next;
+    },
+    pexpire: (key: string, milliseconds: number) => {
+      if (isExpired(key) || !storage.has(key)) return 0;
+      expiryMap.set(key, Date.now() + milliseconds);
+      return 1;
+    },
     clear: () => {
       storage.clear();
       expiryMap.clear();
+    },
+    eval: (_script: string, numberOfKeys: number, ...args: any[]) => {
+      const keys = args.slice(0, numberOfKeys);
+      const argv = args.slice(numberOfKeys);
+      const key = keys[0];
+      const expectedValue = argv[0];
+
+      if (isExpired(key) || storage.get(key) !== expectedValue) {
+        return 0;
+      }
+
+      const ttl = argv[1];
+      const ttlMilliseconds = Number(ttl);
+      if (ttl !== undefined && Number.isFinite(ttlMilliseconds)) {
+        expiryMap.set(key, Date.now() + ttlMilliseconds);
+        return 1;
+      }
+
+      storage.delete(key);
+      expiryMap.delete(key);
+      return 1;
     }
-  };
-};
-
-// Create a comprehensive mock Redis client factory
-const createMockRedisClient = () => {
-  const redisStorage = createRedisStorage();
-
-  return {
-    // Connection methods
-    on: vi.fn().mockReturnThis(),
-    connect: vi.fn().mockResolvedValue(undefined),
-    disconnect: vi.fn().mockResolvedValue(undefined),
-    quit: vi.fn().mockResolvedValue('OK'),
-    duplicate: vi.fn(function (this: any) {
-      return createMockRedisClient();
-    }),
-
-    // Key-value operations with actual storage
-    get: vi.fn().mockImplementation((key: string) => Promise.resolve(redisStorage.get(key))),
-    set: vi
-      .fn()
-      .mockImplementation((key: string, value: any, exMode?: string, exValue?: number) =>
-        Promise.resolve(redisStorage.set(key, value, exMode, exValue))
-      ),
-    del: vi
-      .fn()
-      .mockImplementation((...keys: string[]) => Promise.resolve(redisStorage.del(...keys))),
-    exists: vi
-      .fn()
-      .mockImplementation((...keys: string[]) => Promise.resolve(redisStorage.exists(...keys))),
-    keys: vi.fn().mockResolvedValue([]),
-    scan: vi.fn().mockImplementation((cursor) => {
-      // 模拟多次迭代的场景
-      if (cursor === '0') return ['100', ['key1', 'key2']];
-      if (cursor === '100') return ['0', ['key3']];
-      return ['0', []];
-    }),
-
-    // Hash operations
-    hget: vi.fn().mockResolvedValue(null),
-    hset: vi.fn().mockResolvedValue(1),
-    hdel: vi.fn().mockResolvedValue(1),
-    hgetall: vi.fn().mockResolvedValue({}),
-    hmset: vi.fn().mockResolvedValue('OK'),
-
-    // Expiry operations
-    expire: vi.fn().mockResolvedValue(1),
-    ttl: vi.fn().mockResolvedValue(-1),
-    expireat: vi.fn().mockResolvedValue(1),
-
-    // Increment operations
-    incr: vi.fn().mockResolvedValue(1),
-    decr: vi.fn().mockResolvedValue(1),
-    incrby: vi.fn().mockResolvedValue(1),
-    decrby: vi.fn().mockResolvedValue(1),
-    incrbyfloat: vi.fn().mockResolvedValue(1),
-
-    // Server commands
-    info: vi.fn().mockResolvedValue(''),
-    ping: vi.fn().mockResolvedValue('PONG'),
-    flushdb: vi.fn().mockResolvedValue('OK'),
-
-    // List operations
-    lpush: vi.fn().mockResolvedValue(1),
-    rpush: vi.fn().mockResolvedValue(1),
-    lpop: vi.fn().mockResolvedValue(null),
-    rpop: vi.fn().mockResolvedValue(null),
-    llen: vi.fn().mockResolvedValue(0),
-
-    // Set operations
-    sadd: vi.fn().mockResolvedValue(1),
-    srem: vi.fn().mockResolvedValue(1),
-    smembers: vi.fn().mockResolvedValue([]),
-    sismember: vi.fn().mockResolvedValue(0),
-
-    // pipeline
-    pipeline: vi.fn(() => ({
-      del: vi.fn().mockReturnThis(),
-      unlink: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([])
-    })),
-    multi: vi.fn(() => ({
-      incr: vi.fn().mockReturnThis(),
-      expire: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([[null, 1]])
-    })),
-
-    // Internal storage for testing purposes
-    _storage: redisStorage
   };
 };
 
@@ -164,8 +156,8 @@ const createSharedMockRedisClient = () => {
     get: vi.fn().mockImplementation((key: string) => Promise.resolve(globalRedisStorage.get(key))),
     set: vi
       .fn()
-      .mockImplementation((key: string, value: any, exMode?: string, exValue?: number) =>
-        Promise.resolve(globalRedisStorage.set(key, value, exMode, exValue))
+      .mockImplementation((key: string, value: any, ...args: any[]) =>
+        Promise.resolve(globalRedisStorage.set(key, value, ...args))
       ),
     del: vi
       .fn()
@@ -175,12 +167,13 @@ const createSharedMockRedisClient = () => {
       .mockImplementation((...keys: string[]) =>
         Promise.resolve(globalRedisStorage.exists(...keys))
       ),
+    pexpire: vi
+      .fn()
+      .mockImplementation((key: string, milliseconds: number) =>
+        Promise.resolve(globalRedisStorage.pexpire(key, milliseconds))
+      ),
     keys: vi.fn().mockResolvedValue([]),
-    scan: vi.fn().mockImplementation((cursor) => {
-      if (cursor === '0') return ['100', ['key1', 'key2']];
-      if (cursor === '100') return ['0', ['key3']];
-      return ['0', []];
-    }),
+    scan: vi.fn().mockResolvedValue(['0', []]),
 
     // Hash operations
     hget: vi.fn().mockResolvedValue(null),
@@ -190,14 +183,24 @@ const createSharedMockRedisClient = () => {
     hmset: vi.fn().mockResolvedValue('OK'),
 
     // Expiry operations
-    expire: vi.fn().mockResolvedValue(1),
-    ttl: vi.fn().mockResolvedValue(-1),
+    expire: vi
+      .fn()
+      .mockImplementation((key: string, seconds: number, mode?: string) =>
+        Promise.resolve(globalRedisStorage.expire(key, seconds, mode))
+      ),
+    ttl: vi.fn().mockImplementation((key: string) => Promise.resolve(globalRedisStorage.ttl(key))),
     expireat: vi.fn().mockResolvedValue(1),
 
     // Increment operations
-    incr: vi.fn().mockResolvedValue(1),
+    incr: vi
+      .fn()
+      .mockImplementation((key: string) => Promise.resolve(globalRedisStorage.incr(key))),
     decr: vi.fn().mockResolvedValue(1),
-    incrby: vi.fn().mockResolvedValue(1),
+    incrby: vi
+      .fn()
+      .mockImplementation((key: string, increment: number) =>
+        Promise.resolve(globalRedisStorage.incrby(key, increment))
+      ),
     decrby: vi.fn().mockResolvedValue(1),
     incrbyfloat: vi.fn().mockResolvedValue(1),
 
@@ -208,6 +211,11 @@ const createSharedMockRedisClient = () => {
       globalRedisStorage.clear();
       return Promise.resolve('OK');
     }),
+    eval: vi
+      .fn()
+      .mockImplementation((script: string, numberOfKeys: number, ...args: any[]) =>
+        Promise.resolve(globalRedisStorage.eval(script, numberOfKeys, ...args))
+      ),
 
     // List operations
     lpush: vi.fn().mockResolvedValue(1),
@@ -228,37 +236,62 @@ const createSharedMockRedisClient = () => {
       unlink: vi.fn().mockReturnThis(),
       exec: vi.fn().mockResolvedValue([])
     })),
-    multi: vi.fn(() => ({
-      incr: vi.fn().mockReturnThis(),
-      expire: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([[null, 1]])
-    })),
+    multi: vi.fn(() => {
+      const commands: Array<() => [null, unknown]> = [];
+      const pipeline = {
+        get: vi.fn((key: string) => {
+          commands.push(() => [null, globalRedisStorage.get(key)]);
+          return pipeline;
+        }),
+        hmset: vi.fn((_key: string, _fields: Record<string, string>) => {
+          commands.push(() => [null, globalRedisStorage.set(_key, _fields)]);
+          return pipeline;
+        }),
+        set: vi.fn((key: string, value: any, ...args: any[]) => {
+          commands.push(() => [null, globalRedisStorage.set(key, value, ...args)]);
+          return pipeline;
+        }),
+        incr: vi.fn((key: string) => {
+          commands.push(() => [null, globalRedisStorage.incr(key)]);
+          return pipeline;
+        }),
+        incrbyfloat: vi.fn((key: string, increment: number) => {
+          commands.push(() => [null, globalRedisStorage.incrbyfloat(key, increment)]);
+          return pipeline;
+        }),
+        incrby: vi.fn((key: string, increment: number) => {
+          commands.push(() => [null, globalRedisStorage.incrby(key, increment)]);
+          return pipeline;
+        }),
+        expire: vi.fn((key: string, seconds: number, mode?: string) => {
+          commands.push(() => [null, globalRedisStorage.expire(key, seconds, mode)]);
+          return pipeline;
+        }),
+        ttl: vi.fn((key: string) => {
+          commands.push(() => [null, globalRedisStorage.ttl(key)]);
+          return pipeline;
+        }),
+        exec: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve(commands.map((command) => command())))
+      };
+      return pipeline;
+    }),
 
     // Internal storage for testing purposes
     _storage: globalRedisStorage
   };
 };
 
-// Mock Redis connections to prevent connection errors in tests
-vi.mock('@fastgpt/service/common/redis', async (importOriginal) => {
-  const actual = (await importOriginal()) as any;
+const sharedRedisClient = createSharedMockRedisClient();
 
-  return {
-    ...actual,
-    newQueueRedisConnection: vi.fn(createSharedMockRedisClient),
-    newWorkerRedisConnection: vi.fn(createSharedMockRedisClient),
-    getGlobalRedisConnection: vi.fn(() => {
-      if (!global.mockRedisClient) {
-        global.mockRedisClient = createSharedMockRedisClient();
-      }
-      return global.mockRedisClient;
-    }),
-    initRedisClient: vi.fn().mockResolvedValue(createSharedMockRedisClient())
-  };
+// 通过公开配置入口让预加载的 service adapter 也使用内存 Redis，不依赖模块 mock 顺序。
+configureTestRedisRuntime({
+  redisUrl: 'redis://default:mypassword@localhost:6379',
+  clientFactory: (options) => {
+    const client = sharedRedisClient as any;
+    // Runtime 的 blocking/worker 角色必须拥有独立连接，测试中按 ioredis 的
+    // maxRetriesPerRequest=null 选项模拟 duplicate 生命周期，避免 XREAD 与 command 共用 mock。
+    return options.maxRetriesPerRequest === null ? (client.duplicate?.() ?? client) : client;
+  }
 });
-
-// Initialize global.redisClient with mock before any module imports it
-// This prevents getGlobalRedisConnection() from creating a real Redis client
-if (!global.redisClient) {
-  global.redisClient = createSharedMockRedisClient() as any;
-}

@@ -10,7 +10,6 @@ import { dispatchChatCompletion } from './ai/chat';
 import { dispatchCodeSandbox } from './tools/codeSandbox';
 import { dispatchDatasetConcat } from './dataset/concat';
 import { dispatchDatasetSearch } from './dataset/search';
-import { dispatchSystemConfig } from './init/systemConfig';
 import { dispatchWorkflowStart } from './init/workflowStart';
 import { dispatchFormInput } from './interactive/formInput';
 import { dispatchUserSelect } from './interactive/userSelect';
@@ -28,15 +27,18 @@ import { dispatchRunTool } from './child/runTool';
 import { dispatchAnswer } from './tools/answer';
 import { dispatchCustomFeedback } from './tools/customFeedback';
 import { dispatchHttp468Request } from './tools/http468';
-import { dispatchQueryExtension } from './tools/queryExternsion';
+import { dispatchQueryExtension } from './abandoned/queryExternsion';
 import { dispatchReadFiles } from './tools/readFiles';
 import { dispatchIfElse } from './tools/runIfElse';
-import { dispatchLafRequest } from './tools/runLaf';
 import { dispatchUpdateVariable } from './tools/runUpdateVar';
 import { dispatchTextEditor } from './tools/textEditor';
 import { dispatchRunAgent } from './ai/agent';
+import { dispatchInternalRuntimeNode, internalRuntimeNodeType } from './internal/runtimeNode';
 
-export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
+export const callbackMap: Record<
+  FlowNodeTypeEnum | typeof internalRuntimeNodeType,
+  (...args: any[]) => unknown
+> = {
   [FlowNodeTypeEnum.workflowStart]: dispatchWorkflowStart,
 
   // Child
@@ -51,7 +53,6 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   [FlowNodeTypeEnum.datasetSearchNode]: dispatchDatasetSearch,
   [FlowNodeTypeEnum.classifyQuestion]: dispatchClassifyQuestion,
   [FlowNodeTypeEnum.contentExtract]: dispatchContentExtract,
-  [FlowNodeTypeEnum.queryExtension]: dispatchQueryExtension,
   // Tool call
   [FlowNodeTypeEnum.toolCall]: dispatchRunTools,
   [FlowNodeTypeEnum.stopTool]: dispatchStopToolCall,
@@ -60,7 +61,6 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   [FlowNodeTypeEnum.answerNode]: dispatchAnswer,
   [FlowNodeTypeEnum.datasetConcatNode]: dispatchDatasetConcat,
   [FlowNodeTypeEnum.httpRequest468]: dispatchHttp468Request,
-  [FlowNodeTypeEnum.lafModule]: dispatchLafRequest,
   [FlowNodeTypeEnum.ifElseNode]: dispatchIfElse,
   [FlowNodeTypeEnum.variableUpdate]: dispatchUpdateVariable,
   [FlowNodeTypeEnum.code]: dispatchCodeSandbox,
@@ -76,10 +76,9 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   [FlowNodeTypeEnum.nestedEnd]: dispatchLoopEnd,
   [FlowNodeTypeEnum.formInput]: dispatchFormInput,
   [FlowNodeTypeEnum.tool]: dispatchRunTool,
+  [internalRuntimeNodeType]: dispatchInternalRuntimeNode,
 
   // none
-  [FlowNodeTypeEnum.systemConfig]: dispatchSystemConfig,
-  [FlowNodeTypeEnum.pluginConfig]: () => Promise.resolve(),
   [FlowNodeTypeEnum.emptyNode]: () => Promise.resolve(),
   [FlowNodeTypeEnum.globalVariable]: () => Promise.resolve(),
   [FlowNodeTypeEnum.comment]: () => Promise.resolve(),
@@ -88,5 +87,7 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   /** @deprecated */
   [FlowNodeTypeEnum.runApp]: dispatchAppRequest,
   /** @deprecated 已被 loopRun 替代 */
-  [FlowNodeTypeEnum.loop]: dispatchLoop
+  [FlowNodeTypeEnum.loop]: dispatchLoop,
+  /** @deprecated 已弃用，保留旧工作流运行兼容 */
+  [FlowNodeTypeEnum.queryExtension]: dispatchQueryExtension
 };

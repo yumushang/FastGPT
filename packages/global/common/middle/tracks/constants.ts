@@ -11,12 +11,20 @@ export enum TrackEnum {
   clickOperationalAd = 'clickOperationalAd',
   closeOperationalAd = 'closeOperationalAd',
   teamChatQPM = 'teamChatQPM',
+  enterpriseAuthStart = 'enterpriseAuthStart',
+  enterpriseAuthBenefitGrant = 'enterpriseAuthBenefitGrant',
+  accountCancellationSubmitSuccess = 'account_cancellation_submit_success',
+  accountCancellationCancelSuccess = 'account_cancellation_cancel_success',
+  accountCancellationFinalizeSuccess = 'account_cancellation_finalize_success',
 
   // Admin cron job tracks
   subscriptionDeleted = 'subscriptionDeleted',
   freeAccountCleanup = 'freeAccountCleanup',
   auditLogCleanup = 'auditLogCleanup',
   chatHistoryCleanup = 'chatHistoryCleanup',
+  /** @deprecated Legacy Sandbox archive event. Use userSandboxMigration instead. */
+  sandboxArchive = 'sandboxArchive',
+  userSandboxMigration = 'userSandboxMigration',
 
   // web tracks
   clientError = 'clientError',

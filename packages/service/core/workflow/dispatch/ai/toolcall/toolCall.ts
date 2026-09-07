@@ -2,45 +2,41 @@ import type {
   ChatCompletionMessageParam,
   CompletionFinishReason
 } from '@fastgpt/global/core/ai/llm/type';
-import type { ChildResponseItemType, DispatchToolModuleProps } from './type';
-import { GPTMessages2Chats } from '@fastgpt/global/core/chat/adapt';
+import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/constants';
+import type { DispatchToolModuleProps } from './type';
 import type { AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
-import { runAgentLoop } from '../../../../ai/llm/agentLoop';
+import { normalizeAgentLoopUsages } from '../../../../ai/llm/agentLoop/interface';
 import type {
-  ToolCallChildrenInteractive,
+  InteractiveNodeResponseType,
   WorkflowInteractiveResponseType
 } from '@fastgpt/global/core/workflow/template/system/interactive/type';
-import { useToolNodeResponse } from './hooks/useToolNodeResponse';
-import { useToolCatalog } from './hooks/useToolCatalog';
-import { useToolStreamResponse } from './hooks/useToolStreamResponse';
-import { useToolRunner } from './hooks/useToolRunner';
+import type { ToolInfo } from './hooks/useToolCatalog';
+import {
+  createAgentLoopCoreRuntimeEnvironment,
+  createAgentLoopCoreRuntimeWithEnvironment,
+  buildAgentLoopCoreInput,
+  runAgentLoopCoreWithSummary,
+  type AgentLoopCoreToolRunFlowResponse
+} from '../agentLoopCore/interface';
+import { createToolCallToolProvider } from './toolProvider';
 
 type ResponseType = {
   requestIds: string[];
   error?: string;
-  toolDispatchFlowResponses: ChildResponseItemType[];
+  toolDispatchFlowResponses: AgentLoopCoreToolRunFlowResponse[];
   toolCallInputTokens: number;
   toolCallOutputTokens: number;
   toolCallTotalPoints: number; // 每次 LLM 调用单独计价后的累计价格（用于梯度计费）
   completeMessages: ChatCompletionMessageParam[];
   assistantResponses: AIChatItemValueItemType[];
   finish_reason: CompletionFinishReason;
-  toolWorkflowInteractiveResponse?: ToolCallChildrenInteractive;
+  toolWorkflowInteractiveResponse?: InteractiveNodeResponseType;
 };
 
 export const runToolCall = async (props: DispatchToolModuleProps): Promise<ResponseType> => {
-  const {
-    messages,
-    toolNodes,
-    toolModel,
-    childrenInteractiveParams,
-    allFiles,
-    currentInputFiles,
-    ...workflowProps
-  } = props;
+  const { messages, toolNodes, toolModel, childrenInteractiveParams, ...workflowProps } = props;
   const {
     checkIsStopping,
-    requestOrigin,
     runtimeNodes,
     runtimeEdges,
     stream,
@@ -52,6 +48,9 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       temperature,
       maxToken,
       aiChatVision,
+      aiChatAudio,
+      aiChatVideo,
+      aiChatExtractFiles,
       aiChatTopP,
       aiChatStopSign,
       aiChatResponseFormat,
@@ -64,145 +63,124 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     }
   } = workflowProps;
 
-  const { finalMessages, tools, getToolInfo } = await useToolCatalog({
+  // provider 在后面创建，但 nodeResponse/SSE hook 初始化时已经需要 getToolInfo。
+  // 用延迟代理避免初始化环，实际事件触发一定发生在 provider 创建之后。
+  let getProviderToolInfo: (name: string) => ToolInfo | undefined = () => undefined;
+  const getToolInfo = (name: string) => getProviderToolInfo(name);
+
+  const runtimeEnvironment = createAgentLoopCoreRuntimeEnvironment({
+    node: workflowProps.node,
+    workflowStreamResponse,
+    streamAnswer: isResponseAnswerText,
+    streamReasoning: aiChatReasoning,
+    sliceToolResponse: true,
+    getToolInfo,
+    collectToolRunResponses: true
+  });
+  const toolProvider = await createToolCallToolProvider({
     messages,
     toolNodes,
-    currentInputFiles,
     useAgentSandbox,
     lang: workflowProps.lang,
-    appId: workflowProps.runningAppInfo.id,
-    userId: workflowProps.uid,
-    chatId: workflowProps.chatId
-  });
-  // ToolCall 的一次运行会横跨 LLM loop、真实工具执行、SSE 预览和运行详情落库。
-  // 这里按职责拆成 hook，toolCall.ts 只保留主流程编排。
-  const {
-    toolRunResponses,
-    cacheToolFlowResponse,
-    appendToolNodeResponse,
-    appendToolFlowResponse,
-    appendContextCompressNodeResponse
-  } = useToolNodeResponse({
-    moduleType: workflowProps.node.flowNodeType,
-    getToolInfo
-  });
-  const { streamReasoning, streamAnswer, streamToolCall, streamToolParams, streamToolResponse } =
-    useToolStreamResponse({
-      workflowStreamResponse,
-      isResponseAnswerText,
-      aiChatReasoning,
-      getToolInfo
-    });
-  const { runTool, runInteractiveTool } = useToolRunner({
     workflowProps,
     runtimeNodes,
     runtimeEdges,
-    allFiles,
-    fileUrls: fileUrlList,
-    getToolInfo,
-    cacheToolFlowResponse,
-    appendToolFlowResponse,
-    streamToolResponse
+    cacheToolFlowResponse: runtimeEnvironment.cacheToolFlowResponse
   });
+  getProviderToolInfo = toolProvider.getToolInfo;
+  const systemPrompt = toolProvider.finalMessages
+    .filter((message) => message.role === ChatCompletionRequestMessageRoleEnum.System)
+    .flatMap((message) => {
+      if (typeof message.content === 'string') return [message.content];
+      return (message.content ?? []).flatMap((item) => (item.type === 'text' ? [item.text] : []));
+    })
+    .filter(Boolean)
+    .join('\n\n');
+  const loopMessages = toolProvider.finalMessages.filter(
+    (message) => message.role !== ChatCompletionRequestMessageRoleEnum.System
+  );
 
-  const {
-    inputTokens,
-    outputTokens,
-    llmTotalPoints,
-    completeMessages,
-    assistantMessages,
-    interactiveResponse,
-    finish_reason,
-    error,
-    requestIds
-  } = await runAgentLoop<WorkflowInteractiveResponseType>({
-    maxRunAgentTimes: 50,
-    body: {
-      messages: finalMessages,
-      tools,
-      model: toolModel.model,
-      max_tokens: maxToken,
-      stream,
-      temperature,
-      top_p: aiChatTopP,
-      stop: aiChatStopSign,
-      reasoning_effort: aiChatReasoningEffort,
-      response_format: {
-        type: aiChatResponseFormat,
-        json_schema: aiChatJsonSchema
-      },
-      requestOrigin,
-      retainDatasetCite,
-      useVision: aiChatVision
-    },
-    childrenInteractiveParams,
-    userKey: externalProvider.openaiAccount,
-    isAborted: checkIsStopping,
-    usagePush,
-    /**
-     * ToolCall 节点内部工具执行依赖流式输出、交互状态和 nodeResponse 顺序，
-     * 这里显式保持串行，Agent 入口再按 batchToolSize 控制普通工具并发。
-     */
-    canBatchTool: () => false,
-    onAfterCompressContext({ usage, requestIds, seconds }) {
-      appendContextCompressNodeResponse({
-        usage,
-        requestIds,
-        seconds
-      });
-    },
-    onReasoning({ text }) {
-      streamReasoning(text);
-    },
-    onStreaming({ text }) {
-      streamAnswer(text);
-    },
-    onToolCall({ call }) {
-      streamToolCall(call);
-    },
-    onToolParam({ call, argsDelta }) {
-      streamToolParams({
-        call,
-        argsDelta
-      });
-    },
-    onAfterToolCall({ call, response, errorMessage, seconds, toolResponseCompress }) {
-      streamToolResponse({
-        toolCallId: call.id,
-        response
-      });
-
-      appendToolNodeResponse({
-        call,
-        response,
-        errorMessage,
-        seconds,
-        toolResponseCompress
-      });
-    },
-    onRunTool: runTool,
-    onRunInteractiveTool: runInteractiveTool
-  });
-
-  const assistantResponses = GPTMessages2Chats({
-    messages: assistantMessages,
-    reserveTool: true,
-    reserveReason: aiChatReasoning,
-    getToolInfo
-  })
-    .map((item) => item.value as AIChatItemValueItemType[])
-    .flat();
+  const { summary: outputSummary } =
+    await runAgentLoopCoreWithSummary<WorkflowInteractiveResponseType>({
+      provider: 'fastAgent',
+      input: buildAgentLoopCoreInput({
+        messages: loopMessages,
+        systemPrompt,
+        childrenInteractiveParams
+      }),
+      runtime: createAgentLoopCoreRuntimeWithEnvironment({
+        teamId: workflowProps.runningUserInfo.teamId,
+        environment: runtimeEnvironment,
+        llmParams: {
+          model: toolModel,
+          maxTokens: maxToken,
+          stream,
+          temperature,
+          topP: aiChatTopP,
+          stop: aiChatStopSign,
+          reasoningEffort: aiChatReasoningEffort,
+          responseFormat: {
+            type: aiChatResponseFormat,
+            json_schema: aiChatJsonSchema
+          },
+          useVision: aiChatVision,
+          useAudio: aiChatAudio,
+          useVideo: aiChatVideo,
+          extractFiles: aiChatExtractFiles,
+          userKey: externalProvider.openaiAccount
+        },
+        responseParams: {
+          retainDatasetCite
+        },
+        lang: workflowProps.lang,
+        systemTools: {
+          planEnabled: false,
+          askEnabled: false,
+          sandboxClient: useAgentSandbox ? workflowProps.sandboxClient : undefined,
+          readFile: toolProvider.readFileExecutor
+            ? {
+                enabled: true,
+                maxFileAmount: toolProvider.readFileMaxFileAmount,
+                execute: toolProvider.readFileExecutor
+              }
+            : undefined,
+          datasetSearch: toolProvider.datasetSearchExecutor
+            ? {
+                enabled: true,
+                currentInputFiles: fileUrlList,
+                execute: toolProvider.datasetSearchExecutor
+              }
+            : undefined
+        },
+        maxRunAgentTimes: 50,
+        checkIsStopping,
+        toolRuntime: {
+          toolProvider,
+          /**
+           * ToolCall 节点内部工具执行依赖流式输出、交互状态和 nodeResponse 顺序，
+           * 这里显式保持串行；普通 Agent 入口再按 batchToolSize 控制并发。
+           */
+          batchToolSize: 1,
+          normalizeInteractiveUsages: normalizeAgentLoopUsages
+        },
+        usagePush
+      }),
+      assistantResponses: {
+        showReasoning: aiChatReasoning,
+        getEventToolInfo: getToolInfo
+      }
+    });
 
   return {
-    requestIds,
-    error,
-    toolDispatchFlowResponses: toolRunResponses,
-    toolCallInputTokens: inputTokens,
-    toolCallOutputTokens: outputTokens,
-    toolCallTotalPoints: llmTotalPoints,
-    completeMessages,
-    assistantResponses,
-    finish_reason,
-    toolWorkflowInteractiveResponse: interactiveResponse
+    requestIds: outputSummary.requestIds,
+    error: outputSummary.errorText,
+    toolDispatchFlowResponses: runtimeEnvironment.toolRunResponses,
+    toolCallInputTokens: outputSummary.inputTokens,
+    toolCallOutputTokens: outputSummary.outputTokens,
+    toolCallTotalPoints: outputSummary.llmTotalPoints,
+    completeMessages: outputSummary.completeMessages,
+    assistantResponses: outputSummary.assistantResponses,
+    finish_reason: outputSummary.finishReason,
+    toolWorkflowInteractiveResponse: outputSummary.interactive
   };
 };

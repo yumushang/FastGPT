@@ -16,11 +16,19 @@ import { MySourceHandle } from './render/Handle';
 import { getHandleId } from '@fastgpt/global/core/workflow/utils';
 import { useContextSelector } from 'use-context-selector';
 import { WorkflowActionsContext } from '../../context/workflowActionsContext';
+import { WorkflowUtilsContext } from '../../context/workflowUtilsContext';
+import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 
 const NodeCQNode = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
   const { t } = useTranslation();
   const { nodeId, inputs } = data;
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
+  const onDelEdge = useContextSelector(WorkflowActionsContext, (v) => v.onDelEdge);
+  const splitToolInputs = useContextSelector(WorkflowUtilsContext, (ctx) => ctx.splitToolInputs);
+  const { isTool, commonInputs } = useMemoEnhance(
+    () => splitToolInputs(inputs, nodeId),
+    [inputs, nodeId, splitToolInputs]
+  );
 
   const CustomComponent = useMemo(
     () => ({
@@ -45,23 +53,20 @@ const NodeCQNode = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
                       color={'myGray.600'}
                       _hover={{ color: 'red.600' }}
                       onClick={() => {
-                        onChangeNode([
-                          {
-                            nodeId,
-                            type: 'updateInput',
+                        onChangeNode({
+                          nodeId,
+                          type: 'updateInput',
+                          key: agentKey,
+                          value: {
+                            ...props,
                             key: agentKey,
-                            value: {
-                              ...props,
-                              key: agentKey,
-                              value: agents.filter((input) => input.key !== item.key)
-                            }
-                          },
-                          {
-                            nodeId,
-                            type: 'delOutput',
-                            key: item.key
+                            value: agents.filter((input) => input.key !== item.key)
                           }
-                        ]);
+                        });
+                        onDelEdge({
+                          nodeId,
+                          sourceHandle: getHandleId(nodeId, 'source', item.key)
+                        });
                       }}
                     />
                   </MyTooltip>
@@ -129,18 +134,23 @@ const NodeCQNode = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
         );
       }
     }),
-    [nodeId, onChangeNode, t]
+    [nodeId, onChangeNode, onDelEdge, t]
   );
 
   const Render = useMemo(() => {
     return (
       <NodeCard minW={'400px'} selected={selected} {...data}>
         <Container>
-          <RenderInput nodeId={nodeId} flowInputList={inputs} CustomComponent={CustomComponent} />
+          <RenderInput
+            nodeId={nodeId}
+            flowInputList={commonInputs}
+            CustomComponent={CustomComponent}
+            isTool={isTool}
+          />
         </Container>
       </NodeCard>
     );
-  }, [CustomComponent, data, inputs, nodeId, selected]);
+  }, [CustomComponent, commonInputs, data, isTool, nodeId, selected]);
 
   return Render;
 };

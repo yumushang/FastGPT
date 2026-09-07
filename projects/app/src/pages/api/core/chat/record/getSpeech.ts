@@ -3,11 +3,11 @@ import { jsonRes } from '@fastgpt/service/common/response';
 
 import { text2Speech } from '@fastgpt/service/core/ai/audio/speech';
 import { pushAudioSpeechUsage } from '@/service/support/wallet/usage/push';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
 import { authType2UsageSource } from '@/service/support/wallet/usage/utils';
-import { getTTSModel } from '@fastgpt/service/core/ai/model';
+import { getTTSModelData } from '@fastgpt/service/core/ai/model';
 import { MongoTTSBuffer } from '@fastgpt/service/common/buffer/tts/schema';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { GetChatSpeechBodySchema } from '@fastgpt/global/openapi/core/chat/record/api';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
@@ -18,21 +18,26 @@ import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 */
 async function handler(req: ApiRequestProps, res: NextApiResponse) {
   try {
-    const { ttsConfig, input } = parseApiInput({ req, bodySchema: GetChatSpeechBodySchema }).body;
+    const { ttsConfig, input, sourceType, sourceId, outLinkAuthData } = parseApiInput({
+      req,
+      bodySchema: GetChatSpeechBodySchema
+    }).body;
 
-    if (!ttsConfig.model || !ttsConfig.voice) {
-      throw new Error('model or voice not found');
+    if ((ttsConfig.modelId === undefined && ttsConfig.model === undefined) || !ttsConfig.voice) {
+      throw new Error('model reference or voice not found');
     }
 
-    const { teamId, tmbId, authType } = await authChatCrud({
+    const { teamId, tmbId, authType } = await authChatTargetCrud({
       req,
       authToken: true,
       authApiKey: true,
-      ...req.body
+      sourceType,
+      sourceId,
+      outLinkAuthData
     });
 
-    const ttsModel = getTTSModel(ttsConfig.model);
-    const voiceData = ttsModel.voices?.find((item) => item.value === ttsConfig.voice);
+    const ttsModel = getTTSModelData({ modelId: ttsConfig.modelId, model: ttsConfig.model });
+    const voiceData = ttsModel.config.voices.find((item) => item.value === ttsConfig.voice);
 
     if (!voiceData) {
       throw new Error('voice not found');
@@ -57,7 +62,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     await text2Speech({
       res,
       input,
-      model: ttsConfig.model,
+      model: ttsModel,
       voice: ttsConfig.voice,
       speed: ttsConfig.speed,
       onSuccess: async ({ model, buffer }) => {
@@ -87,7 +92,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
                 }
               : {}
           );
-        } catch (error) {}
+        } catch {}
       },
       onError: (err) => {
         jsonRes(res, {

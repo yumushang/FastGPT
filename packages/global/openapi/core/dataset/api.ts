@@ -3,13 +3,18 @@ import { DatasetSearchModeEnum, DatasetTypeEnum } from '../../../core/dataset/co
 import { ApiDatasetServerSchema } from '../../../core/dataset/apiDataset/type';
 import { ObjectIdSchema } from '../../../common/type/mongo';
 import { ParentIdSchema } from '../../../common/parentFolder/type';
-import { EmbeddingModelItemSchema } from '../../../core/ai/model.schema';
 import {
   ChunkSettingsSchema,
   DatasetItemSchema,
   DatasetListItemSchema,
   SearchDataResponseItemSchema
 } from '../../../core/dataset/type';
+import { AppListSortEnum } from '../../../core/app/constants';
+import {
+  CollaboratorListSchema,
+  CollaboratorUpdateListSchema,
+  ShowUsernameQuerySchema
+} from '../../../support/permission/collaborator.schema';
 
 /* ============================================================================
  * API: 创建知识库
@@ -38,17 +43,29 @@ export const CreateDatasetBodySchema = z.object({
     example: '/imgs/dataset/avatar.png',
     description: '知识库头像'
   }),
+  vectorModelId: z.string().optional().meta({
+    description: '向量模型 ID，不传则使用默认向量模型'
+  }),
   vectorModel: z.string().optional().meta({
     example: 'text-embedding-3-small',
-    description: '向量模型名称,不传则使用默认向量模型'
+    description: '向量模型标识，不传则使用默认向量模型',
+    deprecated: true
+  }),
+  agentModelId: z.string().optional().meta({
+    description: '知识库 Agent 模型 ID，不传则使用默认模型'
   }),
   agentModel: z.string().optional().meta({
     example: 'gpt-4o-mini',
-    description: '知识库 Agent 模型名称,不传则使用默认模型'
+    description: '知识库 Agent 模型标识，不传则使用默认模型',
+    deprecated: true
+  }),
+  vlmModelId: z.string().optional().meta({
+    description: '视觉语言模型 ID'
   }),
   vlmModel: z.string().optional().meta({
     example: 'gpt-4o',
-    description: '视觉语言模型名称'
+    description: '视觉语言模型标识',
+    deprecated: true
   }),
   apiDatasetServer: ApiDatasetServerSchema.optional().meta({
     description: '第三方知识库服务器配置(API/飞书/语雀/钉钉)'
@@ -86,18 +103,9 @@ export const CreateDatasetWithFilesBodySchema = z.object({
         example: '68ad85a7463006c963799a05',
         description: '父级文件夹 ID'
       }),
-      vectorModel: z.string().optional().meta({
-        example: 'text-embedding-3-small',
-        description: '向量模型名称,不传则使用默认向量模型'
-      }),
-      agentModel: z.string().optional().meta({
-        example: 'gpt-4o-mini',
-        description: 'Agent 模型名称,不传则使用默认模型'
-      }),
-      vlmModel: z.string().optional().meta({
-        example: 'gpt-4o',
-        description: '视觉语言模型名称'
-      })
+      vectorModelId: z.string().optional().meta({ description: '向量模型 ID' }),
+      agentModelId: z.string().optional().meta({ description: 'Agent 模型 ID' }),
+      vlmModelId: z.string().optional().meta({ description: '视觉语言模型 ID' })
     })
     .meta({ description: '知识库参数' }),
   files: z
@@ -132,9 +140,16 @@ export const CreateDatasetWithFilesResponseSchema = z.object({
     example: '/imgs/dataset/avatar.png',
     description: '知识库头像'
   }),
-  vectorModel: EmbeddingModelItemSchema.meta({
-    description: '向量模型信息'
-  })
+  vectorModel: z
+    .object({
+      model: z.string().meta({
+        example: 'text-embedding-3-small',
+        description: '向量模型名称'
+      })
+    })
+    .meta({
+      description: '向量模型选择信息'
+    })
 });
 
 export type CreateDatasetWithFilesResponse = z.infer<typeof CreateDatasetWithFilesResponseSchema>;
@@ -176,13 +191,23 @@ export const GetDatasetListBodySchema = z.object({
     example: '68ad85a7463006c963799a05',
     description: '父级文件夹 ID,null 或不传表示根目录'
   }),
-  type: z.enum(DatasetTypeEnum).optional().meta({
-    example: DatasetTypeEnum.dataset,
-    description: '知识库类型筛选'
-  }),
+  type: z
+    .union([z.enum(DatasetTypeEnum), z.array(z.enum(DatasetTypeEnum))])
+    .optional()
+    .meta({
+      example: DatasetTypeEnum.dataset,
+      description: '知识库类型筛选'
+    }),
   searchKey: z.string().optional().meta({
     example: '产品文档',
     description: '搜索关键词,按名称和简介模糊匹配'
+  }),
+  sort: z.enum(AppListSortEnum).optional().meta({
+    example: AppListSortEnum.updateTimeDesc,
+    description: '列表排序，缺省按最近修改倒序'
+  }),
+  tmbIds: z.array(ObjectIdSchema).optional().meta({
+    description: '按创建者筛选；空数组返回空列表'
   })
 });
 export type GetDatasetListBody = z.infer<typeof GetDatasetListBodySchema>;
@@ -221,6 +246,117 @@ export const GetDatasetPathsResponseSchema = z.array(DatasetPathItemSchema);
 export type GetDatasetPathsResponse = z.infer<typeof GetDatasetPathsResponseSchema>;
 
 /* ============================================================================
+ * API: 转让知识库所有权
+ * Route: POST /api/proApi/core/dataset/changeOwner
+ * Method: POST
+ * Description: 将知识库所有权转让给指定团队成员。
+ * Tags: ['资源权限', '知识库权限管理']
+ * ============================================================================ */
+
+export const ChangeDatasetOwnerBodySchema = z
+  .object({
+    datasetId: ObjectIdSchema.meta({
+      example: '68ad85a7463006c963799a05',
+      description: '知识库 ID'
+    }),
+    ownerId: ObjectIdSchema.meta({
+      example: '68ad85a7463006c963799a06',
+      description: '新的所有者团队成员 ID'
+    })
+  })
+  .meta({
+    example: {
+      datasetId: '68ad85a7463006c963799a05',
+      ownerId: '68ad85a7463006c963799a06'
+    }
+  });
+export type ChangeDatasetOwnerBody = z.infer<typeof ChangeDatasetOwnerBodySchema>;
+
+export const ChangeDatasetOwnerResponseSchema = z.undefined().meta({ description: '转让成功' });
+export type ChangeDatasetOwnerResponse = z.infer<typeof ChangeDatasetOwnerResponseSchema>;
+
+/* ============================================================================
+ * API: 获取知识库协作者列表
+ * Route: GET /api/proApi/core/dataset/collaborator/list
+ * Method: GET
+ * Description: 获取知识库协作者列表，包含继承权限场景下的父级协作者信息。
+ * Tags: ['协作者管理', '知识库权限管理']
+ * ============================================================================ */
+
+export const GetDatasetCollaboratorListQuerySchema = z.object({
+  datasetId: ObjectIdSchema.meta({
+    example: '68ad85a7463006c963799a05',
+    description: '知识库 ID'
+  }),
+  showUsername: ShowUsernameQuerySchema
+});
+export type GetDatasetCollaboratorListQuery = z.infer<typeof GetDatasetCollaboratorListQuerySchema>;
+
+export const GetDatasetCollaboratorListResponseSchema = CollaboratorListSchema;
+export type GetDatasetCollaboratorListResponse = z.infer<
+  typeof GetDatasetCollaboratorListResponseSchema
+>;
+
+/* ============================================================================
+ * API: 更新知识库协作者
+ * Route: POST /api/proApi/core/dataset/collaborator/update
+ * Method: POST
+ * Description: 覆盖更新知识库或知识库文件夹的协作者权限；继承权限场景会按资源类型处理继承关系。
+ * Tags: ['协作者管理', '知识库权限管理']
+ * ============================================================================ */
+
+export const UpdateDatasetCollaboratorBodySchema = z
+  .object({
+    datasetId: ObjectIdSchema.meta({
+      example: '68ad85a7463006c963799a05',
+      description: '知识库 ID'
+    }),
+    collaborators: CollaboratorUpdateListSchema.meta({
+      description: '更新后的协作者权限列表，至少包含一个协作者且目标不可重复'
+    })
+  })
+  .meta({
+    example: {
+      datasetId: '68ad85a7463006c963799a05',
+      collaborators: [
+        {
+          tmbId: '68ad85a7463006c963799a06',
+          permission: 4
+        }
+      ]
+    }
+  });
+export type UpdateDatasetCollaboratorBody = z.infer<typeof UpdateDatasetCollaboratorBodySchema>;
+
+export const UpdateDatasetCollaboratorResponseSchema = z.undefined().meta({
+  description: '操作成功'
+});
+export type UpdateDatasetCollaboratorResponse = z.infer<
+  typeof UpdateDatasetCollaboratorResponseSchema
+>;
+
+/* ============================================================================
+ * API: 同步知识库数据
+ * Route: POST /api/proApi/core/dataset/datasetSync
+ * Method: POST
+ * Description: 检查知识库同步状态、训练状态、权限和索引额度后，触发知识库同步任务。
+ * Tags: ['知识库管理', 'Write']
+ * ============================================================================ */
+export const PostDatasetSyncBodySchema = z
+  .object({
+    datasetId: ObjectIdSchema.meta({
+      example: '68ad85a7463006c963799a05',
+      description: '需要同步的知识库 ID'
+    })
+  })
+  .meta({
+    example: {
+      datasetId: '68ad85a7463006c963799a05'
+    }
+  });
+export type PostDatasetSyncParams = z.infer<typeof PostDatasetSyncBodySchema>;
+
+/* ============================================================================
  * API: 更新知识库
  * Route: PUT /api/core/dataset/update
  * ============================================================================ */
@@ -245,13 +381,11 @@ export const UpdateDatasetBodySchema = z.object({
     example: '这是一个用于存储产品文档的知识库',
     description: '知识库简介'
   }),
-  agentModel: z.string().optional().meta({
-    example: 'gpt-4o-mini',
-    description: '知识库 Agent 模型名称'
+  agentModelId: z.string().optional().meta({
+    description: '知识库 Agent 模型 ID'
   }),
-  vlmModel: z.string().optional().meta({
-    example: 'gpt-4o',
-    description: '视觉语言模型名称'
+  vlmModelId: z.string().optional().meta({
+    description: '视觉语言模型 ID'
   }),
   websiteConfig: z
     .object({
@@ -354,8 +488,13 @@ export const SearchDatasetTestBodySchema = z
     usingReRank: z.boolean().optional().meta({
       description: '是否使用重排序'
     }),
+    rerankModelId: z.string().optional().meta({
+      description: '重排序模型 ID'
+    }),
     rerankModel: z.string().optional().meta({
-      description: '重排序模型名称'
+      example: 'bge-reranker-v2-m3',
+      description: '旧版重排序模型标识',
+      deprecated: true
     }),
     rerankWeight: z.number().optional().meta({
       description: '重排序权重'
@@ -363,8 +502,13 @@ export const SearchDatasetTestBodySchema = z
     datasetSearchUsingExtensionQuery: z.boolean().optional().meta({
       description: '是否使用问题扩展'
     }),
+    datasetSearchExtensionModelId: z.string().optional().meta({
+      description: '问题扩展模型 ID'
+    }),
     datasetSearchExtensionModel: z.string().optional().meta({
-      description: '问题扩展模型'
+      example: 'gpt-4o-mini',
+      description: '旧版问题扩展模型标识',
+      deprecated: true
     }),
     datasetSearchExtensionBg: z.string().optional().meta({
       description: '问题扩展背景描述'
@@ -372,8 +516,13 @@ export const SearchDatasetTestBodySchema = z
     datasetDeepSearch: z.boolean().optional().meta({
       description: '是否启用深度搜索'
     }),
+    datasetDeepSearchModelId: z.string().optional().meta({
+      description: '深度搜索模型 ID'
+    }),
     datasetDeepSearchModel: z.string().optional().meta({
-      description: '深度搜索模型'
+      example: 'gpt-4o-mini',
+      description: '旧版深度搜索模型标识',
+      deprecated: true
     }),
     datasetDeepSearchMaxTimes: z.number().optional().meta({
       description: '深度搜索最大轮次'
@@ -455,11 +604,3 @@ export const GetDatasetPermissionResponseSchema = z.object({
   })
 });
 export type GetDatasetPermissionResponse = z.infer<typeof GetDatasetPermissionResponseSchema>;
-
-/* ============================================================================
- * 数据集同步入参
- * ============================================================================ */
-export const PostDatasetSyncBodySchema = z.object({
-  datasetId: z.string().meta({ description: '数据集 ID' })
-});
-export type PostDatasetSyncParams = z.infer<typeof PostDatasetSyncBodySchema>;

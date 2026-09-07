@@ -1,4 +1,9 @@
-import type { ChatFileTypeEnum, ChatStatusEnum } from '@fastgpt/global/core/chat/constants';
+import type {
+  ChatFileTypeEnum,
+  ChatGenerateStatusEnum,
+  ChatStatusEnum
+} from '@fastgpt/global/core/chat/constants';
+import type { ChatSourceTarget } from '@/web/core/chat/utils';
 import type {
   ChatHistoryItemResType,
   ChatItemObjItemType,
@@ -8,11 +13,13 @@ import type { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workf
 
 export type UserInputFileItemType = {
   id: string;
+  /** 本地上传任务 ID，只用于前端取消、进度写回和删除定位。历史消息可能没有该字段。 */
+  uploadId?: string;
   rawFile?: File;
   type: `${ChatFileTypeEnum}`;
   name: string;
   icon: string; // img is base64
-  status: 0 | 1; // 0: uploading, 1: success
+  status: 0 | 1; // 0: 待上传，1: 上传中或已成功；是否成功以 url 为准
   url?: string;
   key?: string; // S3 key for the file
   process?: number;
@@ -31,6 +38,8 @@ export type ChatBoxInputType = {
   files?: UserInputFileItemType[];
   interactive?: WorkflowInteractiveResponseType;
   hideInUI?: boolean;
+  /** 发送后是否清空输入框；默认不清空，只有主输入框确认发送等占用输入框内容的场景显式设为 true。 */
+  clearInput?: boolean;
 };
 
 export type SendPromptFnType = (
@@ -39,6 +48,21 @@ export type SendPromptFnType = (
     history?: ChatSiteItemType[];
   }
 ) => void;
+
+export type ChatGenerateStatusChangePayload = {
+  sourceTarget: ChatSourceTarget;
+  chatId: string;
+  status: ChatGenerateStatusEnum;
+  hasBeenRead?: boolean;
+  title?: string;
+};
+
+export type ChatGenerateStatusChangeHandler = (data: ChatGenerateStatusChangePayload) => void;
+
+export type ChatGeneratingConflictRecovery = {
+  previousAiDataId?: string;
+  canReusePreviousAi: boolean;
+};
 
 export type ComponentRef = {
   restartChat: () => void;

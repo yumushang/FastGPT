@@ -1,4 +1,5 @@
 import { S3Sources } from '../../contracts/type';
+import { encodeS3ObjectKey } from '../../keySanitizer';
 import { S3PrivateBucket } from '../../buckets/private';
 import streamConsumer from 'node:stream/consumers';
 import {
@@ -16,14 +17,16 @@ import {
 import { MongoS3TTL } from '../../models/ttl';
 import { addHours } from 'date-fns';
 import { getLogger, LogCategories } from '../../../logger';
-import { detectFileEncoding } from '@fastgpt/global/common/file/tools';
-import { readFileContentByBuffer } from '../../../file/read/utils';
-import path from 'node:path';
+import { readFileContentBySource } from '../../../file/read/utils';
 import { ensureTextContentTypeCharset, isTextLikeFile, resolveMimeType } from '../../utils/mime';
-import { datasetAllowedExtensions } from '../../utils/uploadConstraints';
-import { getFileS3Key, truncateFilename } from '../../utils';
+import { createUploadConstraints, datasetAllowedExtensions } from '../../utils/uploadConstraints';
+import { getFileS3Key } from '../../utils';
+import { isAuthorizedDatasetFileS3Key } from './key';
 import type { S3RawTextSource } from '../rawText';
 import { getS3RawTextSource } from '../rawText';
+import { getS3UploadContentDisposition, encodeS3Filename } from '../../filename';
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
+import { createS3FileSource } from '../../../file/read/source';
 
 const logger = getLogger(LogCategories.INFRA.S3);
 
@@ -38,7 +41,10 @@ export class S3DatasetSource extends S3PrivateBucket {
   // 下载链接
   async createGetDatasetFileURL(params: CreateGetDatasetFileURLParams) {
     const { key, expiredHours, external } = CreateGetDatasetFileURLParamsSchema.parse(params);
-    const fileMetadata = await this.getFileMetadata(key).catch(() => undefined);
+    const fileMetadata = await this.getFileMetadata(key).catch((error) => {
+      if (error === CommonErrEnum.fileNotFound) return undefined;
+      throw error;
+    });
     const responseContentType =
       fileMetadata && isTextLikeFile(fileMetadata)
         ? ensureTextContentTypeCharset({
@@ -48,23 +54,40 @@ export class S3DatasetSource extends S3PrivateBucket {
         : undefined;
 
     if (external) {
-      return await this.createExternalUrl({ key, expiredHours, responseContentType });
+      return await this.createExternalUrl({
+        key,
+        expiredHours,
+        responseContentType,
+        filename: fileMetadata?.filename
+      });
     }
     return await this.createPreviewUrl({ key, expiredHours, responseContentType });
   }
 
-  // 上传链接
   async createUploadDatasetFileURL(params: CreateUploadDatasetFileParams) {
-    const { filename, datasetId, maxFileSize } = CreateUploadDatasetFileParamsSchema.parse(params);
+    const { filename, datasetId, maxFileSize, size } =
+      CreateUploadDatasetFileParamsSchema.parse(params);
     const { fileKey } = getFileS3Key.dataset({ datasetId, filename });
-    return await this.createPresignedPutUrl(
-      { rawKey: fileKey, filename },
+    const uploadPolicy = createUploadConstraints({
+      filename,
+      source: 'local-file',
+      ...(size !== undefined ? { size } : {}),
+      uploadConstraints: {
+        allowedExtensions: datasetAllowedExtensions
+      }
+    });
+
+    return await this.createUploadAccessUrl(
+      {
+        rawKey: fileKey,
+        filename,
+        source: 'local-file',
+        ...(size !== undefined ? { size } : {})
+      },
       {
         expiredHours: 3,
         maxFileSize,
-        uploadConstraints: {
-          allowedExtensions: datasetAllowedExtensions
-        }
+        uploadPolicy
       }
     );
   }
@@ -80,13 +103,28 @@ export class S3DatasetSource extends S3PrivateBucket {
   }
 
   /**
+   * 清理尚未被 Collection 事务提升为永久对象的上传文件。必须先确认对象删除成功，再移除 TTL；
+   * 删除失败时保留 TTL，让生命周期任务继续兜底。
+   */
+  async cleanupPendingDatasetFile(key: string) {
+    try {
+      await this.removeObject(key);
+    } catch (error) {
+      logger.warn('Pending dataset file cleanup failed; keep TTL for retry', { key, error });
+      throw error;
+    }
+
+    await MongoS3TTL.deleteOne({ minioKey: key, bucketName: this.bucketName });
+  }
+
+  /**
    * 可以根据 datasetId 或者 prefix 删除文件
    * 如果存在 rawPrefix 则优先使用 rawPrefix 去删除文件，否则使用 datasetId 拼接前缀去删除文件
    * 比如根据被解析的文档前缀去删除解析出来的图片
    **/
   deleteDatasetFilesByPrefix(params: DeleteDatasetFilesByPrefixParams) {
     const { datasetId } = DeleteDatasetFilesByPrefixParamsSchema.parse(params);
-    const prefix = [S3Sources.dataset, datasetId].filter(Boolean).join('/');
+    const prefix = encodeS3ObjectKey([S3Sources.dataset, datasetId].filter(Boolean).join('/'));
     return this.addDeleteJob({ prefix });
   }
 
@@ -102,8 +140,12 @@ export class S3DatasetSource extends S3PrivateBucket {
   }
 
   async getDatasetFileRawText(params: GetDatasetFileContentParams) {
-    const { fileId, teamId, tmbId, customPdfParse, getFormatText, usageId } =
+    const { fileId, teamId, tmbId, customPdfParse, getFormatText, usageId, datasetId } =
       GetDatasetFileContentParamsSchema.parse(params);
+
+    if (!isAuthorizedDatasetFileS3Key({ key: fileId, datasetId })) {
+      return Promise.reject('Invalid dataset file key');
+    }
 
     const rawTextBuffer = await this.rawTextSource.getRawTextBuffer({
       customPdfParse,
@@ -116,30 +158,13 @@ export class S3DatasetSource extends S3PrivateBucket {
       };
     }
 
-    const [fileMetadata, downloadResponse] = await Promise.all([
-      this.getFileMetadata(fileId),
-      this.client.downloadObject({ key: fileId })
-    ]);
-
-    const filename = fileMetadata?.filename || '';
-    const extension = fileMetadata?.extension || '';
-
-    const start = Date.now();
-    const buffer = await streamConsumer.buffer(downloadResponse.body);
-    logger.debug('S3 dataset file downloaded', {
-      key: fileId,
-      durationMs: Date.now() - start,
-      size: buffer.length
-    });
-
-    const encoding = detectFileEncoding(buffer);
+    const source = await this.getDatasetFileSource({ fileId, datasetId });
+    const filename = source.metadata.filename || '';
     const { fileParsedPrefix } = getFileS3Key.s3Key(fileId);
-    const { rawText } = await readFileContentByBuffer({
+    const { rawText } = await readFileContentBySource({
       teamId,
       tmbId,
-      extension,
-      buffer,
-      encoding,
+      source,
       customPdfParse,
       usageId,
       getFormatText,
@@ -161,13 +186,46 @@ export class S3DatasetSource extends S3PrivateBucket {
     };
   }
 
+  /**
+   * 为已鉴权的 Dataset 对象创建可信 S3 FileSource。HEAD 返回的 Content-Length 只用于解析资源准入，
+   * 不重复执行上传阶段的业务大小校验。
+   */
+  async getDatasetFileSource({ fileId, datasetId }: { fileId: string; datasetId: string }) {
+    if (!isAuthorizedDatasetFileS3Key({ key: fileId, datasetId })) {
+      throw new Error('Invalid dataset file key');
+    }
+
+    const metadata = await this.getFileMetadata(fileId);
+    const sizeBytes = metadata?.contentLength;
+    if (
+      !metadata ||
+      typeof sizeBytes !== 'number' ||
+      !Number.isSafeInteger(sizeBytes) ||
+      sizeBytes < 0
+    ) {
+      throw new Error('Invalid S3 dataset file metadata');
+    }
+
+    return createS3FileSource({
+      sizeBytes,
+      metadata: {
+        filename: metadata.filename,
+        contentType: metadata.contentType,
+        extension: metadata.extension
+      },
+      getStream: async (signal) => {
+        const stream = await this.getFileStream(fileId, { abortSignal: signal });
+        if (!stream) throw new Error('S3 dataset file stream is empty');
+        return stream;
+      }
+    });
+  }
+
   // 根据文件 Buffer 上传文件
   async upload(params: UploadParams): Promise<string> {
     const { datasetId, filename, contentType, ...file } = UploadParamsSchema.parse(params);
 
-    // 截断文件名以避免 S3 key 过长的问题
-    const truncatedFilename = truncateFilename(filename);
-    const { fileKey: key } = getFileS3Key.dataset({ datasetId, filename: truncatedFilename });
+    const { fileKey: key } = getFileS3Key.dataset({ datasetId, filename });
 
     await MongoS3TTL.create({
       minioKey: key,
@@ -178,10 +236,14 @@ export class S3DatasetSource extends S3PrivateBucket {
     await this.client.uploadObject({
       key,
       body: 'buffer' in file ? file.buffer : file.stream,
-      contentType: contentType || resolveMimeType([truncatedFilename]),
+      contentType: contentType || resolveMimeType([filename]),
+      contentDisposition: getS3UploadContentDisposition({
+        filename,
+        type: 'attachment'
+      }),
       metadata: {
         uploadTime: new Date().toISOString(),
-        originFilename: encodeURIComponent(truncatedFilename)
+        originFilename: encodeS3Filename(filename)
       }
     });
 

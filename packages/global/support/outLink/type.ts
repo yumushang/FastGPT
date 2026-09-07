@@ -1,32 +1,45 @@
 import z from 'zod';
 import type { PublishChannelEnum } from './constant';
+import { BoolSchema } from '../../common/zod';
 
-// Feishu Config interface
-export interface FeishuAppType {
-  appId: string;
-  appSecret: string;
-  // Encrypt config
-  // refer to: https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/configure-encrypt-key
-  encryptKey?: string; // no secret if null
-}
+export const FeishuAppSchema = z.object({
+  appId: z.string().trim().min(1),
+  appSecret: z.string().trim().min(1),
+  encryptKey: z.string().trim().optional()
+});
 
-export interface DingtalkAppType {
-  clientId: string;
-  clientSecret: string;
-}
+/**
+ * Feishu app config.
+ * @see https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/configure-encrypt-key
+ */
+export type FeishuAppType = z.infer<typeof FeishuAppSchema>;
 
-export interface WecomAppType {
-  CallbackToken: string;
-  CallbackEncodingAesKey: string;
+export const DingtalkAppSchema = z.object({
+  clientId: z.string().trim().min(1),
+  clientSecret: z.string().trim().min(1)
+});
 
-  /** @deprecated */
-  // AgentId: string;
-  /** @deprecated */
-  // CorpId: string;
-  /** @deprecated */
-  // SuiteSecret: string;
-}
+/**
+ * Dingtalk app config.
+ * @see https://open.dingtalk.com/document/dingstart/create-application
+ */
+export type DingtalkAppType = z.infer<typeof DingtalkAppSchema>;
 
+/**
+ * WeCom app config
+ * @see https://developer.work.weixin.qq.com/document/path/90238
+ */
+export const WecomAppSchema = z.object({
+  CallbackToken: z.string().trim().min(1),
+  CallbackEncodingAesKey: z.string().trim().min(1)
+});
+
+export type WecomAppType = z.infer<typeof WecomAppSchema>;
+
+/**
+ * WeChat Claw Bot app config.
+ * @see https://github.com/Tencent/openclaw-weixin
+ */
 export const WechatAppSchema = z.object({
   token: z.string().default(''),
   baseUrl: z.string().default('https://ilinkai.weixin.qq.com'),
@@ -39,16 +52,20 @@ export const WechatAppSchema = z.object({
 });
 export type WechatAppType = z.infer<typeof WechatAppSchema>;
 
-export interface OffiAccountAppType {
-  appId: string;
-  isVerified?: boolean; // if isVerified, we could use '客服接口' to reply
-  secret: string;
-  CallbackToken: string;
-  CallbackEncodingAesKey?: string;
-  timeoutReply?: string; // if timeout (15s), will reply this content.
-  // timeout reply is optional, but when isVerified is false, the wechat will reply a default message which is `该公众号暂时无法提供服务，请稍后再试`
-  // because we can not reply anything in 15s. Thus, the wechat server will treat this request as a failed request.
-}
+/**
+ * WeChat Official Account app config.
+ * @see https://developers.weixin.qq.com/doc/service/guide/dev/api/
+ */
+export const OffiAccountAppSchema = z.object({
+  appId: z.string().trim().min(1),
+  isVerified: z.boolean().optional(),
+  secret: z.string().trim().min(1),
+  CallbackToken: z.string().trim().min(1),
+  CallbackEncodingAesKey: z.string().trim().optional(),
+  timeoutReply: z.string().optional()
+});
+
+export type OffiAccountAppType = z.infer<typeof OffiAccountAppSchema>;
 
 export type OutlinkAppType =
   | FeishuAppType
@@ -126,12 +143,30 @@ export type OutLinkEditType<T extends OutlinkAppType = undefined> = {
 export type OutLinkSchema<T extends OutlinkAppType = undefined> = OutLinkSchemaType<T>;
 
 export const PlaygroundVisibilityConfigSchema = z.object({
-  showRunningStatus: z.boolean(),
-  showSkillReferences: z.boolean().optional().default(true),
-  showCite: z.boolean().optional().default(true),
-  showFullText: z.boolean().optional().default(true),
-  canDownloadSource: z.boolean().optional().default(true),
-  showWholeResponse: z.boolean().optional().default(true)
+  showRunningStatus: BoolSchema.meta({
+    example: true,
+    description: '是否显示运行状态'
+  }),
+  showSkillReferences: BoolSchema.optional().default(false).meta({
+    example: false,
+    description: '是否显示技能引用'
+  }),
+  showCite: BoolSchema.optional().default(true).meta({
+    example: true,
+    description: '是否显示引用'
+  }),
+  showFullText: BoolSchema.optional().default(true).meta({
+    example: true,
+    description: '是否显示全文'
+  }),
+  canDownloadSource: BoolSchema.optional().default(true).meta({
+    example: true,
+    description: '是否可下载来源'
+  }),
+  showWholeResponse: BoolSchema.optional().default(true).meta({
+    example: true,
+    description: '是否显示完整响应按钮'
+  })
 });
 
 export type PlaygroundVisibilityConfigType = z.infer<typeof PlaygroundVisibilityConfigSchema>;

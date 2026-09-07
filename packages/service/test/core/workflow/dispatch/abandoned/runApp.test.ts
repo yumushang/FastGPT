@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum, WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 import { WorkflowVariableState } from '../../../../../core/workflow/dispatch/utils/variables';
+import { summarizeRuntimeNodeResponses } from '../../../../../core/workflow/dispatch/utils';
 
 const runWorkflowMock = vi.fn();
 const authAppByTmbIdMock = vi.fn();
@@ -47,6 +49,7 @@ const createParentVariableState = () =>
 describe('abandoned dispatchAppRequest', () => {
   it('should run child app with an isolated variable state', async () => {
     const parentVariableState = await createParentVariableState();
+    const usagePush = vi.fn();
     let childInitialValue: unknown;
 
     authAppByTmbIdMock.mockResolvedValue({
@@ -79,13 +82,27 @@ describe('abandoned dispatchAppRequest', () => {
       await args.variableState.set('shared', 'child-value');
       return {
         flowResponses: [],
-        flowUsages: [],
+        flowUsages: [
+          {
+            moduleName: 'child model',
+            totalPoints: 5
+          }
+        ],
         assistantResponses: [],
-        system_memories: []
+        system_memories: [],
+        runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+          {
+            id: 'child-root',
+            moduleType: FlowNodeTypeEnum.chatNode,
+            totalPoints: 2,
+            childTotalPoints: 3,
+            childResponseCount: 1
+          } as any
+        ])
       };
     });
 
-    await dispatchAppRequest({
+    const result = await dispatchAppRequest({
       runningAppInfo: {
         id: 'parent-app',
         teamId: 'team',
@@ -106,6 +123,7 @@ describe('abandoned dispatchAppRequest', () => {
       uid: 'uid',
       chatId: 'chat',
       responseChatItemId: 'response',
+      usagePush,
       chatConfig: {
         variables: []
       }
@@ -117,5 +135,12 @@ describe('abandoned dispatchAppRequest', () => {
     expect(childInitialValue).toBe('parent-value');
     expect(childVariableState.get('shared')).toBe('child-value');
     expect(parentVariableState.get('shared')).toBe('parent-value');
+    expect(usagePush).toHaveBeenCalledWith([
+      {
+        moduleName: 'child',
+        totalPoints: 5
+      }
+    ]);
+    expect(result.responseData?.totalPoints).toBe(5);
   });
 });

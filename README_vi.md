@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://fastgpt.io/"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
+<a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=logo"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
 
 # FastGPT
 
@@ -18,7 +18,7 @@ FastGPT là nền tảng xây dựng AI Agent cung cấp khả năng sẵn sàng
 </div>
 
 <p align="center">
-  <a href="https://fastgpt.io/">
+  <a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_badge">
     <img height="21" src="https://img.shields.io/badge/Sử_Dụng_Online-d4eaf7?style=flat-square&logo=spoj&logoColor=7d09f1" alt="cloud">
   </a>
   <a href="https://doc.fastgpt.io/guide/getting-started">
@@ -40,7 +40,7 @@ Bạn có thể khởi động FastGPT nhanh chóng bằng Docker. Chạy lệnh
 
 ```bash
 # Chạy lệnh để tải file cấu hình
-bash <(curl -fsSL https://doc.fastgpt.cn/deploy/install.sh)
+bash <(curl -fsSL https://doc.fastgpt.io/deploy/install.sh)
 # Khởi động dịch vụ
 docker compose up -d
 ```
@@ -52,13 +52,13 @@ Nếu bạn gặp vấn đề, bạn có thể [xem hướng dẫn triển khai 
 ## 🛸 Cách Sử Dụng
 
 - **Phiên Bản Đám Mây**  
-  Nếu bạn không cần triển khai riêng, bạn có thể sử dụng trực tiếp dịch vụ đám mây của chúng tôi tại: [fastgpt.io](https://fastgpt.io/)
+  Nếu bạn không cần triển khai riêng, bạn có thể sử dụng trực tiếp dịch vụ đám mây của chúng tôi tại: [fastgpt.io](https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_service_link)
 
 - **Phiên Bản Tự Host Cộng Đồng**  
   Bạn có thể triển khai nhanh chóng bằng [Docker](https://doc.fastgpt.io/self-host/deploy/docker) hoặc sử dụng [Sealos Cloud](https://doc.fastgpt.io/self-host/deploy/sealos) để triển khai FastGPT bằng một cú nhấp chuột.
 
 - **Phiên Bản Thương Mại**  
-  Nếu bạn cần các tính năng đầy đủ hơn hoặc hỗ trợ dịch vụ chuyên sâu, bạn có thể chọn [Phiên Bản Thương Mại](https://doc.fastgpt.io/guide/version/commercial). Ngoài việc cung cấp phần mềm đầy đủ, chúng tôi còn cung cấp hướng dẫn triển khai cho các kịch bản cụ thể. Bạn có thể gửi [tư vấn thương mại](https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc).
+  Nếu bạn cần các tính năng đầy đủ hơn hoặc hỗ trợ dịch vụ chuyên sâu, bạn có thể chọn [Phiên Bản Thương Mại](https://doc.fastgpt.io/guide/version/commercial). Ngoài việc cung cấp phần mềm đầy đủ, chúng tôi còn cung cấp hướng dẫn triển khai cho các kịch bản cụ thể. Bạn có thể gửi [tư vấn thương mại](https://fastgpt.cn/en/contact?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=commercial_consultation).
 
 ## 💡 Tính Năng Cốt Lõi
 
@@ -68,7 +68,7 @@ Nếu bạn gặp vấn đề, bạn có thể [xem hướng dẫn triển khai 
 | ![Demo](./.github/imgs/intro3.png) | ![Demo](./.github/imgs/intro4.png) |
 
 `1` Khả Năng Điều Phối Ứng Dụng
-   - [x] Chế độ Agent lập kế hoạch.
+   - [x] Điều phối Agent Skill.
    - [x] Workflow hội thoại, workflow plugin, bao gồm các node RPA cơ bản.
    - [x] Tương tác người dùng
    - [x] MCP hai chiều
@@ -89,25 +89,19 @@ Nếu bạn gặp vấn đề, bạn có thể [xem hướng dẫn triển khai 
    - [x] Hỗ trợ txt, md, html, pdf, docx, pptx, csv, xlsx (thêm qua PR), hỗ trợ đọc URL và nhập hàng loạt CSV
    - [x] Tìm kiếm kết hợp & xếp hạng lại
    - [x] Cơ sở kiến thức API
-   - [ ] Hot-swapping module RAG
+   - [ ] 
 
-`4` Giao Diện OpenAPI
-   - [x] Giao diện completions (tương thích với chế độ chat GPT)
-   - [x] CRUD cơ sở kiến thức
-   - [x] CRUD hội thoại
-   - [x] Giao diện OpenAPI tự động
+`4` Khả Năng Plugin
+   - [x] Hot update tool hệ thống
+   - [ ] Hot update module RAG
+   - [ ] Hot update Agent-loop
+   - [ ] Plugin do AI tạo theo thời gian thực
 
 `5` Khả Năng Vận Hành
    - [x] Chia sẻ không cần đăng nhập
    - [x] Nhúng Iframe một cú nhấp chuột
    - [x] Xem lại nhật ký hội thoại tập trung với chú thích dữ liệu
    - [x] Nhật ký vận hành ứng dụng
-
-`6` Khác
-   - [x] Cấu hình mô hình trực quan.
-   - [x] Hỗ trợ nhập liệu và xuất giọng nói (có thể cấu hình)
-   - [x] Gợi ý nhập liệu mờ
-   - [x] Chợ template
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Về_Đầu_Trang-7d09f1.svg" alt="#" align="right">
@@ -116,10 +110,9 @@ Nếu bạn gặp vấn đề, bạn có thể [xem hướng dẫn triển khai 
 ## 💪 Dự Án & Liên Kết Của Chúng Tôi
 
 - [Bắt Đầu Phát Triển Địa Phương](https://doc.fastgpt.io/self-host/dev/)
-- [Tài Liệu OpenAPI](https://doc.fastgpt.io/openapi/intro)
+- [Tài Liệu OpenAPI](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: Dịch Vụ Cân Bằng Tải Tổng Hợp Mô Hình](https://github.com/labring/aiproxy)
-- [Laf: Truy Cập Nhanh 3 Phút vào Ứng Dụng Bên Thứ Ba](https://github.com/labring/laf)
 - [Sealos: Triển Khai Nhanh Ứng Dụng Cụm](https://github.com/labring/sealos)
 
 <a href="#readme">
@@ -130,7 +123,6 @@ Nếu bạn gặp vấn đề, bạn có thể [xem hướng dẫn triển khai 
 
 - [AI Proxy: Dịch Vụ Tổng Hợp Mô Hình Lớn](https://sealos.run/aiproxy/?k=fastgpt-github/)
 - [SiliconCloud - Nền Tảng Trải Nghiệm Mô Hình Nguồn Mở Trực Tuyến](https://cloud.siliconflow.cn/i/TR9Ym0c4)
-- [PPIO: Gọi API Mô Hình Nguồn Mở Tiết Kiệm và GPU Container](https://ppinfra.com/user/register?invited_by=VITYVU&utm_source=github_fastgpt)
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Về_Đầu_Trang-7d09f1.svg" alt="#" align="right">
@@ -186,9 +178,9 @@ Chúng tôi rất hoan nghênh đóng góp dưới mọi hình thức. Nếu b�
 
 <a href="https://github.com/labring/FastGPT/stargazers" target="_blank" style="display: block" align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
   </picture>
 </a>
 

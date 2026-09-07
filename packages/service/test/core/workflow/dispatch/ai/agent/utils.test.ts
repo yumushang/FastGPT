@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SubAppIds } from '@fastgpt/global/core/workflow/node/agent/constants';
-import { getSubapps, getExecuteTool } from '@fastgpt/service/core/workflow/dispatch/ai/agent/utils';
-import { readFileTool } from '@fastgpt/service/core/workflow/dispatch/ai/agent/sub/file/utils';
+import {
+  getSubapps,
+  getExecuteTool
+} from '@fastgpt/service/core/workflow/dispatch/ai/agent/sub/utils';
+import { READ_FILES_TOOL_NAME } from '@fastgpt/service/core/ai/llm/agentLoop/interface';
+import { createReadFilesTool } from '@fastgpt/service/core/ai/llm/agentLoop/domain/systemTool/readFile';
 
-const { dispatchAgentDatasetSearchMock, dispatchFileReadMock } = vi.hoisted(() => ({
+const { dispatchAgentDatasetSearchMock, dispatchToolMock } = vi.hoisted(() => ({
   dispatchAgentDatasetSearchMock: vi.fn(),
-  dispatchFileReadMock: vi.fn()
-}));
-
-vi.mock('@fastgpt/service/core/workflow/dispatch/ai/agent/sub/file', () => ({
-  dispatchFileRead: dispatchFileReadMock
+  dispatchToolMock: vi.fn()
 }));
 
 vi.mock('@fastgpt/service/core/workflow/dispatch/ai/agent/sub/tool/utils', () => ({
@@ -20,94 +20,61 @@ vi.mock('@fastgpt/service/core/workflow/dispatch/ai/agent/sub/dataset', () => ({
   dispatchAgentDatasetSearch: dispatchAgentDatasetSearchMock
 }));
 
-describe('Agent read_files tool protocol', () => {
-  it('exposes read_files with ids parameter', async () => {
-    const { completionTools } = await getSubapps({
-      tmbId: 'tmb_1',
-      tools: [],
-      hasFiles: true,
-      hasDataset: false
-    });
+vi.mock('@fastgpt/service/core/workflow/dispatch/ai/agent/sub/tool', () => ({
+  dispatchTool: dispatchToolMock
+}));
 
-    expect(completionTools).toContain(readFileTool);
-    expect(readFileTool.function.name).toBe(SubAppIds.readFiles);
+describe('Agent read_files tool protocol', () => {
+  it('defines read_files with urls parameter', async () => {
+    const readFileTool = createReadFilesTool({ maxFileAmount: 3 });
+
+    expect(readFileTool.function.name).toBe(READ_FILES_TOOL_NAME);
     expect(readFileTool.function.parameters).toEqual({
       type: 'object',
       properties: {
-        ids: {
+        urls: {
           type: 'array',
+          maxItems: 3,
           items: {
             type: 'string'
           },
-          description: '文件 ID'
+          description: 'Absolute HTTP(S) file URLs'
         }
       },
-      required: ['ids']
+      required: ['urls']
     });
   });
 
-  it('dispatches read_files by ids', async () => {
-    dispatchFileReadMock.mockResolvedValue({
-      response: 'file content',
-      usages: [],
-      nodeResponse: {
-        moduleName: '文件解析'
-      }
-    });
-    const executeTool = getExecuteTool({
-      checkIsStopping: vi.fn(),
-      chatConfig: {},
-      runningUserInfo: {
-        teamId: 'team_1',
-        tmbId: 'tmb_1'
-      },
-      runningAppInfo: {
-        id: 'app_1'
-      },
-      chatId: 'chat_1',
-      uid: 'user_1',
-      variableState: {} as any,
-      externalProvider: {
-        openaiAccount: undefined
-      } as any,
-      lang: 'zh-CN',
-      requestOrigin: '',
-      mode: 'chat',
-      timezone: 'Asia/Shanghai',
-      retainDatasetCite: false,
-      maxRunTimes: 10,
-      workflowDispatchDeep: 0,
-      params: {
-        model: 'gpt-4'
-      },
-      stream: false,
-      getSubAppInfo: () => ({
-        name: '文件解析',
-        avatar: '',
-        toolDescription: ''
-      }),
-      getSubApp: () => undefined,
-      completionTools: [readFileTool],
-      filesMap: {
-        'current-0': '/current.pdf'
-      }
-    } as any);
-
-    await executeTool({
-      callId: 'call_read_files',
-      toolId: SubAppIds.readFiles,
-      args: '{"ids":["current-0"]}'
+  it('does not expose read file as a runtime subapp tool', async () => {
+    const { completionTools } = await getSubapps({
+      tmbId: 'tmb_1',
+      tools: []
     });
 
-    expect(dispatchFileReadMock).toHaveBeenCalledTimes(1);
-    expect(dispatchFileReadMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        files: [{ id: 'current-0', url: '/current.pdf' }]
-      })
+    expect(completionTools).toEqual([]);
+  });
+
+  it('does not expose dataset search as a runtime subapp tool', async () => {
+    const { completionTools } = await getSubapps({
+      tmbId: 'tmb_1',
+      tools: []
+    });
+
+    expect(completionTools.map((tool) => tool.function.name)).not.toContain(
+      SubAppIds.datasetSearch
     );
   });
 
-  it('passes external OpenAI account to dataset search tool', async () => {
+  it('does not expose sandbox tools from subapp collection', async () => {
+    const { completionTools } = await getSubapps({
+      tmbId: 'tmb_1',
+      tools: []
+    });
+
+    expect(completionTools.map((tool) => tool.function.name)).toEqual([]);
+  });
+
+  it('does not dispatch dataset search through runtime subapp executor', async () => {
     const userKey = {
       key: 'user-key',
       baseUrl: 'https://llm.example.com/v1'
@@ -156,20 +123,63 @@ describe('Agent read_files tool protocol', () => {
         toolDescription: ''
       }),
       getSubApp: () => undefined,
-      completionTools: [],
-      filesMap: {}
+      completionTools: []
     } as any);
 
     await executeTool({
       callId: 'call_dataset_search',
       toolId: SubAppIds.datasetSearch,
-      args: '{"query":"FastGPT"}'
+      args: '{"query":["FastGPT"]}'
     });
 
-    expect(dispatchAgentDatasetSearchMock).toHaveBeenCalledWith(
+    expect(dispatchAgentDatasetSearchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not forward child tool streams from Agent', async () => {
+    const streamResponseFn = vi.fn();
+    dispatchToolMock.mockResolvedValue({ response: 'ok' });
+    const executeTool = getExecuteTool({
+      checkIsStopping: vi.fn(),
+      chatConfig: {},
+      runningUserInfo: { teamId: 'team_1', tmbId: 'tmb_1' },
+      runningAppInfo: { id: 'app_1' },
+      chatId: 'chat_1',
+      uid: 'user_1',
+      variableState: {} as any,
+      externalProvider: {} as any,
+      lang: 'zh-CN',
+      requestOrigin: '',
+      mode: 'chat',
+      timezone: 'Asia/Shanghai',
+      retainDatasetCite: false,
+      maxRunTimes: 10,
+      workflowDispatchDeep: 0,
+      params: { model: 'gpt-4' },
+      stream: true,
+      streamResponseFn,
+      getSubAppInfo: () => ({ name: 'System Tool', avatar: '', toolDescription: '' }),
+      getSubApp: () => ({
+        type: 'tool',
+        id: 'system-tool',
+        name: 'System Tool',
+        avatar: '',
+        toolConfig: { systemTool: { toolId: 'systemTool-test' } },
+        params: {}
+      }),
+      completionTools: []
+    } as any);
+
+    await executeTool({
+      callId: 'call_system_tool',
+      toolId: 'system-tool',
+      args: '{}'
+    });
+
+    expect(dispatchToolMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        userKey
+        workflowStreamResponse: undefined
       })
     );
+    expect(streamResponseFn).not.toHaveBeenCalled();
   });
 });

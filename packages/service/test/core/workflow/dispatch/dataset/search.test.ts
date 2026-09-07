@@ -23,6 +23,7 @@ vi.mock('@fastgpt/service/core/dataset/search', () => ({
 }));
 
 vi.mock('@fastgpt/service/core/dataset/schema', () => ({
+  DatasetCollectionName: 'datasets',
   MongoDataset: {
     findById: findDatasetByIdMock
   }
@@ -33,11 +34,39 @@ vi.mock('@fastgpt/service/core/dataset/utils', () => ({
 }));
 
 vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getEmbeddingModel: vi.fn(() => ({
+  getEmbeddingModelData: vi.fn(() => ({
+    modelId: '68ad85a7463006c963799a01',
     model: 'embedding-model',
-    name: 'Embedding Model'
+    name: 'Embedding Model',
+    type: 'embedding',
+    config: {}
   })),
-  getRerankModel: vi.fn(() => undefined)
+  getLLMModelData: vi.fn(() => ({
+    modelId: '68ad85a7463006c963799a02',
+    model: 'gpt-query',
+    name: 'gpt-query name',
+    type: 'llm',
+    config: {}
+  })),
+  getRerankModelData: vi.fn(() => undefined),
+  getVlmModelData: vi.fn(() => ({
+    modelId: '68ad85a7463006c963799a03',
+    model: 'vision-model',
+    name: 'gpt-vision name',
+    type: 'llm',
+    config: { vision: true }
+  })),
+  getOptionalVlmModelData: vi.fn(({ modelId, model }) =>
+    modelId || model
+      ? {
+          modelId: '68ad85a7463006c963799a03',
+          model: 'vision-model',
+          name: 'gpt-vision name',
+          type: 'llm',
+          config: { vision: true }
+        }
+      : undefined
+  )
 }));
 
 vi.mock('@fastgpt/service/support/wallet/usage/utils', () => ({
@@ -51,7 +80,8 @@ describe('dispatchDatasetSearch', () => {
     vi.clearAllMocks();
     findDatasetByIdMock.mockReturnValue({
       lean: vi.fn().mockResolvedValue({
-        vectorModel: 'embedding-model'
+        vectorModel: 'embedding-model',
+        vlmModel: 'gpt-vision'
       })
     });
     formatModelChars2PointsMock.mockImplementation(
@@ -60,11 +90,11 @@ describe('dispatchDatasetSearch', () => {
         inputTokens = 0,
         outputTokens = 0
       }: {
-        model?: string;
+        model?: string | { model: string; name: string };
         inputTokens?: number;
         outputTokens?: number;
       }) => ({
-        modelName: `${model || 'unknown'} name`,
+        modelName: typeof model === 'string' ? `${model || 'unknown'} name` : model?.name,
         totalPoints: (inputTokens + outputTokens) / 100
       })
     );
@@ -136,7 +166,7 @@ describe('dispatchDatasetSearch', () => {
         textOutput: 'origin\nexpanded'
       })
     ]);
-    expect(nodeResponse?.childTotalPoints).toBe(0.15);
+    expect(nodeResponse?.childTotalPoints).toBeUndefined();
     expect(usagePushMock).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
@@ -266,7 +296,7 @@ describe('dispatchDatasetSearch', () => {
       id: 'req_image_caption_1',
       nodeId: 'req_image_caption_1',
       moduleType: FlowNodeTypeEnum.datasetSearchNode,
-      moduleName: 'account_usage:image_parse',
+      moduleName: 'chat:image_parse',
       moduleLogo: 'core/workflow/template/datasetSearch',
       runningTime: 1.5,
       model: 'gpt-vision name',

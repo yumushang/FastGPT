@@ -14,11 +14,7 @@ import { useRouter } from 'next/router';
 import FolderSlideCard from '@/components/common/folder/SlideCard';
 import { delAppById, resumeInheritPer } from '@/web/core/app/api';
 import { AppRoleList } from '@fastgpt/global/support/permission/app/constant';
-import {
-  deleteAppCollaborators,
-  getCollaboratorList,
-  postUpdateAppCollaborators
-} from '@/web/core/app/api/collaborator';
+import { getCollaboratorList, postUpdateAppCollaborators } from '@/web/core/app/api/collaborator';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
@@ -29,9 +25,16 @@ import { getUtmWorkflow } from '@/web/support/marketing/utils';
 import { useMount } from 'ahooks';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import {
+  canCreateSubFolder,
+  DEFAULT_MAX_FOLDER_DEPTH
+} from '@fastgpt/global/common/parentFolder/depth';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
 import TemplateCreatePanel from '@/pageComponents/dashboard/agent/TemplateCreatePanel';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import AppListFilters from '@/pageComponents/dashboard/agent/filters/AppListFilters';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
@@ -53,10 +56,16 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     folderDetail,
     refetchFolderDetail,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    listFilters,
+    setListFilters
   } = useContextSelector(AppListContext, (v) => v);
   const [editFolder, setEditFolder] = useState<EditFolderFormType>();
   const { userInfo } = useUserStore();
+  const { feConfigs } = useSystemStore();
+  const maxFolderDepth = feConfigs?.limit?.maxFolderDepth ?? DEFAULT_MAX_FOLDER_DEPTH;
+  const canCreateFolder = canCreateSubFolder(parentId, paths, maxFolderDepth);
+  const folderDepthLimitTip = t('common:folder_depth_limit_tip');
 
   const {
     isOpen: isOpenJsonImportModal,
@@ -110,11 +119,11 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
         >
           {/* Only shown on pc root page */}
           {!folderDetail && isPc && hasCreatePer && <TemplateCreatePanel type={appType} />}
-          <Flex alignItems={'center'}>
+          <Flex alignItems={'center'} gap={3} minW={0}>
             {!isPc ? (
               MenuIcon
             ) : paths.length > 0 ? (
-              <Box>
+              <Box flexShrink={0}>
                 <FolderPath
                   paths={paths}
                   hoverStyle={{ bg: 'myGray.200' }}
@@ -130,44 +139,49 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                 />
               </Box>
             ) : (
-              <Box color={'myGray.900'} fontSize={'20px'} fontWeight={'medium'}>
+              <Box color={'myGray.900'} fontSize={'20px'} fontWeight={'medium'} flexShrink={0}>
                 Agent
               </Box>
             )}
+            {isPc && (
+              <>
+                <Box flexShrink={0} maxW={'250px'}>
+                  <SearchInput
+                    maxW={'250px'}
+                    value={searchKey}
+                    bg={'white'}
+                    onChange={(e) => setSearchKey(e.target.value)}
+                    placeholder={t('app:search_agent')}
+                    maxLength={30}
+                  />
+                </Box>
+                <AppListFilters scene={'agent'} value={listFilters} onChange={setListFilters} />
+              </>
+            )}
             <Flex flex={1} />
-            <Flex alignItems={'center'} gap={3}>
-              {isPc && (
-                <SearchInput
-                  maxW={['auto', '250px']}
-                  value={searchKey}
-                  bg={'white'}
-                  onChange={(e) => setSearchKey(e.target.value)}
-                  placeholder={t('app:search_agent')}
-                  maxLength={30}
-                />
-              )}
-
-              {hasCreatePer && (
-                <>
+            {isPc && hasCreatePer && (
+              <Flex alignItems={'center'} gap={3}>
+                <MyTooltip label={canCreateFolder ? '' : folderDepthLimitTip}>
                   <Button
                     variant={'grayBase'}
                     leftIcon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
                     onClick={() => setEditFolder({})}
+                    isDisabled={!canCreateFolder}
                     px={5}
                   >
                     {t('common:Folder')}
                   </Button>
-                  <Button
-                    variant={'grayBase'}
-                    leftIcon={<MyIcon name={'common/importLight'} w={'14px'} />}
-                    onClick={onOpenJsonImportModal}
-                    px={5}
-                  >
-                    {t('common:Import')}
-                  </Button>
-                </>
-              )}
-            </Flex>
+                </MyTooltip>
+                <Button
+                  variant={'grayBase'}
+                  leftIcon={<MyIcon name={'common/importLight'} w={'14px'} />}
+                  onClick={onOpenJsonImportModal}
+                  px={5}
+                >
+                  {t('common:Import')}
+                </Button>
+              </Flex>
+            )}
           </Flex>
           {!isPc && (
             <Box mt={2}>
@@ -219,12 +233,7 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                     ...props,
                     appId: folderDetail._id
                   }),
-                refreshDeps: [folderDetail._id, folderDetail.inheritPermission],
-                onDelOneCollaborator: async (params) =>
-                  deleteAppCollaborators({
-                    ...params,
-                    appId: folderDetail._id
-                  })
+                refreshDeps: [folderDetail._id, folderDetail.inheritPermission]
               }}
             />
           </Box>
@@ -239,7 +248,9 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
           onEdit={({ id, ...data }) => onUpdateApp(id, data)}
         />
       )}
-      {isOpenJsonImportModal && <JsonImportModal onClose={onCloseJsonImportModal} />}
+      {isOpenJsonImportModal && (
+        <JsonImportModal scene={'agent'} onClose={onCloseJsonImportModal} />
+      )}
     </Flex>
   );
 };

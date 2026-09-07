@@ -33,6 +33,7 @@ export const ToolCallNode: FlowNodeTemplateType = {
   name: i18nT('workflow:template.agent'),
   intro: i18nT('workflow:template.agent_intro'),
   showStatus: true,
+  isTool: true,
   catchError: false,
   courseUrl: '/guide/build/workflow/nodes/tool',
   version: '4.9.2',
@@ -59,6 +60,27 @@ export const ToolCallNode: FlowNodeTemplateType = {
     },
     {
       key: NodeInputKeyEnum.aiChatVision,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
+      key: NodeInputKeyEnum.aiChatAudio,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
+      key: NodeInputKeyEnum.aiChatVideo,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
+      key: NodeInputKeyEnum.aiChatExtractFiles,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
       valueType: WorkflowIOValueTypeEnum.boolean,
@@ -111,13 +133,26 @@ export const ToolCallNode: FlowNodeTemplateType = {
       value: false
     },
     {
+      key: NodeInputKeyEnum.sandboxEntrypoint,
+      renderTypeList: [FlowNodeInputTypeEnum.custom],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.string
+    },
+    {
       ...Input_Template_System_Prompt,
       label: i18nT('common:core.ai.Prompt'),
       description: systemPromptTip,
-      placeholder: chatNodeSystemPromptTip
+      placeholder: chatNodeSystemPromptTip,
+      toolDescription: i18nT('common:core.ai.Prompt')
     },
-    Input_Template_History,
-    Input_Template_File_Link,
+    {
+      ...Input_Template_History,
+      toolDescription: i18nT('common:core.module.input.label.chat history')
+    },
+    {
+      ...Input_Template_File_Link,
+      toolDescription: i18nT('app:workflow.user_file_input')
+    },
     Input_Template_UserChatInput
   ],
   outputs: [

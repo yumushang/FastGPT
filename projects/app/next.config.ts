@@ -30,7 +30,6 @@ const securityHeaders = [
 const optimizedPackageImports = [
   '@chakra-ui/react',
   '@chakra-ui/icons',
-  'lodash',
   'framer-motion',
   '@emotion/react',
   '@emotion/styled'
@@ -45,7 +44,7 @@ const nextConfig: NextConfig = {
   },
   i18n: {
     defaultLocale: 'en',
-    locales: ['en', 'zh-CN', 'zh-Hant'],
+    locales: ['en', 'zh-CN', 'zh-Hant', 'ko-KR'],
     localeDetection: false
   },
   output: 'standalone',
@@ -76,7 +75,6 @@ const nextConfig: NextConfig = {
     '@node-rs/jieba',
     'bullmq',
     '@zilliz/milvus2-sdk-node',
-    'tiktoken',
     '@opentelemetry/api-logs',
     '@mariozechner/pi-agent-core',
     '@mariozechner/pi-ai'
@@ -84,8 +82,6 @@ const nextConfig: NextConfig = {
   // 优化大库的 barrel exports tree-shaking
   experimental: {
     optimizePackageImports: optimizedPackageImports,
-    // 按页面拆分 CSS chunk，减少首屏 CSS 体积
-    cssChunking: 'strict',
     // 减少内存占用
     memoryBasedWorkersCount: true,
 
@@ -93,6 +89,10 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: false
   },
   outputFileTracingRoot: path.join(__dirname, '../../'),
+  outputFileTracingIncludes: {
+    // Node 24 resolves @swc/helpers through module-sync, but Next 16.3 does not trace all ESM helpers.
+    '*': ['../../node_modules/.pnpm/@swc+helpers@*/node_modules/@swc/helpers/esm/**/*']
+  },
   // Exclude build-time-only packages from standalone output file tracing
   outputFileTracingExcludes: {
     '*': [

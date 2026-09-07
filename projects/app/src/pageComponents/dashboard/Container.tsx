@@ -2,7 +2,7 @@ import { Box, Divider, Flex, useDisclosure } from '@chakra-ui/react';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { useTranslation } from 'next-i18next';
 import { useEffect, useMemo } from 'react';
-import { AppTemplateTypeEnum, AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { AppTemplateTypeEnum } from '@fastgpt/global/core/app/constants';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { useRouter } from 'next/router';
 import MyIcon from '@fastgpt/web/components/common/Icon';
@@ -11,9 +11,10 @@ import { navbarWidth } from '@/components/Layout';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { getTemplateMarketItemList, getTemplateTagList } from '@/web/core/app/api/template';
-import type { AppTemplateSchemaType, TemplateTypeSchemaType } from '@fastgpt/global/core/app/type';
+import type { TemplateTypeSchemaType } from '@fastgpt/global/core/app/type';
 import TeamPlanStatusCard from './TeamPlanStatusCard';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import type { AppTemplateListItemType } from '@fastgpt/global/openapi/core/app/template/api';
 
 export enum TabEnum {
   agent = 'agent',
@@ -31,7 +32,7 @@ const DashboardContainer = ({
 }: {
   children: (e: {
     templateTags: TemplateTypeSchemaType[];
-    templateList: AppTemplateSchemaType[];
+    templateList: AppTemplateListItemType[];
     MenuIcon: JSX.Element;
   }) => React.ReactNode;
 }) => {
@@ -52,9 +53,8 @@ const DashboardContainer = ({
   }, [router.asPath]);
 
   // Sub tab
-  const { type: currentType, appType } = router.query as {
+  const { type: currentType } = router.query as {
     type: string;
-    appType?: AppTypeEnum | 'all';
   };
 
   useEffect(() => {
@@ -86,11 +86,11 @@ const DashboardContainer = ({
   const { data: templateData, loading: isLoadingTemplates } = useRequest(
     () =>
       currentTab === TabEnum.app_templates && hasAppCreatePer
-        ? getTemplateMarketItemList({ type: appType })
+        ? getTemplateMarketItemList({ type: 'all' })
         : Promise.resolve({ list: [], total: 0 }),
     {
       manual: false,
-      refreshDeps: [currentTab, appType, hasAppCreatePer]
+      refreshDeps: [currentTab, hasAppCreatePer]
     }
   );
   const templateList = useMemo(() => templateData?.list ?? [], [templateData?.list]);
@@ -112,61 +112,22 @@ const DashboardContainer = ({
       {
         groupId: TabEnum.agent,
         groupAvatar: 'core/chat/sidebar/star',
-        groupName: 'Agent',
-        children: [
-          {
-            isActive: !currentType,
-            typeId: 'all',
-            typeName: t('app:type.All')
-          },
-          {
-            typeId: AppTypeEnum.workflow,
-            typeName: t('app:type.Workflow bot')
-          },
-
-          {
-            typeId: AppTypeEnum.simple,
-            typeName: t('app:type.Chat_Agent')
-          },
-          {
-            typeId: AppTypeEnum.chatAgent,
-            typeName: t('app:type.Chat_Agent_v2')
-          }
-        ]
+        groupName: 'Agents',
+        // 类型筛选已移到 Agent 列表工具栏，侧栏不再挂二级菜单。
+        children: []
       },
-      ...(feConfigs?.show_skill
-        ? [
-            {
-              groupId: TabEnum.skill,
-              groupAvatar: 'common/skill',
-              groupName: 'Skill',
-              children: []
-            }
-          ]
-        : []),
+      {
+        groupId: TabEnum.skill,
+        groupAvatar: 'common/skill',
+        groupName: t('common:navbar.Skill'),
+        children: []
+      },
       {
         groupId: TabEnum.tool,
         groupAvatar: 'core/app/type/plugin',
         groupName: t('common:navbar.Tools'),
-        children: [
-          {
-            isActive: !currentType,
-            typeId: 'all',
-            typeName: t('app:type.All')
-          },
-          {
-            typeId: 'plugin',
-            typeName: t('app:toolType_workflow')
-          },
-          {
-            typeId: 'httpToolSet',
-            typeName: t('app:toolType_http')
-          },
-          {
-            typeId: 'toolSet',
-            typeName: t('app:toolType_mcp')
-          }
-        ]
+        // 类型筛选已移到工具列表工具栏，侧栏不再挂二级菜单。
+        children: []
       },
       {
         groupId: TabEnum.system_tool,
@@ -180,35 +141,8 @@ const DashboardContainer = ({
               groupId: TabEnum.app_templates,
               groupAvatar: 'common/templateMarket',
               groupName: t('common:template_market'),
-              children: [
-                ...templateTags
-                  .map((tag) => {
-                    const templates = templateList.filter((template) =>
-                      template.tags.includes(tag.typeId)
-                    );
-                    return {
-                      ...tag,
-                      templates
-                    };
-                  })
-                  .filter((tag) => tag.templates.length > 0)
-                  .map((tag, index) => ({
-                    typeId: tag.typeId,
-                    typeName: t(tag.typeName as any),
-                    isActive: index === 0 && !currentType
-                  })),
-                ...(feConfigs?.appTemplateCourse
-                  ? [
-                      {
-                        typeId: AppTemplateTypeEnum.contribute,
-                        typeName: t('common:contribute_app_template'),
-                        onClick: () => {
-                          window.open(feConfigs.appTemplateCourse);
-                        }
-                      }
-                    ]
-                  : [])
-              ]
+              // 分类筛选已移到模板市场工具栏，侧栏不再挂二级菜单。
+              children: []
             }
           ]
         : []),
@@ -229,16 +163,7 @@ const DashboardContainer = ({
           ]
         : [])
     ];
-  }, [
-    currentType,
-    feConfigs.appTemplateCourse,
-    feConfigs?.isPlus,
-    feConfigs?.show_skill,
-    hasAppCreatePer,
-    t,
-    templateList,
-    templateTags
-  ]);
+  }, [feConfigs.isPlus, hasAppCreatePer, t]);
 
   const MenuIcon = useMemo(
     () => (

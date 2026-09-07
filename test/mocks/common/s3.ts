@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { createVitestStorageMock } from '../../../sdk/storage/src/testing/vitestMock';
+import { createVitestStorageMock } from '../../../sdk/storage/src/helper/mock';
 
 const mockStorageByBucket = new Map<string, ReturnType<typeof createVitestStorageMock>>();
 const getMockStorage = (bucketName: string) => {
@@ -28,8 +28,8 @@ const createMockS3Bucket = (bucketName = 'mock-bucket') => {
     putObject: vi.fn(async (key: string, body: any) => {
       await client.uploadObject({ key, body });
     }),
-    getFileStream: vi.fn(async (key: string) => {
-      const res = await client.downloadObject({ key });
+    getFileStream: vi.fn(async (key: string, options?: { abortSignal?: AbortSignal }) => {
+      const res = await client.downloadObject({ key, abortSignal: options?.abortSignal });
       return res.body;
     }),
     statObject: vi.fn(async (key: string) => {
@@ -129,6 +129,25 @@ const createMockBucketClass = (defaultName: string) => {
     async delete() {}
     async putObject(key: string, body: any) {
       await this.client.uploadObject({ key, body });
+    }
+    async uploadFileByBody(params: {
+      key: string;
+      body: any;
+      contentType?: string;
+      filename?: string;
+    }) {
+      await this.client.uploadObject({
+        key: params.key,
+        body: params.body,
+        contentType: params.contentType,
+        metadata: {
+          originFilename: encodeURIComponent(params.filename || 'mock-file')
+        }
+      });
+      return {
+        key: params.key,
+        accessUrl: await this.createExternalUrl({ key: params.key })
+      };
     }
     async getFileStream() {
       return null;

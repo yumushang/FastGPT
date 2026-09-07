@@ -5,10 +5,9 @@ import {
 } from '@fastgpt/global/openapi/core/ai/api';
 import { NextAPI } from '@/service/middleware/entry';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
 import { ChatGenerateStatusEnum } from '@fastgpt/global/core/chat/constants';
 import {
-  DispatchNodeResponseKeyEnum,
   StreamResumeCompletedEvent,
   StreamResumePhaseEnum,
   StreamResumePhaseEvent,
@@ -22,8 +21,13 @@ import {
 } from '@fastgpt/service/core/chat/resume';
 import { getChatItems } from '@fastgpt/service/core/chat/controller';
 import { addPreviewUrlToChatItems } from '@fastgpt/service/core/chat/utils';
-import { transformPreviewHistories } from '@/global/core/chat/utils';
+import {
+  chatItemResponsePreviewProjection,
+  transformPreviewHistories
+} from '@/global/core/chat/utils';
 import { delay } from '@fastgpt/global/common/system/utils';
+import { buildChatSourceQuery } from '@fastgpt/service/core/chat/source';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 const completedChatPageSize = 10;
 const resumeUnavailablePollIntervalMs = 3000;
@@ -81,32 +85,28 @@ export const config = {
   }
 };
 
-// GET /api/core/chat/resume?chatId=xxx&appId=xxx&teamId=xxx（与 /v2/chat/completions 配套，断线续传）
+// GET /api/core/chat/resume?chatId=xxx&appId=xxx 或 skillId=xxx（断线续传）
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const {
-    chatId,
-    appId,
-    teamId: requestTeamId,
-    teamToken,
-    shareId,
-    outLinkUid
-  } = await ResumeStreamParamsSchema.parseAsync(req.query);
+  const { chatId, sourceType, sourceId, outLinkAuthData } = parseApiInput({
+    req,
+    querySchema: ResumeStreamParamsSchema
+  }).query;
   const respondWithSse = shouldRespondWithSse(req);
 
-  const { teamId, showCite = true } = await authChatCrud({
-    appId,
+  const authRes = await authChatTargetCrud({
+    sourceType,
+    sourceId,
     req,
     chatId,
-    teamId: requestTeamId,
-    teamToken,
-    shareId,
-    outLinkUid,
+    outLinkAuthData,
     authToken: true
   });
+  const { teamId, showCite = true } = authRes;
+  const resolvedSourceId = authRes.sourceId;
 
   const findCurrentChat = async (): Promise<CurrentChatState> => {
     const chat = await MongoChat.findOne(
-      { chatId, appId },
+      { chatId, ...buildChatSourceQuery({ sourceType, sourceId: resolvedSourceId }) },
       { hasBeenRead: 1, chatGenerateStatus: 1 }
     ).lean();
     if (!chat) {
@@ -121,15 +121,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const findCompletedChat = async (): Promise<StreamNoNeedToBeResumeType> => {
     const chat = await findCurrentChat();
     const result = await getChatItems({
-      appId,
+      sourceType,
+      sourceId: resolvedSourceId,
       chatId,
-      field: `obj value adminFeedback userGoodFeedback userBadFeedback time hideInUI durationSeconds errorMsg ${DispatchNodeResponseKeyEnum.nodeResponse} customFeedbacks isFeedbackRead deleteTime`,
-      limit: completedChatPageSize
+      field:
+        'obj value adminFeedback userGoodFeedback userBadFeedback time hideInUI durationSeconds errorMsg customFeedbacks isFeedbackRead deleteTime',
+      limit: completedChatPageSize,
+      nodeResponseMode: 'preview',
+      nodeResponsePreviewProjection: chatItemResponsePreviewProjection
     });
 
-    await addPreviewUrlToChatItems(result.histories, 'chatFlow');
+    const histories = await addPreviewUrlToChatItems(result.histories, 'chatFlow');
 
-    const list = transformPreviewHistories(result.histories, showCite).map((item) => ({
+    const list = transformPreviewHistories(histories, showCite).map((item) => ({
       ...item,
       id: item.dataId!
     }));
@@ -147,7 +151,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   };
 
   const makeSureTheCompletedChatHasBeenRead = async () => {
-    await MongoChat.updateOne({ appId, chatId }, { $set: { hasBeenRead: true } });
+    await MongoChat.updateOne(
+      { ...buildChatSourceQuery({ sourceType, sourceId: resolvedSourceId }), chatId },
+      { $set: { hasBeenRead: true } }
+    );
   };
 
   const waitForCompletedChat = async () => {
@@ -207,7 +214,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const unavailableState = await getStreamResumeUnavailableState({
     teamId,
-    appId,
+    sourceType,
+    sourceId: resolvedSourceId,
     chatId
   });
 
@@ -224,10 +232,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return;
   }
 
-  const cursor = await catchUpAllHistoryItems({ res, teamId, appId, chatId });
+  const cursor = await catchUpAllHistoryItems({
+    res,
+    teamId,
+    sourceType,
+    sourceId: resolvedSourceId,
+    chatId
+  });
 
   writeResumePhase(res, StreamResumePhaseEnum.live);
-  await _resume({ res, teamId, appId, chatId, cursor });
+  await _resume({ res, teamId, sourceType, sourceId: resolvedSourceId, chatId, cursor });
 
   res.end();
 }

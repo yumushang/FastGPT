@@ -1,39 +1,47 @@
 import type { OpenAPIPath } from '../../../type';
-import { TagsMap } from '../../../tag';
+import { DevApiTagsMap } from '../../../tag';
 import {
-  SandboxListBodySchema,
-  SandboxListResponseSchema,
-  SandboxWriteBodySchema,
-  SandboxWriteResponseSchema,
-  SandboxReadBodySchema,
-  SandboxReadResponseSchema,
-  SandboxDownloadBodySchema,
+  SandboxDownloadBodyRawSchema,
   SandboxDownloadResponseSchema,
-  SandboxCheckExistBodySchema,
+  SandboxUploadFileSchema,
+  SandboxUploadQueryRawSchema,
+  SandboxUploadResponseSchema,
+  SandboxCheckExistBodyRawSchema,
   SandboxCheckExistResponseSchema,
-  SandboxGetHtmlPreviewLinkBodySchema,
-  SandboxGetHtmlPreviewLinkResponseSchema
+  SandboxGetTicketBodyRawSchema,
+  SandboxGetTicketResponseSchema,
+  SandboxGetHtmlPreviewLinkBodyRawSchema,
+  SandboxGetHtmlPreviewLinkResponseSchema,
+  SandboxKeepaliveBodySchema,
+  SandboxKeepaliveResponseSchema,
+  SandboxProxyHeaderSchema,
+  SandboxVerifyTicketDocumentQuerySchema,
+  SandboxVerifyTicketHeaderSchema,
+  SandboxVerifyTicketResponseSchema
 } from './api';
 
 export const SandboxPath: OpenAPIPath = {
-  '/core/ai/sandbox/list': {
+  '/core/ai/sandbox/keepalive': {
     post: {
-      summary: '列出沙盒目录',
-      description: '列出指定目录下的文件和子目录',
-      tags: [TagsMap.sandbox],
+      summary: '刷新沙盒会话活跃时间',
+      description: '仅供 agent-sandbox-proxy 内部调用，刷新指定沙盒实例的活跃时间',
+      tags: [DevApiTagsMap.reverseInvokeSandbox],
+      requestParams: {
+        header: SandboxProxyHeaderSchema
+      },
       requestBody: {
         content: {
           'application/json': {
-            schema: SandboxListBodySchema
+            schema: SandboxKeepaliveBodySchema
           }
         }
       },
       responses: {
         200: {
-          description: '目录内容',
+          description: '成功刷新沙盒会话活跃时间',
           content: {
             'application/json': {
-              schema: SandboxListResponseSchema
+              schema: SandboxKeepaliveResponseSchema
             }
           }
         }
@@ -41,48 +49,22 @@ export const SandboxPath: OpenAPIPath = {
     }
   },
 
-  '/core/ai/sandbox/write': {
-    post: {
-      summary: '写入沙盒文件',
-      description: '将内容写入指定路径的文件',
-      tags: [TagsMap.sandbox],
-      requestBody: {
-        content: {
-          'application/json': {
-            schema: SandboxWriteBodySchema
-          }
-        }
+  '/core/ai/sandbox/verifyTicket': {
+    get: {
+      summary: '校验沙盒访问凭证',
+      description:
+        '仅供 agent-sandbox-proxy 内部调用。ticket 查询参数与 x-sandbox-preview-session 请求头二选一，并且必须携带 x-proxy-token。',
+      tags: [DevApiTagsMap.reverseInvokeSandbox],
+      requestParams: {
+        query: SandboxVerifyTicketDocumentQuerySchema,
+        header: SandboxVerifyTicketHeaderSchema
       },
       responses: {
         200: {
-          description: '写入成功',
+          description: '成功返回沙盒连接信息和 WebSocket 限制',
           content: {
             'application/json': {
-              schema: SandboxWriteResponseSchema
-            }
-          }
-        }
-      }
-    }
-  },
-
-  '/core/ai/sandbox/read': {
-    post: {
-      summary: '读取沙盒文件内容',
-      description: '读取文件内容并以对应 MIME 类型内联返回，适用于预览场景',
-      tags: [TagsMap.sandbox],
-      requestBody: {
-        content: {
-          'application/json': {
-            schema: SandboxReadBodySchema
-          }
-        }
-      },
-      responses: {
-        200: {
-          content: {
-            '*/*': {
-              schema: SandboxReadResponseSchema
+              schema: SandboxVerifyTicketResponseSchema
             }
           }
         }
@@ -93,12 +75,12 @@ export const SandboxPath: OpenAPIPath = {
   '/core/ai/sandbox/download': {
     post: {
       summary: '下载沙盒文件或目录',
-      description: '下载指定路径的文件，或将目录打包为 ZIP 下载',
-      tags: [TagsMap.sandbox],
+      description: '下载当前 Chat Session 中的指定文件，或将目录打包为 ZIP 下载',
+      tags: [DevApiTagsMap.sandbox],
       requestBody: {
         content: {
           'application/json': {
-            schema: SandboxDownloadBodySchema
+            schema: SandboxDownloadBodyRawSchema
           }
         }
       },
@@ -114,15 +96,45 @@ export const SandboxPath: OpenAPIPath = {
     }
   },
 
+  '/core/ai/sandbox/upload': {
+    post: {
+      summary: '上传文件到沙盒',
+      description:
+        '将原始二进制请求流直接写入当前 Chat Session 路径，不在 FastGPT 节点生成临时文件',
+      tags: [DevApiTagsMap.sandbox],
+      requestParams: {
+        query: SandboxUploadQueryRawSchema
+      },
+      requestBody: {
+        content: {
+          'application/octet-stream': {
+            schema: SandboxUploadFileSchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '上传结果',
+          content: {
+            'application/json': {
+              schema: SandboxUploadResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+
   '/core/ai/sandbox/getHtmlPreviewLink': {
     post: {
       summary: '获取 HTML 文件预览链接',
-      description: '返回用于在浏览器中预览 HTML 文件的链接（S3 托管）',
-      tags: [TagsMap.sandbox],
+      description:
+        '校验文件后签发短期只读链接，由 agent-proxy 直接转发 sandbox workspace 内容，不复制到对象存储',
+      tags: [DevApiTagsMap.sandbox],
       requestBody: {
         content: {
           'application/json': {
-            schema: SandboxGetHtmlPreviewLinkBodySchema
+            schema: SandboxGetHtmlPreviewLinkBodyRawSchema
           }
         }
       },
@@ -142,12 +154,12 @@ export const SandboxPath: OpenAPIPath = {
   '/core/ai/sandbox/checkExist': {
     post: {
       summary: '检查沙盒是否存在',
-      description: '根据 appId 和 chatId 检查对应的沙盒实例是否存在',
-      tags: [TagsMap.sandbox],
+      description: '根据 Chat 目标和有效用户检查对应的用户级沙盒实例是否存在',
+      tags: [DevApiTagsMap.sandbox],
       requestBody: {
         content: {
           'application/json': {
-            schema: SandboxCheckExistBodySchema
+            schema: SandboxCheckExistBodyRawSchema
           }
         }
       },
@@ -157,6 +169,31 @@ export const SandboxPath: OpenAPIPath = {
           content: {
             'application/json': {
               schema: SandboxCheckExistResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+
+  '/core/ai/sandbox/getTicket': {
+    post: {
+      summary: '获取沙盒 WebSocket 临时凭证',
+      description: '鉴权并返回用于连接 agent-sandbox-proxy 的短期 ticket 和当前会话目录',
+      tags: [DevApiTagsMap.sandbox],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: SandboxGetTicketBodyRawSchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '返回沙盒 WebSocket 临时凭证和运行时目录',
+          content: {
+            'application/json': {
+              schema: SandboxGetTicketResponseSchema
             }
           }
         }

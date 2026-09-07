@@ -10,8 +10,12 @@ export type OpenedFile = {
   language: string;
   isBinary: boolean;
   isDirty: boolean;
+  isLoading?: boolean;
+  // 通过 HTTP stream read 打开的文件，避免编辑保存时再次走 ide-agent WebSocket。
+  readOnly?: boolean;
   // 非媒体文件 UTF-8 解码失败时为 true，前端走「无法预览」兜底
   isUnknown?: boolean;
+  etag?: string;
 };
 
 type Props = {
@@ -22,73 +26,111 @@ type Props = {
 };
 
 const FileTabs = ({ openedFiles, activeFilePath, setActiveFilePath, closeFile }: Props) => {
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const canScrollX = el.scrollWidth > el.clientWidth;
+    if (!canScrollX) return;
+
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (delta === 0) return;
+
+    e.preventDefault();
+    el.scrollLeft += delta;
+  };
+
   return (
     <Box
       flexShrink={0}
-      p={1}
-      bg="myGray.50"
-      borderRadius="md"
-      border="sm"
-      m={3}
-      mb={0}
-      overflowX="auto"
+      bg="transparent"
+      h="40px"
+      py="4px"
+      px="4px"
+      w="100%"
       overflowY="hidden"
+      onWheel={handleWheel}
       flexWrap="nowrap"
-      css={{
-        '&::-webkit-scrollbar': {
-          height: '6px'
-        },
-        '&::-webkit-scrollbar-thumb': {
-          background: '#E2E8F0',
-          borderRadius: '3px'
-        },
-        '&::-webkit-scrollbar-track': {
-          background: 'transparent'
+      css={`
+        /* overlay 是 Chromium/WebKit 的 legacy 值；先写标准回退，再用 overlay 保持滚动条不占位。 */
+        overflow-x: auto;
+        overflow-x: overlay;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
+
+        &::-webkit-scrollbar {
+          height: 2px;
         }
-      }}
+
+        &::-webkit-scrollbar-thumb {
+          background: rgba(148, 163, 184, 0.6);
+          border-radius: 999px;
+        }
+
+        &::-webkit-scrollbar-track {
+          background: transparent;
+        }
+      `}
     >
-      <Flex gap={2} alignItems={'center'}>
+      <Flex h="full" gap="8px" alignItems={'center'}>
         {openedFiles.map((file) => {
           const active = activeFilePath === file.path;
           return (
             <Flex
               key={file.path}
+              title={file.path}
               px={3}
-              py={1}
-              h={'22px'}
-              bg={active ? 'white' : 'myGray.25'}
-              borderRadius="4px"
+              bg={active ? 'white' : 'transparent'}
+              borderColor={'myGray.200'}
               align="center"
-              gap={1}
+              gap="4px"
               fontSize="12px"
               cursor="pointer"
               onClick={() => setActiveFilePath(file.path)}
-              maxW="150px"
+              maxW="160px"
               flexShrink={0}
               position="relative"
-              boxShadow={'1.5'}
+              h="32px"
+              borderRadius="4px"
+              boxShadow={
+                active
+                  ? '0px 0px 1px rgba(19, 51, 107, 0.15), 0px 1px 2px rgba(19, 51, 107, 0.1)'
+                  : 'none'
+              }
               _hover={{
-                bg: active ? 'white' : 'myGray.50'
+                bg: active ? 'white' : 'rgba(17, 24, 36, 0.05)'
               }}
+              userSelect={'none'}
             >
-              <MyIcon name={getIconByFilename(file.name)} w="16px" color="myGray.600" />
+              <MyIcon
+                name={file.isLoading ? 'common/loading' : getIconByFilename(file.name)}
+                fill="none"
+                w="16px"
+                h="16px"
+                color={active ? 'primary.700' : 'myGray.500'}
+              />
+
               <Text
                 flex={1}
                 noOfLines={1}
-                fontWeight={active ? '500' : '400'}
+                fontWeight="medium"
                 color={active ? 'primary.700' : 'myGray.500'}
               >
                 {file.name}
               </Text>
-              {file.isDirty && <Box w="6px" h="6px" borderRadius="50%" bg="yellow.600" />}
               <MyIcon
                 name="common/closeLight"
                 w="16px"
-                color="myGray.500"
+                h="16px"
+                color="myGray.400"
+                p="3px"
                 _hover={{
-                  color: 'primary.500'
+                  color: 'myGray.700',
+                  bg: 'myGray.100',
+                  borderRadius: 'sm'
                 }}
-                onClick={(e) => closeFile(file.path, e)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeFile(file.path, e);
+                }}
               />
             </Flex>
           );

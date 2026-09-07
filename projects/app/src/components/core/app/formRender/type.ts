@@ -3,11 +3,11 @@ import type {
   EditorVariablePickerType
 } from '@fastgpt/web/components/common/Textarea/PromptEditor/type';
 import type { InputTypeEnum } from './constant';
-import type { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 import type { UseFormReturn } from 'react-hook-form';
 import type { BoxProps, MenuProps } from '@chakra-ui/react';
 import type { EditorProps } from '@fastgpt/web/components/common/Textarea/PromptEditor/Editor';
 import type { SelectedDatasetType } from '@fastgpt/global/core/workflow/type/io';
+import type { OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 
 export type CommonRenderProps = {
   placeholder?: string;
@@ -51,7 +51,8 @@ export type SpecificProps = {
   // JSONEditor - no extra props
 
   // selectLLMModel
-  modelList?: { model: string; name: string }[];
+  modelList?: { modelId?: string; model: string; name: string }[];
+  outLinkAuthData?: OutLinkChatAuthProps;
 
   // fileSelect
   form?: UseFormReturn<any>;
@@ -65,6 +66,7 @@ export type SpecificProps = {
   canSelectCustomFileExtension?: boolean;
   customFileExtensionList?: string[];
   maxFiles?: number;
+  onFileErrorChange?: (hasError: boolean) => void;
 
   // timePointSelect & timeRangeSelect
   timeGranularity?: 'day' | 'hour' | 'minute' | 'second';

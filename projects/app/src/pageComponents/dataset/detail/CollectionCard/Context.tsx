@@ -2,10 +2,12 @@ import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
 import {
   type Dispatch,
   type ReactNode,
+  type RefObject,
   type SetStateAction,
   useState,
   useMemo,
-  useCallback
+  useCallback,
+  useRef
 } from 'react';
 import { useTranslation } from 'next-i18next';
 import { createContext, useContextSelector } from 'use-context-selector';
@@ -18,6 +20,7 @@ import { postDatasetSync } from '@/web/core/dataset/api';
 import dynamic from 'next/dynamic';
 import { usePagination } from '@fastgpt/web/hooks/usePagination';
 import { type DatasetCollectionsListItemType } from '@fastgpt/global/openapi/core/dataset/collection/api';
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
 import { useRouter } from 'next/router';
 import { DatasetPageContext } from '@/web/core/dataset/context/datasetPageContext';
 import { type WebsiteConfigFormType } from './WebsiteConfig';
@@ -34,6 +37,7 @@ type CollectionPageContextType = {
   isGetting: boolean;
   pageNum: number;
   pageSize: number;
+  scrollContainerRef: RefObject<HTMLDivElement>;
   searchText: string;
   setSearchText: Dispatch<SetStateAction<string>>;
   filterTags: string[];
@@ -52,18 +56,19 @@ export const CollectionPageContext = createContext<CollectionPageContextType>({
     throw new Error('Function not implemented.');
   },
   total: 0,
-  getData: function (e: number): void {
+  getData: function (_e: number): void {
     throw new Error('Function not implemented.');
   },
   isGetting: false,
   pageNum: 0,
   pageSize: 0,
+  scrollContainerRef: { current: null },
   searchText: '',
-  setSearchText: function (value: SetStateAction<string>): void {
+  setSearchText: function (_value: SetStateAction<string>): void {
     throw new Error('Function not implemented.');
   },
   filterTags: [],
-  setFilterTags: function (value: SetStateAction<string[]>): void {
+  setFilterTags: function (_value: SetStateAction<string[]>): void {
     throw new Error('Function not implemented.');
   }
 });
@@ -81,6 +86,7 @@ const CollectionPageContextProvider = ({ children }: { children: ReactNode }) =>
   // collection list
   const [searchText, setSearchText] = useState('');
   const [filterTags, setFilterTags] = useState<string[]>([]);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const {
     data: collections,
     Pagination,
@@ -91,6 +97,7 @@ const CollectionPageContextProvider = ({ children }: { children: ReactNode }) =>
     pageSize
   } = usePagination(getDatasetCollections, {
     defaultPageSize: 20,
+    pageSizeCacheKey: 'dataset-detail-collections',
     storeToQuery: true,
     params: {
       datasetId,
@@ -98,10 +105,16 @@ const CollectionPageContextProvider = ({ children }: { children: ReactNode }) =>
       searchText,
       filterTags
     },
-    refreshDeps: [parentId, searchText, filterTags]
+    refreshDeps: [parentId, searchText, filterTags],
+    scrollContainerRef
   });
 
   const syncDataset = useCallback(async () => {
+    // 页面详情尚未加载或 query 缺失时，不发起一个必然失败的同步请求。
+    if (!datasetId || !datasetDetail._id || datasetId !== datasetDetail._id) {
+      return Promise.reject(CommonErrEnum.invalidParams);
+    }
+
     if (datasetDetail.type === DatasetTypeEnum.websiteDataset) {
       await checkTeamWebSyncLimit();
     }
@@ -110,7 +123,7 @@ const CollectionPageContextProvider = ({ children }: { children: ReactNode }) =>
     loadDatasetDetail(datasetId);
 
     getData(pageNum);
-  }, [datasetDetail.type, datasetId, getData, loadDatasetDetail, pageNum]);
+  }, [datasetDetail._id, datasetDetail.type, datasetId, getData, loadDatasetDetail, pageNum]);
   const { runAsync: onSyncDataset } = useRequest(syncDataset, {
     successToast: t('dataset:collection.sync.submit')
   });
@@ -156,7 +169,8 @@ const CollectionPageContextProvider = ({ children }: { children: ReactNode }) =>
       getData,
       isGetting,
       pageNum,
-      pageSize
+      pageSize,
+      scrollContainerRef
     }),
     [
       Pagination,

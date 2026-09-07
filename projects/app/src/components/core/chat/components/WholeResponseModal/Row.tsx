@@ -2,6 +2,17 @@ import { useMemo, type ReactNode } from 'react';
 import { Box, type BoxProps } from '@chakra-ui/react';
 import Markdown from '@/components/Markdown';
 import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import markdownStyles from '../../ChatContainer/ChatBox/components/AIChatBubble/index.module.scss';
+
+export const responseRowValueBoxStyles: BoxProps = {
+  minH: '32px',
+  px: 3,
+  py: 2,
+  border: '1px solid',
+  borderColor: 'myGray.200',
+  color: 'myGray.900',
+  bg: 'myGray.50'
+};
 
 const RowRender = ({
   children,
@@ -33,11 +44,17 @@ const RowRender = ({
 export const Row = ({
   label,
   value,
-  rawDom
+  rawDom,
+  rawDomBoxProps,
+  contentBoxProps,
+  renderStringAsMarkdown = true
 }: {
   label: string;
   value?: string | number | boolean | object;
   rawDom?: ReactNode;
+  rawDomBoxProps?: BoxProps;
+  contentBoxProps?: BoxProps;
+  renderStringAsMarkdown?: boolean;
 }) => {
   const { t } = useSafeTranslation();
   const val = value || rawDom;
@@ -45,17 +62,17 @@ export const Row = ({
 
   const formatValue = useMemo(() => {
     if (isObject) {
-      return `~~~json\n${JSON.stringify(value, null, 2)}`;
+      return `~~~json\n${JSON.stringify(value, null, 2)}\n~~~`;
     }
     if (typeof value === 'string') {
-      return t(value);
+      return renderStringAsMarkdown ? t(value) : value;
     }
     return `${value}`;
-  }, [isObject, t, value]);
+  }, [isObject, renderStringAsMarkdown, t, value]);
 
   if (rawDom) {
     return (
-      <RowRender label={label} bg={'transparent'}>
+      <RowRender label={label} bg={'transparent'} {...rawDomBoxProps}>
         {rawDom}
       </RowRender>
     );
@@ -69,24 +86,28 @@ export const Row = ({
       {...(isObject
         ? { bg: 'transparent' }
         : {
-            minH: '32px',
-            px: 3,
-            py: 2,
+            ...responseRowValueBoxStyles,
             display: 'flex',
-            alignItems: 'flex-start',
-            border: '1px solid',
-            borderColor: 'myGray.200',
-            color: 'myGray.900',
-            bg: 'myGray.50'
+            alignItems: 'flex-start'
           })}
     >
       <Box
+        {...contentBoxProps}
+        minW={0}
+        w={'100%'}
         sx={{
           '& .markdown': { fontSize: '12px !important' },
-          '& .markdown pre': { fontSize: '12px !important' }
+          '& .markdown pre': { fontSize: '12px !important' },
+          ...contentBoxProps?.sx
         }}
       >
-        <Markdown source={formatValue} />
+        {typeof value === 'string' && !renderStringAsMarkdown ? (
+          <Box whiteSpace={'pre-wrap'} overflowWrap={'anywhere'}>
+            {formatValue}
+          </Box>
+        ) : (
+          <Markdown className={markdownStyles.markdown} source={formatValue} />
+        )}
       </Box>
     </RowRender>
   );

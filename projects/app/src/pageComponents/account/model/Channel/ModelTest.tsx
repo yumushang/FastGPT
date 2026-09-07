@@ -17,7 +17,7 @@ import {
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import React, { useRef, useState } from 'react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import MyTag from '@fastgpt/web/components/common/Tag/index';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
@@ -25,10 +25,11 @@ import { getErrText } from '@fastgpt/global/common/error/utils';
 import { batchRun } from '@fastgpt/global/common/system/utils';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import MyIconButton from '@fastgpt/web/components/common/Icon/button';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useAdminModelConfig } from '@/web/core/ai/model/useAdminModelConfig';
 
 type ModelTestItem = {
   label: React.ReactNode;
+  modelId: string;
   model: string;
   status: 'waiting' | 'running' | 'success' | 'error';
   message?: string;
@@ -45,18 +46,18 @@ const ModelTest = ({
   models: string[];
   onClose: () => void;
 }) => {
-  const { t, i18n } = useTranslation();
-  const { getModelProvider } = useSystemStore();
+  const { t, i18n } = useClientTranslation('config_model');
+  const { getModelProvider } = useAdminModelConfig();
   const { toast } = useToast();
   const [testModelList, setTestModelList] = useState<ModelTestItem[]>([]);
 
   const statusMap = useRef({
     waiting: {
-      label: t('account_model:waiting_test'),
+      label: t('config_model:waiting_test'),
       colorSchema: 'gray'
     },
     running: {
-      label: t('account_model:running_test'),
+      label: t('config_model:running_test'),
       colorSchema: 'blue'
     },
     success: {
@@ -86,6 +87,7 @@ const ModelTest = ({
                 <Box>{t(modelData.name as any)}</Box>
               </HStack>
             ),
+            modelId: modelData.modelId,
             model: modelData.model,
             status: 'waiting',
             loading: false
@@ -101,19 +103,19 @@ const ModelTest = ({
       let errorNum = 0;
       setTestModelList((prev) => prev.map((item) => ({ ...item, loading: true })));
 
-      const testModel = async (model: string) => {
+      const testModel = async (modelId: string) => {
         setTestModelList((prev) =>
           prev.map((item) =>
-            item.model === model ? { ...item, status: 'running', message: '' } : item
+            item.modelId === modelId ? { ...item, status: 'running', message: '' } : item
           )
         );
         const start = Date.now();
         try {
-          await getTestModel({ model, channelId });
+          await getTestModel({ modelId, channelId });
           const duration = Date.now() - start;
           setTestModelList((prev) =>
             prev.map((item) =>
-              item.model === model
+              item.modelId === modelId
                 ? { ...item, status: 'success', duration: duration / 1000, loading: false }
                 : item
             )
@@ -121,7 +123,7 @@ const ModelTest = ({
         } catch (error) {
           setTestModelList((prev) =>
             prev.map((item) =>
-              item.model === model
+              item.modelId === modelId
                 ? { ...item, status: 'error', message: getErrText(error), loading: false }
                 : item
             )
@@ -131,7 +133,7 @@ const ModelTest = ({
       };
 
       await batchRun(
-        testModelList.map((item) => item.model),
+        testModelList.map((item) => item.modelId),
         testModel,
         5
       );
@@ -139,7 +141,7 @@ const ModelTest = ({
       if (errorNum > 0) {
         toast({
           status: 'warning',
-          title: t('account_model:test_failed', { num: errorNum })
+          title: t('config_model:test_failed', { num: errorNum })
         });
       }
     },
@@ -149,22 +151,24 @@ const ModelTest = ({
   );
 
   const { runAsync: onTestOneModel, loading: testingOneModel } = useRequest(
-    async (model: string) => {
+    async (modelId: string) => {
       const start = Date.now();
 
       setTestModelList((prev) =>
         prev.map((item) =>
-          item.model === model ? { ...item, status: 'running', message: '', loading: true } : item
+          item.modelId === modelId
+            ? { ...item, status: 'running', message: '', loading: true }
+            : item
         )
       );
 
       try {
-        await getTestModel({ model, channelId });
+        await getTestModel({ modelId, channelId });
         const duration = Date.now() - start;
 
         setTestModelList((prev) =>
           prev.map((item) =>
-            item.model === model
+            item.modelId === modelId
               ? { ...item, status: 'success', duration: duration / 1000, loading: false }
               : item
           )
@@ -172,7 +176,7 @@ const ModelTest = ({
       } catch (error) {
         setTestModelList((prev) =>
           prev.map((item) =>
-            item.model === model
+            item.modelId === modelId
               ? { ...item, status: 'error', message: getErrText(error), loading: false }
               : item
           )
@@ -190,7 +194,7 @@ const ModelTest = ({
     <MyModal
       iconSrc={'core/chat/sendLight'}
       isLoading={loadingModels}
-      title={t('account_model:model_test')}
+      title={t('config_model:model_test')}
       w={'100%'}
       maxW={['90vw', '1090px']}
       isOpen
@@ -200,9 +204,9 @@ const ModelTest = ({
           <Table>
             <Thead>
               <Tr>
-                <Th>{t('account_model:model_name')}</Th>
-                <Th>{t('account:model.model_id')}</Th>
-                <Th>{t('account_model:channel_status')}</Th>
+                <Th>{t('config_model:model_name')}</Th>
+                <Th>{t('config_model:model.model_id')}</Th>
+                <Th>{t('config_model:channel_status')}</Th>
                 <Th></Th>
               </Tr>
             </Thead>
@@ -221,7 +225,7 @@ const ModelTest = ({
                         {item.message && <QuestionTip label={item.message} />}
                         {item.status === 'success' && item.duration && (
                           <Box fontSize={'sm'} color={'myGray.500'}>
-                            {t('account_model:request_duration', {
+                            {t('config_model:request_duration', {
                               duration: item.duration.toFixed(2)
                             })}
                           </Box>
@@ -233,8 +237,8 @@ const ModelTest = ({
                         <MyIconButton
                           isLoading={item.loading}
                           icon={'core/chat/sendLight'}
-                          tip={t('account:model.test_model')}
-                          onClick={() => onTestOneModel(item.model)}
+                          tip={t('config_model:model.test_model')}
+                          onClick={() => onTestOneModel(item.modelId)}
                         />
                       )}
                     </Td>
@@ -250,7 +254,7 @@ const ModelTest = ({
           {t('common:Cancel')}
         </Button>
         <Button isLoading={isTesting} variant={'primary'} onClick={onStartTest}>
-          {t('account_model:start_test', { num: testModelList.length })}
+          {t('config_model:start_test', { num: testModelList.length })}
         </Button>
       </ModalFooter>
     </MyModal>

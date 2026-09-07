@@ -5,9 +5,8 @@ import type {
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { useTranslation } from 'next-i18next';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  checkNeedsUserConfiguration,
   getToolConfigStatus,
   validateToolConfiguration
 } from '@fastgpt/global/core/app/formEdit/utils';
@@ -16,10 +15,13 @@ import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { FlowNodeTemplateTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import type { SkillLabelItemType } from '@fastgpt/web/components/common/Textarea/PromptEditor/plugins/SkillLabelPlugin';
 import dynamic from 'next/dynamic';
-import type { SelectedToolItemType } from '@fastgpt/global/core/app/formEdit/type';
+import type {
+  SelectedAgentSkillItemType,
+  SelectedToolItemType
+} from '@fastgpt/global/core/app/formEdit/type';
 import {
   getAppToolTemplates,
-  getToolPreviewNode,
+  getClientToolPreviewNode,
   getTeamAppTemplates
 } from '@/web/core/app/api/tool';
 import {
@@ -31,9 +33,19 @@ import {
 import { useLatest } from 'ahooks';
 import { SubAppIds, systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
-import { SANDBOX_TOOL_NAME } from '@fastgpt/global/core/ai/sandbox/constants';
+import { AGENT_SANDBOX_TOOLSET_ID } from '@fastgpt/global/core/ai/sandbox/tools';
+import type { SkillClickResult } from '@fastgpt/web/components/common/Textarea/PromptEditor/plugins/SkillPickerPlugin';
+import { getSkillList } from '@/web/core/skill/api';
+import { AgentSkillTypeEnum } from '@fastgpt/global/core/ai/skill/constants';
+import type { ListSkillsResponse } from '@fastgpt/global/core/ai/skill/api';
+import { inheritToolInputConfig } from '../../FormComponent/ToolSelector/utils';
+import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
 
 const ConfigToolModal = dynamic(() => import('../../component/ConfigToolModal'));
+type AgentSkillListItemType = ListSkillsResponse['list'][number];
+
+const getSkillId = (id?: string, source?: string) =>
+  source ? getToolIdentityKey(id, source) : id || '';
 
 const isSubApp = (flowNodeType: FlowNodeTypeEnum) => {
   const subAppTypeMap: Record<string, boolean> = {
@@ -45,20 +57,57 @@ const isSubApp = (flowNodeType: FlowNodeTypeEnum) => {
   return subAppTypeMap[flowNodeType];
 };
 
+const toSkillLabelItem = (
+  tool: SelectedToolItemType,
+  configStatus: SkillLabelItemType['configStatus']
+): SkillLabelItemType => ({
+  ...tool,
+  id: getSkillId(tool.pluginId, tool.source),
+  name: tool.name,
+  configStatus
+});
+
+const toAgentSkillItem = (item: AgentSkillListItemType): SkillItemType => {
+  const isFolder = item.type === AgentSkillTypeEnum.folder;
+
+  return {
+    id: item._id,
+    label: item.name,
+    icon: item.avatar || (isFolder ? 'common/folderFill' : 'core/skill/default'),
+    description: item.description,
+    isFolder,
+    canClick: item.type === AgentSkillTypeEnum.skill
+  };
+};
+
+const toAgentSkillLabelItem = (skill: SelectedAgentSkillItemType): SkillLabelItemType => ({
+  id: skill.skillId,
+  name: skill.name,
+  avatar: skill.avatar || 'core/skill/default',
+  intro: skill.description,
+  flowNodeType: FlowNodeTypeEnum.tool,
+  configStatus: skill.isDeleted ? 'invalid' : 'noConfig'
+});
+
 export const useSkillManager = ({
   selectedTools,
+  selectedAgentSkills = [],
   onUpdateOrAddTool,
-  onDeleteTool,
+  onAddAgentSkill,
   canUploadFile,
   hasSelectedDataset,
-  useAgentSandbox
+  useAgentSandbox,
+  onClickDatasetSearch
 }: {
   selectedTools: SelectedToolItemType[];
-  onDeleteTool: (id: string) => void;
+  selectedAgentSkills?: SelectedAgentSkillItemType[];
+  onDeleteTool: (id: string, source?: string) => void;
   onUpdateOrAddTool: (tool: SelectedToolItemType) => void;
+  onAddAgentSkill?: (skill: SelectedAgentSkillItemType) => boolean;
   canUploadFile: boolean;
   hasSelectedDataset: boolean;
   useAgentSandbox: boolean;
+  onClickDatasetSearch?: () => void;
 }) => {
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
@@ -66,13 +115,14 @@ export const useSkillManager = ({
   /* ===== System tool ===== */
   const { data: systemTools = [] } = useRequest(
     async () => {
-      const data = await getAppToolTemplates({ getAll: true }).catch((err) => {
+      const data = await getAppToolTemplates({ getAll: true }).catch(() => {
         return [];
       });
       const apiTools = data
         .map<SkillItemType>((item) => {
           return {
             id: item.id,
+            source: item.source,
             parentId: item.parentId,
             label: item.name,
             icon: item.avatar,
@@ -83,7 +133,8 @@ export const useSkillManager = ({
               .filter((tool) => tool.parentId === item.id)
               .map((tool) => ({
                 id: tool.id,
-                name: tool.name
+                name: tool.name,
+                source: tool.source
               }))
           };
         })
@@ -100,10 +151,21 @@ export const useSkillManager = ({
         });
       }
 
-      const sandboxToolInfo = systemSubInfo[SANDBOX_TOOL_NAME];
+      const readFilesInfo = systemSubInfo[SubAppIds.readFiles];
+      if (readFilesInfo) {
+        apiTools.unshift({
+          id: SubAppIds.readFiles,
+          label: parseI18nString(readFilesInfo.name, i18n.language),
+          icon: readFilesInfo.avatar,
+          description: readFilesInfo.toolDescription,
+          canClick: true
+        });
+      }
+
+      const sandboxToolInfo = systemSubInfo[AGENT_SANDBOX_TOOLSET_ID];
       if (sandboxToolInfo) {
         apiTools.unshift({
-          id: SANDBOX_TOOL_NAME,
+          id: AGENT_SANDBOX_TOOLSET_ID,
           label: parseI18nString(sandboxToolInfo.name, i18n.language),
           icon: sandboxToolInfo.avatar,
           description: sandboxToolInfo.toolDescription,
@@ -125,8 +187,12 @@ export const useSkillManager = ({
   );
 
   /* ===== Team agents/tools ===== */
+  const parentTypes = useRef(new Map<string, AppTypeEnum>());
   const { data: allTeamApps = [] } = useRequest(() => getTeamAppTemplates({ parentId: null }), {
-    manual: false
+    manual: false,
+    onSuccess(list) {
+      list.forEach(({ id, appType }) => parentTypes.current.set(id, appType));
+    }
   });
   const myTools = useMemo(
     () =>
@@ -156,11 +222,15 @@ export const useSkillManager = ({
   );
 
   const onFolderLoadTeamApps = useCallback(async (folderId: string, types: AppTypeEnum[]) => {
-    const children = await getTeamAppTemplates({ parentId: folderId, type: types });
-
+    const children = await getTeamAppTemplates({
+      parentId: folderId,
+      parentType: parentTypes.current.get(folderId),
+      type: types
+    });
     if (!children || children.length === 0) {
       return [];
     }
+    children.forEach(({ id, appType }) => parentTypes.current.set(id, appType));
 
     return children.map<SkillItemType>((item) => {
       return {
@@ -174,26 +244,152 @@ export const useSkillManager = ({
     });
   }, []);
 
+  /* ===== Agent skills ===== */
+  const agentSkillMapRef = useRef<Map<string, AgentSkillListItemType>>(new Map());
+  const cacheAgentSkillList = useCallback((list: AgentSkillListItemType[]) => {
+    list.forEach((item) => {
+      if (item.type === AgentSkillTypeEnum.skill) {
+        agentSkillMapRef.current.set(item._id, item);
+      }
+    });
+
+    return list.map(toAgentSkillItem);
+  }, []);
+
+  const { data: agentSkills = [] } = useRequest(
+    async () => {
+      if (!onAddAgentSkill) return [];
+
+      const { list } = await getSkillList({
+        source: 'mine',
+        parentId: '',
+        withAppCount: false
+      });
+      return cacheAgentSkillList(list);
+    },
+    {
+      manual: false
+    }
+  );
+
+  const onFolderLoadAgentSkills = useCallback(
+    async (folderId: string) => {
+      const { list } = await getSkillList({
+        source: 'mine',
+        parentId: folderId,
+        withAppCount: false
+      });
+      return cacheAgentSkillList(list);
+    },
+    [cacheAgentSkillList]
+  );
+
   const lastSelectedTools = useLatest(selectedTools);
+  const lastSelectedAgentSkills = useLatest(selectedAgentSkills);
+  const onAddSkill = useCallback(
+    async (skillId: string): Promise<SkillClickResult | undefined> => {
+      const existsSkill = lastSelectedAgentSkills.current?.find((item) => item.skillId === skillId);
+      if (existsSkill) {
+        const skill = toAgentSkillLabelItem(existsSkill);
+
+        return {
+          id: skill.id,
+          skill
+        };
+      }
+
+      const targetSkill = agentSkillMapRef.current.get(skillId);
+
+      if (!targetSkill) return;
+
+      const selectedSkill: SelectedAgentSkillItemType = {
+        skillId: targetSkill._id,
+        name: targetSkill.name,
+        description: targetSkill.description,
+        avatar: targetSkill.avatar,
+        isDeleted: false
+      };
+      if (!onAddAgentSkill?.(selectedSkill)) return;
+      const skill = toAgentSkillLabelItem(selectedSkill);
+
+      return {
+        id: skill.id,
+        skill
+      };
+    },
+    [lastSelectedAgentSkills, onAddAgentSkill]
+  );
+
   const onAddAppOrTool = useCallback(
-    async (toolId: string) => {
-      console.log('Add tool', toolId);
+    async (toolId: string, source?: string): Promise<SkillClickResult | undefined> => {
       // Check tool exists, if exists, not update/add tool
-      const existsTool = lastSelectedTools.current?.find((tool) => tool.pluginId === toolId);
+      const toolIdentityKey = getToolIdentityKey(toolId, source);
+      const existsTool = lastSelectedTools.current?.find(
+        (tool) => getToolIdentityKey(tool.pluginId, tool.source) === toolIdentityKey
+      );
       if (existsTool) {
-        return existsTool.pluginId;
+        const skill = toSkillLabelItem(
+          existsTool,
+          getToolConfigStatus({ tool: existsTool }).status
+        );
+
+        return {
+          id: skill.id,
+          skill
+        };
       }
 
       // Check if it's a sub agent tool
       if (toolId in systemSubInfo) {
-        return toolId;
+        const subToolInfo = systemSubInfo[toolId as keyof typeof systemSubInfo];
+
+        if (!subToolInfo) return;
+
+        const configStatus: SkillLabelItemType['configStatus'] = (() => {
+          if (toolId === SubAppIds.datasetSearch) {
+            return hasSelectedDataset ? 'configured' : 'waitingForConfig';
+          }
+
+          if (toolId === SubAppIds.readFiles) {
+            return canUploadFile ? 'configured' : 'invalid';
+          }
+
+          if (toolId === AGENT_SANDBOX_TOOLSET_ID) {
+            return useAgentSandbox ? 'noConfig' : 'invalid';
+          }
+
+          return 'noConfig';
+        })();
+
+        const skill: SkillLabelItemType = {
+          id: toolId,
+          pluginId: toolId,
+          name: parseI18nString(subToolInfo.name, i18n.language),
+          avatar: subToolInfo.avatar,
+          intro: subToolInfo.toolDescription,
+          flowNodeType: FlowNodeTypeEnum.tool,
+          templateType: FlowNodeTemplateTypeEnum.tools,
+          inputs: [],
+          outputs: [],
+          configStatus
+        };
+
+        return {
+          id: skill.id,
+          skill
+        };
       }
 
-      const toolTemplate = await getToolPreviewNode({ appId: toolId });
+      const toolTemplate = await getClientToolPreviewNode({
+        appId: toolId,
+        getLatestVersion: true,
+        source
+      });
 
       const toolValid = validateToolConfiguration({
         toolTemplate,
-        canUploadFile
+        canUploadFile,
+        isAppTool: true
       });
       if (!toolValid) {
         toast({
@@ -203,19 +399,35 @@ export const useSkillManager = ({
         return;
       }
 
-      const tool = {
-        ...toolTemplate,
-        id: toolTemplate.pluginId!
-      };
+      const tool = inheritToolInputConfig({
+        tool: {
+          ...toolTemplate,
+          id: toolTemplate.pluginId!
+        }
+      });
+      const configStatus = getToolConfigStatus({ tool }).status;
+      const skill = toSkillLabelItem(tool, configStatus);
 
       onUpdateOrAddTool({
         ...tool,
-        configStatus: getToolConfigStatus({ tool }).status
+        configStatus
       });
 
-      return tool.id;
+      return {
+        id: skill.id,
+        skill
+      };
     },
-    [canUploadFile, lastSelectedTools, onUpdateOrAddTool, t, toast]
+    [
+      canUploadFile,
+      hasSelectedDataset,
+      i18n.language,
+      lastSelectedTools,
+      onUpdateOrAddTool,
+      t,
+      toast,
+      useAgentSandbox
+    ]
   );
 
   /* ===== Skill option ===== */
@@ -242,6 +454,13 @@ export const useSkillManager = ({
             onFolderLoad: (folderId: string) => onFolderLoadTeamApps(folderId, AppTypeList),
             onClick: onAddAppOrTool
           };
+        } else if (id === 'agentSkill') {
+          return {
+            description: t('app:space_to_expand_folder'),
+            list: agentSkills,
+            onFolderLoad: onFolderLoadAgentSkills,
+            onClick: onAddSkill
+          };
         }
         return undefined;
       },
@@ -264,9 +483,31 @@ export const useSkillManager = ({
           icon: 'core/workflow/template/runApp',
           canClick: false
         }
-      ]
+      ].concat(
+        onAddAgentSkill
+          ? [
+              {
+                id: 'agentSkill',
+                label: t('skill:associated_skills'),
+                icon: 'core/skill/default',
+                canClick: false
+              }
+            ]
+          : []
+      )
     };
-  }, [onAddAppOrTool, onLoadSystemTool, myTools, myAgents, onFolderLoadTeamApps, t]);
+  }, [
+    onAddAppOrTool,
+    onAddSkill,
+    onAddAgentSkill,
+    onLoadSystemTool,
+    myTools,
+    myAgents,
+    agentSkills,
+    onFolderLoadTeamApps,
+    onFolderLoadAgentSkills,
+    t
+  ]);
 
   /* ===== Selected skills ===== */
   const selectedSkills = useMemoEnhance<SkillLabelItemType[]>(() => {
@@ -276,14 +517,14 @@ export const useSkillManager = ({
           return 'invalid';
         }
         if (tool.pluginId === SubAppIds.datasetSearch) {
-          return hasSelectedDataset ? 'configured' : 'invalid';
+          return hasSelectedDataset ? 'configured' : 'waitingForConfig';
         }
-        return tool.configStatus || 'waitingForConfig';
+        return getToolConfigStatus({ tool }).status;
       })();
 
       return {
         ...tool,
-        id: tool.pluginId!,
+        id: getSkillId(tool.pluginId, tool.source),
         name: tool.name,
         configStatus
       };
@@ -301,16 +542,32 @@ export const useSkillManager = ({
         templateType: FlowNodeTemplateTypeEnum.tools,
         inputs: [],
         outputs: [],
-        configStatus: hasSelectedDataset ? 'configured' : 'invalid'
+        configStatus: hasSelectedDataset ? 'configured' : 'waitingForConfig'
+      });
+    }
+
+    const readFilesInfo = systemSubInfo[SubAppIds.readFiles];
+    if (readFilesInfo) {
+      tools.push({
+        id: SubAppIds.readFiles,
+        pluginId: SubAppIds.readFiles,
+        name: parseI18nString(readFilesInfo.name, i18n.language),
+        avatar: readFilesInfo.avatar,
+        intro: readFilesInfo.toolDescription,
+        flowNodeType: FlowNodeTypeEnum.tool,
+        templateType: FlowNodeTemplateTypeEnum.tools,
+        inputs: [],
+        outputs: [],
+        configStatus: canUploadFile ? 'configured' : 'invalid'
       });
     }
 
     // Merge sandbox tool
-    const sandboxToolInfo = systemSubInfo[SANDBOX_TOOL_NAME];
+    const sandboxToolInfo = systemSubInfo[AGENT_SANDBOX_TOOLSET_ID];
     if (sandboxToolInfo) {
       tools.push({
-        id: SANDBOX_TOOL_NAME,
-        pluginId: SANDBOX_TOOL_NAME,
+        id: AGENT_SANDBOX_TOOLSET_ID,
+        pluginId: AGENT_SANDBOX_TOOLSET_ID,
         name: parseI18nString(sandboxToolInfo.name, i18n.language),
         avatar: sandboxToolInfo.avatar,
         intro: sandboxToolInfo.toolDescription,
@@ -322,35 +579,38 @@ export const useSkillManager = ({
       });
     }
 
-    return tools;
-  }, [selectedTools, canUploadFile, hasSelectedDataset, useAgentSandbox, i18n.language]);
+    return [...tools, ...selectedAgentSkills.map(toAgentSkillLabelItem)];
+  }, [
+    selectedTools,
+    selectedAgentSkills,
+    canUploadFile,
+    hasSelectedDataset,
+    useAgentSandbox,
+    i18n.language
+  ]);
 
   const [configTool, setConfigTool] = useState<SelectedToolItemType>();
   const onClickSkill = useCallback(
     (id: string) => {
-      const tool = selectedTools.find((tool) => tool.id === id);
+      if (selectedAgentSkills.some((skill) => skill.skillId === id)) {
+        return;
+      }
+
+      if (id === SubAppIds.datasetSearch) {
+        onClickDatasetSearch?.();
+        return;
+      }
+
+      const tool = selectedTools.find((tool) => getSkillId(tool.pluginId, tool.source) === id);
       if (!tool) return;
 
       if (isSubApp(tool.flowNodeType)) {
-        const hasFormInput = checkNeedsUserConfiguration(tool);
-        if (!hasFormInput) {
-          return;
-        }
-
         setConfigTool(tool);
-      } else {
-        console.log('onClickSkill', tool);
       }
     },
-    [selectedTools]
+    [onClickDatasetSearch, selectedAgentSkills, selectedTools]
   );
-  const onRemoveSkill = useCallback(
-    (id: string) => {
-      console.log('onRemoveSkill', id);
-      onDeleteTool(id);
-    },
-    [onDeleteTool]
-  );
+  const onRemoveSkill = useCallback(() => {}, []);
 
   const SkillModal = useCallback(() => {
     return (

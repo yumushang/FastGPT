@@ -8,11 +8,12 @@ import 'reactflow/dist/style.css';
 import { useContextSelector } from 'use-context-selector';
 import NodeTemplatesPopover from './NodeTemplatesPopover';
 import SearchButton from '../../Workflow/components/SearchButton';
+import SystemConfigDrawer from './SystemConfigDrawer';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { WorkflowInitContext, WorkflowBufferDataContext } from '../context/workflowInitContext';
 import ContextMenu from './components/ContextMenu';
 import FlowController from './components/FlowController';
-import HelperLines from './components/HelperLines';
+import HelperLines, { type HelperLinesController } from './components/HelperLines';
 import { useWorkflow } from './hooks/useWorkflow';
 import { EDGE_TYPE, FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import type { NodeProps } from 'reactflow';
@@ -20,6 +21,8 @@ import ReactFlow, { SelectionMode, useReactFlow } from 'reactflow';
 import { Box, IconButton, useDisclosure } from '@chakra-ui/react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { WorkflowUIContext } from '../context/workflowUIContext';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import { useTranslation } from 'next-i18next';
 
 const NodeSimple = dynamic(() => import('./nodes/NodeSimple'));
 const NodeStopTool = React.memo((props: NodeProps<FlowNodeItemType>) => (
@@ -32,8 +35,6 @@ const nodeTypes: Record<FlowNodeTypeEnum, any> = {
   [FlowNodeTypeEnum.globalVariable]: NodeSimple,
   [FlowNodeTypeEnum.textEditor]: NodeSimple,
   [FlowNodeTypeEnum.customFeedback]: NodeSimple,
-  [FlowNodeTypeEnum.systemConfig]: dynamic(() => import('./nodes/NodeSystemConfig')),
-  [FlowNodeTypeEnum.pluginConfig]: dynamic(() => import('./nodes/NodePluginIO/NodePluginConfig')),
   [FlowNodeTypeEnum.workflowStart]: dynamic(() => import('./nodes/NodeWorkflowStart')),
   [FlowNodeTypeEnum.chatNode]: NodeSimple,
   [FlowNodeTypeEnum.readFiles]: NodeSimple,
@@ -55,7 +56,6 @@ const nodeTypes: Record<FlowNodeTypeEnum, any> = {
   [FlowNodeTypeEnum.tool]: NodeSimple,
   [FlowNodeTypeEnum.toolSet]: dynamic(() => import('./nodes/NodeToolSet')),
   [FlowNodeTypeEnum.toolParams]: dynamic(() => import('./nodes/NodeToolParams')),
-  [FlowNodeTypeEnum.lafModule]: dynamic(() => import('./nodes/NodeLaf')),
   [FlowNodeTypeEnum.ifElseNode]: dynamic(() => import('./nodes/NodeIfElse')),
   [FlowNodeTypeEnum.variableUpdate]: dynamic(() => import('./nodes/NodeVariableUpdate')),
   [FlowNodeTypeEnum.code]: dynamic(() => import('./nodes/NodeCode')),
@@ -75,8 +75,10 @@ const edgeTypes = {
 };
 
 const Workflow = () => {
+  const { t } = useTranslation();
   const nodes = useContextSelector(WorkflowInitContext, (v) => v.nodes);
   const edges = useContextSelector(WorkflowBufferDataContext, (v) => v.edges);
+  const helperLinesRef = useRef<HelperLinesController>(null);
   const { reactFlowWrapperCallback, workflowControlMode, menu } = useContextSelector(
     WorkflowUIContext,
     (v) => v
@@ -90,12 +92,10 @@ const Workflow = () => {
     customOnConnect,
     onEdgeMouseEnter,
     onEdgeMouseLeave,
-    helperLineHorizontal,
-    helperLineVertical,
     onNodeDragStop,
     onPaneContextMenu,
     onPaneClick
-  } = useWorkflow();
+  } = useWorkflow({ helperLinesRef });
 
   const {
     isOpen: isOpenTemplate,
@@ -142,21 +142,31 @@ const Workflow = () => {
         {/* open module template */}
         <>
           <Box position={'absolute'} top={20} left={6} zIndex={1}>
-            <IconButton
-              icon={<MyIcon name="common/addLight" w={6} />}
-              w={9}
-              h={9}
-              borderRadius={'50%'}
-              bg={'black'}
-              _hover={{ bg: 'myGray.700' }}
-              aria-label={''}
-              boxShadow={'0 4px 10px 0 rgba(19, 51, 107, 0.20), 0 0 1px 0 rgba(19, 51, 107, 0.50)'}
-              onClick={() => {
-                isOpenTemplate ? onCloseTemplate() : onOpenTemplate();
-              }}
-            />
+            <MyTooltip shouldWrapChildren={false} label={t('workflow:to_add_node')}>
+              <IconButton
+                icon={<MyIcon name="core/app/workflowToolbarAdd" boxSize={6} color={'white'} />}
+                w={9}
+                minW={9}
+                h={9}
+                p={1.5}
+                borderRadius={'50%'}
+                bg={'black'}
+                _hover={{ bg: 'myGray.700' }}
+                aria-label={t('workflow:to_add_node')}
+                border={'none'}
+                boxShadow={'0 4px 5px rgba(19, 51, 107, 0.20), 0 0 0.5px rgba(19, 51, 107, 0.50)'}
+                onClick={() => {
+                  if (isOpenTemplate) {
+                    onCloseTemplate();
+                  } else {
+                    onOpenTemplate();
+                  }
+                }}
+              />
+            </MyTooltip>
           </Box>
           <SearchButton />
+          <SystemConfigDrawer />
           <NodeTemplatesModal isOpen={isOpenTemplate} onClose={onCloseTemplate} />
           <NodeTemplatesPopover />
         </>
@@ -209,7 +219,7 @@ const Workflow = () => {
         >
           {!!menu && <ContextMenu />}
           <FlowController />
-          <HelperLines horizontal={helperLineHorizontal} vertical={helperLineVertical} />
+          <HelperLines ref={helperLinesRef} />
         </ReactFlow>
       </Box>
     </>

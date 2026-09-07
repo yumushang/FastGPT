@@ -1,11 +1,26 @@
 import { decodeEmbedding, formatVectors } from '@fastgpt/service/core/ai/embedding/index';
-import type { EmbeddingModelItemType } from '@fastgpt/global/core/ai/model.schema';
-import { EmbeddingTypeEnm } from '@fastgpt/global/core/ai/constants';
+import type {
+  EmbeddingModelConfigType,
+  EmbeddingSystemModelDataType
+} from '@fastgpt/global/core/ai/model.schema';
+import { EmbeddingTypeEnm, ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the AI API client factory so tests don't hit the real network.
 // We control the embeddings.create implementation per-test via `mockCreate`.
 const mockCreate = vi.fn();
+const mockCountPromptTokens = vi.hoisted(() => vi.fn(async (text: string) => text.length));
+const mockCountPromptTokensBatch = vi.hoisted(() =>
+  vi.fn(async (texts: string[]) => texts.map((text) => text.length))
+);
+
+// getVectors 在缺少 usage 时会回退本地 token 计数；测试里只验证回退路径生效，
+// 不启动真实 worker，避免 service 包单测依赖 app/pro 的 worker 构建目录。
+vi.mock('@fastgpt/service/common/string/tiktoken/index', () => ({
+  countPromptTokens: mockCountPromptTokens,
+  countPromptTokensBatch: mockCountPromptTokensBatch
+}));
+
 vi.mock('@fastgpt/service/core/ai/config', () => ({
   getAIApi: () => ({
     ai: {
@@ -370,16 +385,56 @@ describe('getVectors function test', () => {
 
   beforeEach(() => {
     mockCreate.mockReset();
+    mockCountPromptTokens.mockClear();
+    mockCountPromptTokensBatch.mockClear();
+    mockCountPromptTokens.mockImplementation(async (text: string) => text.length);
+    mockCountPromptTokensBatch.mockImplementation(async (texts: string[]) =>
+      texts.map((text) => text.length)
+    );
   });
 
-  const buildModel = (overrides: Partial<EmbeddingModelItemType> = {}): EmbeddingModelItemType =>
-    ({
+  const buildModel = (
+    overrides: Partial<EmbeddingModelConfigType> &
+      Partial<Omit<EmbeddingSystemModelDataType, 'config'>> = {}
+  ): EmbeddingSystemModelDataType => {
+    const {
+      defaultToken = 512,
+      maxToken = 8192,
+      weight = 0,
+      hidden,
+      vision,
+      normalization = false,
+      batchSize = 10,
+      defaultConfig,
+      dbConfig,
+      queryConfig,
+      ...commonOverrides
+    } = overrides;
+
+    return {
+      modelId: '507f1f77bcf86cd799439011',
+      provider: 'openai',
       model: 'text-embedding-3-small',
       name: 'text-embedding-3-small',
-      batchSize: 10,
-      normalization: false,
-      ...overrides
-    }) as EmbeddingModelItemType;
+      type: ModelTypeEnum.embedding,
+      scope: 'system' as const,
+      isActive: true,
+      isCustom: false,
+      ...commonOverrides,
+      config: {
+        defaultToken,
+        maxToken,
+        weight,
+        hidden,
+        vision,
+        normalization,
+        batchSize,
+        defaultConfig,
+        dbConfig,
+        queryConfig
+      }
+    };
+  };
 
   // A minimally valid OpenAI-style embedding response. Vector is 4 floats so we can verify
   // padding to 1536 happens via formatVectors, without pretending to cover the whole surface.
@@ -410,6 +465,51 @@ describe('getVectors function test', () => {
         message: 'input is empty'
       });
       expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('should embed image inputs normally', async () => {
+      mockCreate.mockResolvedValue(
+        makeResponse([[0.1, 0.2, 0.3, 0.4]], { usage: { total_tokens: 1 } })
+      );
+
+      const result = await getVectors({
+        model: buildModel({ maxToken: 1 }),
+        inputs: [imageInput('data:image/png;base64,aaa')]
+      });
+
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(result.vectors).toHaveLength(1);
+    });
+
+    it('should truncate text inputs by model maxToken before requesting embeddings', async () => {
+      mockCreate.mockResolvedValue(
+        makeResponse([[0.1, 0.2, 0.3, 0.4]], { usage: { total_tokens: 1 } })
+      );
+
+      await getVectors({
+        model: buildModel({ maxToken: 12 }),
+        inputs: [textInput('abcdefghijklmnopqrstuvwxy')]
+      });
+
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(mockCreate.mock.calls[0][0].input).toEqual(['abcdefghijkl']);
+    });
+
+    it('should keep astral Unicode characters well formed when truncating', async () => {
+      mockCreate.mockResolvedValue(
+        makeResponse([[0.1, 0.2, 0.3, 0.4]], { usage: { total_tokens: 1 } })
+      );
+      mockCountPromptTokens.mockImplementation(async (text: string) => text.length);
+      mockCountPromptTokensBatch.mockResolvedValueOnce([3]);
+
+      await getVectors({
+        model: buildModel({ maxToken: 2 }),
+        inputs: [textInput('a𠮷')]
+      });
+
+      const providerInput = mockCreate.mock.calls[0][0].input[0] as string;
+      expect(providerInput).toBe('a');
+      expect(providerInput).not.toMatch(/[\uD800-\uDFFF]/u);
     });
   });
 
@@ -478,9 +578,11 @@ describe('getVectors function test', () => {
       mockCreate.mockResolvedValue(
         makeResponse([[0.1, 0.2, 0.3, 0.4]], { usage: { total_tokens: 1 } })
       );
-      // Pass undefined to exercise `Number(undefined) → NaN` branch
+      const model = buildModel();
+      model.config.batchSize = undefined;
+
       const result = await getVectors({
-        model: buildModel({ batchSize: undefined }),
+        model,
         inputs: ['x', 'y'].map(textInput)
       });
 
@@ -534,6 +636,7 @@ describe('getVectors function test', () => {
       ]);
       expect(result.tokens).toBe(6);
       expect(result.vectors).toHaveLength(2);
+      expect(mockCountPromptTokensBatch).not.toHaveBeenCalled();
     });
 
     it('should build mixed text and image input parts in order', async () => {

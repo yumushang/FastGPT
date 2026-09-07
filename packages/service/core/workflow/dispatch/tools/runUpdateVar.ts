@@ -1,20 +1,16 @@
 import type { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { VARIABLE_NODE_ID, WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import {
-  DispatchNodeResponseKeyEnum,
-  SseResponseEventEnum
-} from '@fastgpt/global/core/workflow/runtime/constants';
-import { type DispatchNodeResultType } from '@fastgpt/global/core/workflow/runtime/type';
-import {
-  getReferenceVariableValue,
-  replaceEditorVariable
-} from '@fastgpt/global/core/workflow/runtime/utils';
+import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
+import { workflowSseEvent } from '@fastgpt/global/core/workflow/runtime/sse';
+
+import { getReferenceVariableValue } from '@fastgpt/global/core/workflow/runtime/utils';
 import { type TUpdateListItem } from '@fastgpt/global/core/workflow/template/system/variableUpdate/type';
-import { type ModuleDispatchProps } from '@fastgpt/global/core/workflow/runtime/type';
+import type { DispatchNodeResultType, ModuleDispatchProps } from '../../types/runtime';
 import { isValidReferenceValue } from '@fastgpt/global/core/workflow/utils';
 import { valueTypeFormat } from '@fastgpt/global/core/workflow/runtime/utils';
 import { getLogger, LogCategories } from '../../../../common/logger';
+import { replaceEditorVariable } from '../utils/replaceEditorVariable';
 
 const addLog = getLogger(LogCategories.MODULE.WORKFLOW.DISPATCH);
 
@@ -62,7 +58,7 @@ const applyNumberOp = (
 type Props = ModuleDispatchProps<{
   [NodeInputKeyEnum.updateList]: TUpdateListItem[];
 }>;
-type Response = DispatchNodeResultType<{}>;
+type Response = DispatchNodeResultType<Record<string, never>>;
 
 export const dispatchUpdateVariable = async (props: Props): Promise<Response> => {
   const { params, variableState, runtimeNodesMap, workflowStreamResponse, runningAppInfo } = props;
@@ -174,10 +170,7 @@ export const dispatchUpdateVariable = async (props: Props): Promise<Response> =>
   }
 
   if (!runningAppInfo.isChildApp) {
-    workflowStreamResponse?.({
-      event: SseResponseEventEnum.updateVariables,
-      data: variableState.toStoreRecord()
-    });
+    workflowStreamResponse?.(workflowSseEvent.updateVariables(variableState.toStoreRecord()));
   }
 
   return {

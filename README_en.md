@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://fastgpt.io/"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
+<a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=logo"><img src="/.github/imgs/logo.svg" width="120" height="120" alt="fastgpt logo"></a>
 
 # FastGPT
 
@@ -18,7 +18,7 @@ FastGPT is an AI Agent building platform that provides out-of-the-box capabiliti
 </div>
 
 <p align="center">
-  <a href="https://fastgpt.io/">
+  <a href="https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_badge">
     <img height="21" src="https://img.shields.io/badge/Online_Usage-d4eaf7?style=flat-square&logo=spoj&logoColor=7d09f1" alt="cloud">
   </a>
   <a href="https://doc.fastgpt.io/guide/getting-started">
@@ -40,7 +40,7 @@ You can quickly start FastGPT using Docker. Run the following command in your te
 
 ```bash
 # Run the command to pull the configuration file
-bash <(curl -fsSL https://doc.fastgpt.cn/deploy/install.sh)
+bash <(curl -fsSL https://doc.fastgpt.io/deploy/install.sh)
 # Start the service
 docker compose up -d
 ```
@@ -52,13 +52,13 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 ## 🛸 Usage
 
 - **Cloud Version**  
-  If you don't need private deployment, you can directly use our cloud service at: [fastgpt.io](https://fastgpt.io/)
+  If you don't need private deployment, you can directly use our cloud service at: [fastgpt.io](https://fastgpt.io/?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=cloud_service_link)
 
 - **Community Self-Hosted Version**  
   You can quickly deploy using [Docker](https://doc.fastgpt.io/self-host/deploy/docker) or use [Sealos Cloud](https://doc.fastgpt.io/self-host/deploy/sealos) to deploy FastGPT with one click.
 
 - **Commercial Version**  
-  If you need more complete features or in-depth service support, you can choose our [Commercial Version](https://doc.fastgpt.io/guide/version/commercial). In addition to providing complete software, we also offer implementation guidance for specific scenarios. You can submit a [commercial consultation](https://fael3z0zfze.feishu.cn/share/base/form/shrcnjJWtKqjOI9NbQTzhNyzljc).
+  If you need more complete features or in-depth service support, you can choose our [Commercial Version](https://doc.fastgpt.io/guide/version/commercial). In addition to providing complete software, we also offer implementation guidance for specific scenarios. You can submit a [commercial consultation](https://fastgpt.cn/en/contact?source=github&utm_source=github&utm_medium=referral&utm_campaign=github_home&utm_content=commercial_consultation).
 
 ## 💡 Core Features
 
@@ -68,7 +68,7 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 | ![Demo](./.github/imgs/intro3.png) | ![Demo](./.github/imgs/intro4.png) |
 
 `1` Application Orchestration
-   - [x] Planning Agent mode.
+   - [x] Agent Skill orchestration.
    - [x] Dialogue workflow, plugin workflow, including basic RPA nodes.
    - [x] User interaction
    - [x] Bidirectional MCP
@@ -89,25 +89,19 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
    - [x] Support for txt, md, html, pdf, docx, pptx, csv, xlsx (more can be PR'd), support for URL reading & CSV batch import
    - [x] Hybrid retrieval & reranking
    - [x] API knowledge base
-   - [ ] RAG module hot-swapping
+   - [ ] 
 
-`4` OpenAPI Interface
-   - [x] Completions interface (aligned with GPT chat mode)
-   - [x] Knowledge base CRUD
-   - [x] Dialogue CRUD
-   - [x] Automated OpenAPI interface
+`4` Plugin Capabilities
+   - [x] System tool hot updates
+   - [ ] RAG module hot updates
+   - [ ] Agent-loop hot updates
+   - [ ] Real-time AI-generated plugins
 
 `5` Operations Features
    - [x] Login-free sharing window
    - [x] One-click Iframe embedding
    - [x] Unified dialogue record review with data annotation
    - [x] Application operation logs
-
-`6` Others
-   - [x] Visual model configuration.
-   - [x] Voice input and output support (configurable)
-   - [x] Fuzzy input hints
-   - [x] Template marketplace
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Back_to_Top-7d09f1.svg" alt="#" align="right">
@@ -116,10 +110,9 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 ## 💪 Our Projects & Links
 
 - [Quick Start Local Development](https://doc.fastgpt.io/self-host/dev/)
-- [OpenAPI Documentation](https://doc.fastgpt.io/openapi/intro)
+- [OpenAPI Documentation](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: Model Aggregation Load Balancing Service](https://github.com/labring/aiproxy)
-- [Laf: Quick 3-Minute Access to Third-Party Applications](https://github.com/labring/laf)
 - [Sealos: Quick Cluster Application Deployment](https://github.com/labring/sealos)
 
 <a href="#readme">
@@ -130,7 +123,6 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 
 - [AI Proxy: Large Model Aggregation Service](https://sealos.run/aiproxy/?k=fastgpt-github/)
 - [SiliconCloud - Open Source Model Online Experience Platform](https://cloud.siliconflow.cn/i/TR9Ym0c4)
-- [PPIO: One-click Call to Cost-effective Open Source Model API and GPU Containers](https://ppinfra.com/user/register?invited_by=VITYVU&utm_source=github_fastgpt)
 
 <a href="#readme">
     <img src="https://img.shields.io/badge/-Back_to_Top-7d09f1.svg" alt="#" align="right">
@@ -186,9 +178,9 @@ We warmly welcome contributions in various forms. If you're interested in contri
 
 <a href="https://github.com/labring/FastGPT/stargazers" target="_blank" style="display: block" align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=labring/FastGPT&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=labring/FastGPT&type=Date" />
   </picture>
 </a>
 

@@ -4,14 +4,29 @@ import { MongoUser } from '@fastgpt/service/support/user/schema';
 import { UserStatusEnum } from '@fastgpt/global/support/user/constant';
 import { MongoTeam } from '@fastgpt/service/support/user/team/teamSchema';
 import { MongoTeamMember } from '@fastgpt/service/support/user/team/teamMemberSchema';
-import { authCode } from '@fastgpt/service/support/user/auth/controller';
+import { MongoTmpData } from '@fastgpt/service/support/tmpData/schema';
+import { getDataId } from '@fastgpt/service/support/tmpData/verification';
 import { setCookie } from '@fastgpt/service/support/permission/auth/common';
 import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
 import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { UserErrEnum } from '@fastgpt/global/common/error/code/user';
 import type { LoginByPasswordBodyType } from '@fastgpt/global/openapi/support/user/account/login/api';
+import { ApiRequestInputParseError } from '@fastgpt/service/common/zod/requestParseError';
 import { Call } from '@test/utils/request';
 import { initTeamFreePlan } from '@fastgpt/service/support/wallet/sub/utils';
+import { MongoAccountCancellation } from '@fastgpt/service/support/user/account/cancellation/schema';
+import { AccountCancellationStatus } from '@fastgpt/global/support/user/account/cancellation/constants';
+
+const saveLoginCode = (username: string, code = '123456') =>
+  MongoTmpData.updateOne(
+    { dataId: getDataId({ scene: 'login', type: 'password', key: username }) },
+    {
+      dataId: getDataId({ scene: 'login', type: 'password', key: username }),
+      data: { preLoginCode: code },
+      expireAt: new Date(Date.now() + 30_000)
+    },
+    { upsert: true }
+  );
 
 describe('loginByPassword API', () => {
   let testUser: any;
@@ -19,6 +34,7 @@ describe('loginByPassword API', () => {
   let testTmb: any;
 
   beforeEach(async () => {
+    await MongoTmpData.deleteMany({});
     testUser = await MongoUser.create({
       username: 'testuser',
       password: 'testpassword',
@@ -45,11 +61,13 @@ describe('loginByPassword API', () => {
       lastLoginTmbId: testTmb._id
     });
 
+    await saveLoginCode('testuser');
+
     vi.clearAllMocks();
   });
 
   it('should login successfully with valid credentials', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: 'testpassword',
@@ -68,11 +86,11 @@ describe('loginByPassword API', () => {
     expect(typeof res.data.token).toBe('string');
     expect(res.data.token.length).toBeGreaterThan(0);
 
-    expect(authCode).toHaveBeenCalledWith({
-      key: 'testuser',
-      code: '123456',
-      type: expect.any(String)
-    });
+    await expect(
+      MongoTmpData.findOne({
+        dataId: getDataId({ scene: 'login', type: 'password', key: 'testuser' })
+      })
+    ).resolves.toBeNull();
     expect(setCookie).toHaveBeenCalled();
     expect(pushTrack.login).toHaveBeenCalledWith({
       type: 'password',
@@ -84,7 +102,7 @@ describe('loginByPassword API', () => {
   });
 
   it('should reject login when username is empty', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: '',
         password: 'testpassword',
@@ -97,7 +115,7 @@ describe('loginByPassword API', () => {
   });
 
   it('should reject login when password is empty', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: '',
@@ -106,15 +124,13 @@ describe('loginByPassword API', () => {
       }
     });
 
-    // Empty password passes zod z.string() but won't match any user record
     expect(res.code).toBe(500);
-    expect(res.error).toBe(UserErrEnum.account_psw_error);
+    expect(res.error).toBeInstanceOf(ApiRequestInputParseError);
+    expect(res.error.context).toEqual({ inputSource: 'body' });
   });
 
   it('should reject login when auth code verification fails', async () => {
-    vi.mocked(authCode).mockRejectedValueOnce(new Error('Invalid code'));
-
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: 'testpassword',
@@ -128,7 +144,9 @@ describe('loginByPassword API', () => {
   });
 
   it('should reject login when user does not exist', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    await saveLoginCode('nonexistentuser');
+
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'nonexistentuser',
         password: 'testpassword',
@@ -146,7 +164,7 @@ describe('loginByPassword API', () => {
       status: UserStatusEnum.forbidden
     });
 
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: 'testpassword',
@@ -159,8 +177,56 @@ describe('loginByPassword API', () => {
     expect(res.error).toBe('Invalid account!');
   });
 
+  it('should allow a pending cancellation user to recover a login session', async () => {
+    await MongoUser.findByIdAndUpdate(testUser._id, { $unset: { lastLoginTmbId: 1 } });
+    await MongoAccountCancellation.create({
+      userId: testUser._id,
+      status: AccountCancellationStatus.pending,
+      requestedAt: new Date()
+    });
+
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
+      body: {
+        username: 'testuser',
+        password: 'testpassword',
+        code: '123456',
+        language: 'zh-CN'
+      }
+    });
+
+    expect(res.code).toBe(200);
+    expect(res.data.user.team.tmbId).toBe(String(testTmb._id));
+    expect(res.data.token).toEqual(expect.any(String));
+  });
+
+  it('should reject a finalizing user before profile updates and session creation', async () => {
+    await MongoAccountCancellation.create({
+      userId: testUser._id,
+      status: AccountCancellationStatus.finalizing,
+      requestedAt: new Date()
+    });
+
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
+      body: {
+        username: 'testuser',
+        password: 'testpassword',
+        code: '123456',
+        language: 'en'
+      }
+    });
+
+    expect(res.code).toBe(500);
+    expect(res.error).toEqual(
+      expect.objectContaining({ message: UserErrEnum.accountCancellationPending })
+    );
+    await expect(MongoUser.findById(testUser._id).lean()).resolves.not.toMatchObject({
+      language: 'en'
+    });
+    expect(setCookie).not.toHaveBeenCalled();
+  });
+
   it('should reject login when password is incorrect', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: 'wrongpassword',
@@ -174,7 +240,7 @@ describe('loginByPassword API', () => {
   });
 
   it('should update language on successful login', async () => {
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'testuser',
         password: 'testpassword',
@@ -188,6 +254,48 @@ describe('loginByPassword API', () => {
     const updatedUser = await MongoUser.findById(testUser._id);
     expect(updatedUser?.language).toBe('en');
     expect(updatedUser?.lastLoginTmbId).toEqual(testTmb._id);
+  });
+
+  it('should persist visitor_id on successful login', async () => {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
+      body: {
+        username: 'testuser',
+        password: 'testpassword',
+        code: '123456',
+        fastgpt_sem: {
+          visitor_id: 'visitor-1'
+        },
+        language: 'zh-CN'
+      }
+    });
+
+    expect(res.code).toBe(200);
+
+    const updatedUser = await MongoUser.findById(testUser._id).lean();
+    expect(updatedUser?.fastgpt_sem).toMatchObject({ visitor_id: 'visitor-1' });
+  });
+
+  it('should keep the stored visitor_id when login carries a different one', async () => {
+    await MongoUser.findByIdAndUpdate(testUser._id, {
+      fastgpt_sem: { visitor_id: 'stored-visitor' }
+    });
+
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
+      body: {
+        username: 'testuser',
+        password: 'testpassword',
+        code: '123456',
+        fastgpt_sem: {
+          visitor_id: 'incoming-visitor'
+        },
+        language: 'zh-CN'
+      }
+    });
+
+    expect(res.code).toBe(200);
+
+    const updatedUser = await MongoUser.findById(testUser._id).lean();
+    expect(updatedUser?.fastgpt_sem).toMatchObject({ visitor_id: 'stored-visitor' });
   });
 
   it('should handle root user login correctly', async () => {
@@ -216,8 +324,9 @@ describe('loginByPassword API', () => {
     await MongoUser.findByIdAndUpdate(rootUser._id, {
       lastLoginTmbId: rootTmb._id
     });
+    await saveLoginCode('root');
 
-    const res = await Call<LoginByPasswordBodyType, {}, any>(loginApi.default, {
+    const res = await Call<LoginByPasswordBodyType, Record<string, never>, any>(loginApi.default, {
       body: {
         username: 'root',
         password: 'rootpassword',
@@ -236,7 +345,7 @@ describe('loginByPassword API', () => {
   describe('NoSQL injection prevention', () => {
     it('should reject password as object with MongoDB operator ($ne)', async () => {
       // GHSA-jxvr-h2vx-p73r Step 2: password: {"$ne": ""} bypasses password check
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: { $ne: '' },
@@ -252,7 +361,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject password with $regex operator', async () => {
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: { $regex: '.*' },
@@ -265,7 +374,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject password with $where injection', async () => {
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: { $where: 'return true' },
@@ -278,7 +387,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject username as object with MongoDB operator', async () => {
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: { $ne: '' },
           password: 'testpassword',
@@ -291,7 +400,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject code as object with MongoDB operator', async () => {
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: 'testpassword',
@@ -304,7 +413,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject all fields as injection objects simultaneously', async () => {
-      const res = await Call<any, {}, any>(loginApi.default, {
+      const res = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: { $ne: '' },
           password: { $ne: '' },
@@ -317,7 +426,7 @@ describe('loginByPassword API', () => {
     });
 
     it('should reject password as non-string types (array, number)', async () => {
-      const arrayRes = await Call<any, {}, any>(loginApi.default, {
+      const arrayRes = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: ['testpassword'],
@@ -327,7 +436,7 @@ describe('loginByPassword API', () => {
       });
       expect(arrayRes.code).toBe(500);
 
-      const numberRes = await Call<any, {}, any>(loginApi.default, {
+      const numberRes = await Call<any, Record<string, never>, any>(loginApi.default, {
         body: {
           username: 'testuser',
           password: 12345,

@@ -1,8 +1,9 @@
 /**
- * Worker 长驻进程 - 真正的 TS 源文件
+ * JS 沙箱子进程入口
  *
  * 启动后先从 stdin 读取第一行作为初始化配置（allowedModules 等），
- * 然后进入主循环，逐行接收任务执行。
+ * 然后接收用户任务执行。生产环境由进程池保证每个进程只执行一个用户任务；
+ * 循环协议仅保留 ping/HTTP RPC 和非 Linux 本地调试兼容。
  *
  * 协议：
  *   第 1 行：{"type":"init","allowedModules":["lodash","dayjs",...]}
@@ -11,14 +12,9 @@
  */
 import { createInterface } from 'readline';
 import { createRequire } from 'module';
-import { isIP } from 'net';
 import * as crypto from 'crypto';
-import * as http from 'http';
-import * as https from 'https';
-import * as dns from 'dns';
 import { parse } from 'acorn';
 import { simple as walk } from 'acorn-walk';
-import { isInternalAddress, isInternalResolvedIP } from '../utils/ipCheck.util';
 
 const require = createRequire(import.meta.url);
 const _OriginalFunction = Function;
@@ -29,7 +25,6 @@ const _ObjectDefineProperty = Object.defineProperty;
 const _ObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const _ObjectKeys = Object.keys;
 const _OriginalProxy = Proxy;
-const _ReflectOwnKeys = Reflect.ownKeys;
 const _ReflectGet = Reflect.get.bind(Reflect);
 const _ReflectApply = Reflect.apply.bind(Reflect);
 const _ReflectConstruct = Reflect.construct.bind(Reflect);
@@ -70,31 +65,6 @@ function assertNoDynamicImport(code: string): void {
       throw new Error(DYNAMIC_IMPORT_ERROR_MESSAGE);
     }
   });
-}
-
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
-    return value;
-  }
-
-  const obj = value as object;
-  if (seen.has(obj)) return value;
-  seen.add(obj);
-
-  for (const key of _ReflectOwnKeys(obj)) {
-    try {
-      const descriptor = _ObjectGetOwnPropertyDescriptor(obj, key);
-      if (descriptor && 'value' in descriptor) {
-        deepFreeze(descriptor.value, seen);
-      }
-    } catch {}
-  }
-
-  try {
-    _ObjectFreeze(obj);
-  } catch {}
-
-  return value;
 }
 
 const readonlyViews = new WeakMap<object, any>();
@@ -350,7 +320,6 @@ const _workerStdin = process.stdin;
 // 启动期立即删除：与 worker 自身/白名单模块无依赖关系
 const earlyDangerousMethods = [
   'binding',
-  'dlopen',
   '_linkedBinding',
   'chdir',
   'send',
@@ -369,14 +338,26 @@ const earlyDangerousMethods = [
   'initgroups'
 ];
 
-// 延迟删除：会被 https/dns/tsx 等内部使用，要等 hardenRuntime 预加载完白名单后再删
-const lateDangerousMethods = ['kill', 'exit', 'emitWarning', 'abort'];
+// 延迟处理：会被 https/dns/tsx/url 等内部使用，要等 hardenRuntime 预加载完白名单后再收紧。
+const lateDangerousMethods = ['dlopen', 'kill', 'exit', 'abort'];
 
 function deleteProcessMethods(methods: readonly string[]): void {
   for (const method of methods) {
     try {
       Object.defineProperty(process, method, {
         value: undefined,
+        writable: false,
+        configurable: false
+      });
+    } catch {}
+  }
+}
+
+function stubProcessMethods(methods: readonly string[]): void {
+  for (const method of methods) {
+    try {
+      Object.defineProperty(process, method, {
+        value: () => undefined,
         writable: false,
         configurable: false
       });
@@ -415,30 +396,29 @@ if (typeof process !== 'undefined') {
   }
 }
 
-// ===== 网络安全 =====
-function ipToLong(ip: string): number {
-  const parts = ip.split('.').map(Number);
-  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
-}
-
-function dnsResolve(hostname: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    dns.lookup(hostname, { all: true }, (err, addresses) => {
-      if (err) return reject(err);
-      resolve(addresses.map((a: any) => a.address));
-    });
-  });
-}
-
 const REQUEST_LIMITS = {
   maxRequests: 30,
   timeoutMs: 60000,
   maxResponseSize: 10 * 1024 * 1024,
   maxRequestBodySize: 5 * 1024 * 1024,
+  maxOutputSize: 10 * 1024 * 1024,
   allowedProtocols: ['http:', 'https:']
 };
 
-let requestCount = 0;
+let httpRpcSequence = 0;
+const pendingHttpRequests = new Map<
+  string,
+  { resolve: (value: any) => void; reject: (reason: Error) => void }
+>();
+
+/** 将联网操作交给未进入 seccomp 的可信父进程执行。 */
+function callParentHttpProxy(payload: Record<string, any>): Promise<any> {
+  const id = `http-${++httpRpcSequence}`;
+  return new _OriginalPromise((resolve, reject) => {
+    pendingHttpRequests.set(id, { resolve, reject });
+    writeLine({ type: 'http_request', id, payload });
+  });
+}
 
 // ===== Legacy global functions (backward compatibility, not on SystemHelper) =====
 function countToken(text: any): number {
@@ -454,95 +434,11 @@ function createHmac(algorithm: string, secret: string) {
   hmac.update(stringToSign, 'utf8');
   return { timestamp, sign: encodeURIComponent(hmac.digest('base64')) };
 }
-function delay(ms: number): Promise<void> {
-  if (ms > 10000) throw new Error('Delay must be <= 10000ms');
-  return new Promise((r) => _workerSetTimeout(r, ms));
-}
 
 // ===== SystemHelper =====
 const SystemHelper = {
   async httpRequest(url: string, opts: any = {}): Promise<any> {
-    if (++requestCount > REQUEST_LIMITS.maxRequests) {
-      throw new Error('Request limit exceeded');
-    }
-    const parsed = new URL(url);
-    if (!REQUEST_LIMITS.allowedProtocols.includes(parsed.protocol)) {
-      throw new Error('Protocol not allowed');
-    }
-    // 先检查 URL 是否指向内部地址
-    if (await isInternalAddress(url)) {
-      throw new Error('Request to private network not allowed');
-    }
-    const ips = await dnsResolve(parsed.hostname);
-    // 防 DNS rebinding TOCTOU：对真正用于建连的 IP 再次校验
-    if (ips.length === 0 || ips.some((ip) => isInternalResolvedIP(ip))) {
-      throw new Error('Request to private network not allowed');
-    }
-    const method = (opts.method || 'GET').toUpperCase();
-    const headers = opts.headers || {};
-    const body =
-      opts.body != null
-        ? typeof opts.body === 'string'
-          ? opts.body
-          : _JSONStringify(opts.body)
-        : null;
-    if (body && body.length > REQUEST_LIMITS.maxRequestBodySize) {
-      throw new Error('Request body too large');
-    }
-    const timeoutSeconds =
-      typeof opts.timeout === 'number' && Number.isFinite(opts.timeout) && opts.timeout > 0
-        ? opts.timeout
-        : REQUEST_LIMITS.timeoutMs / 1000;
-    const timeout = Math.min(Math.ceil(timeoutSeconds * 1000), REQUEST_LIMITS.timeoutMs);
-    if (body && !headers['Content-Type'] && !headers['content-type']) {
-      headers['Content-Type'] = 'application/json';
-    }
-    const resolvedIP = ips[0];
-    if (!headers['Host'] && !headers['host']) {
-      headers['Host'] = parsed.hostname + (parsed.port ? ':' + parsed.port : '');
-    }
-    const lib = parsed.protocol === 'https:' ? https : http;
-    return new Promise((resolve, reject) => {
-      const req = lib.request(
-        {
-          method,
-          headers,
-          timeout,
-          hostname: resolvedIP,
-          port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-          path: parsed.pathname + parsed.search,
-          // RFC 6066 禁止把 IP 当作 SNI；hostname 是 IP 时省略 servername
-          ...(isIP(parsed.hostname) ? {} : { servername: parsed.hostname })
-        },
-        (res: any) => {
-          const chunks: Buffer[] = [];
-          let size = 0;
-          res.on('data', (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > REQUEST_LIMITS.maxResponseSize) {
-              req.destroy();
-              reject(new Error('Response too large'));
-              return;
-            }
-            chunks.push(chunk);
-          });
-          res.on('end', () => {
-            const data = Buffer.concat(chunks).toString('utf-8');
-            const h: Record<string, any> = {};
-            for (const [k, v] of Object.entries(res.headers)) h[k] = v;
-            resolve({ status: res.statusCode, statusText: res.statusMessage, headers: h, data });
-          });
-          res.on('error', reject);
-        }
-      );
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timeout'));
-      });
-      req.on('error', reject);
-      if (body) req.write(body);
-      req.end();
-    });
+    return callParentHttpProxy({ url, ...opts });
   }
 };
 _ObjectFreeze(SystemHelper);
@@ -562,9 +458,12 @@ function hardenRuntime(): void {
     } catch {}
   }
 
-  // 白名单模块已加载完毕，此时再删除 kill/exit/emitWarning/abort：
+  // 白名单模块已加载完毕，此时再删除 kill/exit/abort：
   // 这些方法仅在模块初始化时被 https/dns/tsx 等使用，预加载后不再需要。
   deleteProcessMethods(lateDangerousMethods);
+  // Node 内置 url.parse 在运行时仍会调用 process.emitWarning。
+  // 用户代码拿到的是下方 _sandboxProcess，这里只给真实 process 保留不可写 no-op 兼容内置模块。
+  stubProcessMethods(['emitWarning']);
 
   for (const intrinsic of hardenedIntrinsics) {
     if (intrinsic) _ObjectFreeze(intrinsic);
@@ -608,7 +507,26 @@ _ObjectFreeze(safeRequire);
 
 // ===== 输出辅助 =====
 function writeLine(obj: any): void {
-  _workerStdout.write(_JSONStringify(obj) + '\n');
+  let line: string;
+  try {
+    line = _JSONStringify(obj);
+  } catch (err: any) {
+    line = _JSONStringify({
+      success: false,
+      message: `Failed to serialize output: ${err?.message ?? String(err)}`,
+      workerRecycle: 'output_serialize'
+    });
+  }
+
+  if (Buffer.byteLength(line, 'utf8') > REQUEST_LIMITS.maxOutputSize) {
+    line = _JSONStringify({
+      success: false,
+      message: `Output too large (limit: ${REQUEST_LIMITS.maxOutputSize} bytes)`,
+      workerRecycle: 'output_limit'
+    });
+  }
+
+  _workerStdout.write(line + '\n');
 }
 
 // ===== 主循环 =====
@@ -621,6 +539,15 @@ rl.on('line', async (line: string) => {
     msg = _JSONParse(line);
   } catch {
     writeLine({ success: false, message: 'Invalid JSON input' });
+    return;
+  }
+
+  if (msg.type === 'http_response') {
+    const pending = pendingHttpRequests.get(msg.id);
+    if (!pending) return;
+    pendingHttpRequests.delete(msg.id);
+    if (msg.success) pending.resolve(msg.payload);
+    else pending.reject(new _OriginalError(msg.message || 'HTTP request failed'));
     return;
   }
 
@@ -638,6 +565,23 @@ rl.on('line', async (line: string) => {
           REQUEST_LIMITS.maxResponseSize = msg.requestLimits.maxResponseSize;
         if (msg.requestLimits.maxRequestBodySize != null)
           REQUEST_LIMITS.maxRequestBodySize = msg.requestLimits.maxRequestBodySize;
+        if (msg.requestLimits.maxOutputSize != null)
+          REQUEST_LIMITS.maxOutputSize = msg.requestLimits.maxOutputSize;
+      }
+      // 先加载白名单与 native addon；进入 seccomp 后不再允许动态装载原生代码。
+      for (const moduleName of allowedModules) {
+        try {
+          origRequire(moduleName);
+        } catch {}
+      }
+      if (msg.nativeIsolation?.enabled) {
+        const addon = origRequire(msg.nativeIsolation.addonPath);
+        addon.init({
+          uid: msg.nativeIsolation.uid,
+          gid: msg.nativeIsolation.gid,
+          cwd: msg.nativeIsolation.cwd,
+          enableSeccomp: msg.nativeIsolation.enableSeccomp
+        });
       }
       hardenRuntime();
       writeLine({ type: 'ready' });
@@ -656,8 +600,6 @@ rl.on('line', async (line: string) => {
 
   // 后续消息：执行任务
   const { code, variables, timeoutMs } = msg;
-  requestCount = 0; // 每次任务重置
-
   const logs: string[] = [];
   let logSize = 0;
   const MAX_LOG_SIZE = 1024 * 1024; // 1MB
@@ -731,8 +673,15 @@ rl.on('line', async (line: string) => {
     }
     activeIntervals.clear();
   };
+  const safeDelay = (ms: number): Promise<void> => {
+    if (ms > 10000) throw new Error('Delay must be <= 10000ms');
+    return new _OriginalPromise((resolve) => {
+      safeSetTimeout(resolve, ms);
+    });
+  };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const requireCacheKeysBeforeTask = getRequireCacheKeys();
   try {
     assertNoDynamicImport(code);
@@ -808,7 +757,7 @@ rl.on('line', async (line: string) => {
         countToken,
         strToBase64,
         createHmac,
-        delay,
+        safeDelay,
         httpRequest,
         variables || {},
         undefined,
@@ -860,10 +809,10 @@ rl.on('line', async (line: string) => {
     })();
 
     const timeoutPromise = new _OriginalPromise((_, reject) => {
-      timer = _workerSetTimeout(
-        () => reject(new _OriginalError(`Script execution timed out after ${timeoutMs}ms`)),
-        timeoutMs || 10000
-      );
+      timer = _workerSetTimeout(() => {
+        timedOut = true;
+        reject(new _OriginalError(`Script execution timed out after ${timeoutMs}ms`));
+      }, timeoutMs || 10000);
     });
 
     const result = await _PromiseRace([resultPromise, timeoutPromise]);
@@ -874,7 +823,11 @@ rl.on('line', async (line: string) => {
     });
   } catch (err: any) {
     _workerClearTimeout(timer);
-    writeLine({ success: false, message: err?.message ?? String(err) });
+    writeLine({
+      success: false,
+      message: err?.message ?? String(err),
+      ...(timedOut ? { workerRecycle: 'timeout' } : {})
+    });
   } finally {
     cleanupUserTimers();
     cleanupUserRequireCache(requireCacheKeysBeforeTask);

@@ -1,25 +1,50 @@
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps, ApiResponseType } from '@fastgpt/next/type';
+import { wechatQrLoginCache } from '@fastgpt/dal/redis/caches';
 import { NextAPI } from '@/service/middleware/entry';
 import { ILinkClient } from '@fastgpt/service/support/outLink/wechat/ilinkClient';
-import { getRedisCache, delRedisCache } from '@fastgpt/service/common/redis/cache';
 import { MongoOutLink } from '@fastgpt/service/support/outLink/schema';
 import { startWechatPolling } from '@fastgpt/service/support/outLink/wechat/mq';
+import { authOutLinkCrud } from '@fastgpt/service/support/permission/publish/authLink';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import {
+  WechatQrcodeStatusQuerySchema,
+  WechatQrcodeStatusResponseSchema,
+  type WechatQrcodeStatusQueryType,
+  type WechatQrcodeStatusResponseType
+} from '@fastgpt/global/openapi/support/outLink/provider/wechat';
+import { ManagePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { assertWechatOutLink } from '@fastgpt/service/support/outLink/wechat/utils';
 
-async function handler(req: ApiRequestProps<{}, { shareId: string }>): Promise<{ status: string }> {
-  const { shareId } = req.query;
+async function handler(
+  req: ApiRequestProps<Record<string, never>, WechatQrcodeStatusQueryType>,
+  res: ApiResponseType
+): Promise<WechatQrcodeStatusResponseType> {
+  res.setHeader('Cache-Control', 'no-store');
 
-  const raw = await getRedisCache(`publish:wechat:qrcode:${shareId}`);
-  if (!raw) {
-    return { status: 'expired' };
+  const { outLinkId } = parseApiInput({
+    req,
+    querySchema: WechatQrcodeStatusQuerySchema
+  }).query;
+
+  const { tmbId, outLink } = await authOutLinkCrud({
+    req,
+    authToken: true,
+    outLinkId,
+    per: ManagePermissionVal
+  });
+  await assertWechatOutLink(outLink);
+
+  const qrData = await wechatQrLoginCache.get({ outLinkId, tmbId });
+  if (!qrData) {
+    return WechatQrcodeStatusResponseSchema.parse({ status: 'expired' });
   }
 
-  const qrData = JSON.parse(raw);
   const client = new ILinkClient();
   const statusData = await client.getQRCodeStatus(qrData.qrcode);
 
   if (statusData.status === 'confirmed' && statusData.bot_token && statusData.ilink_bot_id) {
     await MongoOutLink.updateOne(
-      { shareId },
+      { _id: outLink._id },
       {
         $set: {
           'app.token': statusData.bot_token,
@@ -34,11 +59,11 @@ async function handler(req: ApiRequestProps<{}, { shareId: string }>): Promise<{
       }
     );
 
-    await delRedisCache(`publish:wechat:qrcode:${shareId}`);
-    await startWechatPolling(shareId);
+    await wechatQrLoginCache.delete({ outLinkId, tmbId });
+    await startWechatPolling(outLink.shareId);
   }
 
-  return { status: statusData.status };
+  return WechatQrcodeStatusResponseSchema.parse({ status: statusData.status });
 }
 
 export default NextAPI(handler);

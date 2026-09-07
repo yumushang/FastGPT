@@ -1,6 +1,7 @@
 import {
   Box,
   Flex,
+  Grid,
   HStack,
   Table,
   TableContainer,
@@ -15,9 +16,9 @@ import {
   Button,
   useDisclosure
 } from '@chakra-ui/react';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import React, { useCallback, useMemo, useState } from 'react';
-import MySelect from '@fastgpt/web/components/common/MySelect';
+import { SingleSelectFilter } from '@fastgpt/web/components/common/TagFilter';
 import { modelTypeList, ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
 import Avatar from '@fastgpt/web/components/common/Avatar';
@@ -28,16 +29,15 @@ import {
   deleteSystemModel,
   getModelConfigJson,
   getSystemModelDetail,
-  getSystemModelList,
+  getAdminModelConfig,
   getTestModel,
   putSystemModel,
   putUpdateDefaultModels
 } from '@/web/core/ai/config';
 import MyBox from '@fastgpt/web/components/common/MyBox';
-import { type SystemModelItemType } from '@fastgpt/service/core/ai/type';
+import { type SystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 import MyIconButton from '@fastgpt/web/components/common/Icon/button';
 import JsonEditor from '@fastgpt/web/components/common/Textarea/JsonEditor';
-import { clientInitData } from '@/web/common/system/staticData';
 import { useUserStore } from '@/web/support/user/useUserStore';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
@@ -50,28 +50,69 @@ import { AddModelButton } from './AddModelBox';
 import PopoverConfirm from '@fastgpt/web/components/common/MyPopover/PopoverConfirm';
 import PriceTiersLabel from '@/components/core/ai/PriceTiersLabel';
 import TestModeBetaTag from '@/components/core/ai/TestModeBetaTag';
+import ModelCapabilityTags from '@/components/core/ai/ModelCapabilityTags';
+import { accountContentScrollStyles, accountPageRootStyles } from '@/pageComponents/account/styles';
+import ModelTabHeader from './ModelTabHeader';
+import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
+import {
+  formatModelProviders,
+  getModelProviderFromCache,
+  getModelProviderListFromCache
+} from '@fastgpt/global/core/ai/provider';
+import type { ModelDefaultIds } from '@fastgpt/global/core/ai/defaultModel';
+import { useSet } from 'ahooks';
 
 const MyModal = dynamic(() => import('@fastgpt/web/components/common/MyModal'));
 const ModelEditModal = dynamic(() => import('./AddModelBox').then((mod) => mod.ModelEditModal));
 
 const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useClientTranslation('config_model');
   const { userInfo } = useUserStore();
-  const { defaultModels, feConfigs, getModelProviders, getModelProvider } = useSystemStore();
+  const { feConfigs } = useSystemStore();
+
+  const {
+    data: adminConfig,
+    runAsync: refreshSystemModelList,
+    loading: loadingModels
+  } = useRequest(getAdminModelConfig, { manual: false });
+  const systemModelList = useMemo(() => adminConfig?.models ?? [], [adminConfig?.models]);
+  const providerCache = useMemo(
+    () => formatModelProviders(adminConfig?.providers ?? []),
+    [adminConfig?.providers]
+  );
+  const getModelProviders = useCallback(
+    (language?: string) =>
+      getModelProviderListFromCache(providerCache.ModelProviderListCache, language),
+    [providerCache.ModelProviderListCache]
+  );
+  const getModelProvider = useCallback(
+    (provider?: string, language?: string) =>
+      getModelProviderFromCache({ cache: providerCache.ModelProviderMapCache, provider, language }),
+    [providerCache.ModelProviderMapCache]
+  );
+  const defaultModels = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(adminConfig?.defaultModelIds ?? {}).map(([key, modelId]) => [
+          key,
+          systemModelList.find((model) => model.modelId === modelId)
+        ])
+      ),
+    [adminConfig?.defaultModelIds, systemModelList]
+  );
 
   const isRoot = userInfo?.username === 'root';
 
   const [provider, setProvider] = useState<string | ''>('');
-  const providerList = useMemo<{ label: React.ReactNode; value: string | '' }[]>(
+  const providerList = useMemo<
+    { label: string; value: string | ''; searchText?: string; avatar?: string }[]
+  >(
     () => [
       { label: t('common:All'), value: '' },
       ...getModelProviders(i18n.language).map((item) => ({
-        label: (
-          <HStack>
-            <Avatar src={item.avatar} w={'1rem'} />
-            <Box>{item.name}</Box>
-          </HStack>
-        ),
+        label: item.name,
+        avatar: item.avatar,
+        searchText: item.name,
         value: item.id
       }))
     ],
@@ -90,16 +131,9 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
   const [search, setSearch] = useState('');
   const [showActive, setShowActive] = useState(false);
 
-  const {
-    data: systemModelList = [],
-    runAsync: refreshSystemModelList,
-    loading: loadingModels
-  } = useRequest(getSystemModelList, {
-    manual: false
-  });
   const refreshModels = useCallback(async () => {
-    clientInitData();
-    refreshSystemModelList();
+    useUserModelStore.getState().clearMemory();
+    await refreshSystemModelList();
   }, [refreshSystemModelList]);
 
   const modelList = useMemo(() => {
@@ -204,7 +238,20 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
         avatar: provider.avatar,
         providerId: provider.id,
         providerName: t(provider.name as any),
-        order: provider.order
+        order: provider.order,
+        contextToken:
+          item.type === ModelTypeEnum.llm
+            ? item.config.maxContext
+            : item.type === ModelTypeEnum.embedding || item.type === ModelTypeEnum.rerank
+              ? item.config.maxToken
+              : undefined,
+        vision:
+          item.type === ModelTypeEnum.llm || item.type === ModelTypeEnum.embedding
+            ? item.config.vision
+            : undefined,
+        audio: item.type === ModelTypeEnum.llm ? item.config.audio : undefined,
+        video: item.type === ModelTypeEnum.llm ? item.config.video : undefined,
+        reasoning: item.type === ModelTypeEnum.llm ? item.config.reasoning : undefined
       };
     });
     formatList.sort((a, b) => a.order - b.order);
@@ -241,23 +288,56 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
     return providerList.filter((item) => allProviderIds.includes(item.value) || item.value === '');
   }, [providerList, systemModelList]);
 
-  const { runAsync: onTestModel, loading: testingModel } = useRequest(getTestModel, {
-    manual: true,
-    successToast: t('common:Success')
-  });
+  const [testingModelIds, testingModelIdsDispatch] = useSet<string>();
+  const { runAsync: onTestModel } = useRequest(
+    async (data: Parameters<typeof getTestModel>[0]) => {
+      testingModelIdsDispatch.add(data.modelId);
+      try {
+        return await getTestModel(data);
+      } finally {
+        testingModelIdsDispatch.remove(data.modelId);
+      }
+    },
+    {
+      manual: true,
+      successToast: t('common:Success')
+    }
+  );
   const { runAsync: updateModel, loading: updatingModel } = useRequest(putSystemModel, {
     onSuccess: refreshModels
   });
+
+  /**
+   * 启停接口仍接收完整模型配置，因此必须从接口原始数据构造请求。
+   * modelList 包含 priceLabel 等 React 展示节点，直接展开会因 Fiber 循环引用而无法序列化。
+   */
+  const toggleModelActive = useCallback(
+    (modelId: string, isActive: boolean) => {
+      const sourceModel = systemModelList.find((model) => model.modelId === modelId);
+      if (!sourceModel) return;
+
+      const { modelId: _modelId, avatar: _avatar, isCustom: _isCustom, ...modelData } = sourceModel;
+
+      return updateModel({
+        modelId,
+        modelData: {
+          ...modelData,
+          isActive
+        }
+      });
+    },
+    [systemModelList, updateModel]
+  );
 
   const { runAsync: deleteModel } = useRequest(deleteSystemModel, {
     onSuccess: refreshModels
   });
 
-  const [editModelData, setEditModelData] = useState<SystemModelItemType>();
+  const [editModelData, setEditModelData] = useState<SystemModelDataType>();
   const { runAsync: onEditModel, loading: loadingData } = useRequest(
     (modelId: string) => getSystemModelDetail(modelId),
     {
-      onSuccess: (data: SystemModelItemType) => {
+      onSuccess: (data: SystemModelDataType) => {
         setEditModelData(data);
       }
     }
@@ -278,11 +358,18 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
       isCustom: true,
       isActive: true,
 
-      isDefault: false,
-      isDefaultDatasetTextModel: false,
-      isDefaultDatasetImageModel: false,
-      type
-    } as SystemModelItemType;
+      type,
+      ...(type === ModelTypeEnum.llm
+        ? {
+            config: {
+              ...defaultModel?.config,
+              vision: false,
+              audio: false,
+              video: false
+            }
+          }
+        : {})
+    } as SystemModelDataType;
 
     setEditModelData(modelData);
   };
@@ -298,179 +385,189 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
     isOpen: isOpenDefaultModel
   } = useDisclosure();
 
-  const isLoading = loadingModels || loadingData || updatingModel || testingModel;
+  const isLoading = loadingModels || loadingData || updatingModel;
 
   const [showModelId, setShowModelId] = useState(true);
 
   return (
     <>
       {isRoot && (
-        <Flex alignItems={'center'}>
-          {Tab}
-          <Box flex={1} />
-          <Button variant={'whiteBase'} mr={2} onClick={onOpenDefaultModel}>
-            {t('account:model.default_model')}
-          </Button>
-          <Button variant={'whiteBase'} mr={2} onClick={onOpenJsonConfig}>
-            {t('account:model.json_config')}
-          </Button>
-          <AddModelButton onCreate={onCreateModel} />
-        </Flex>
+        <ModelTabHeader Tab={Tab}>
+          <Grid
+            w={['100%', 'auto']}
+            templateColumns={['repeat(3, minmax(0, 1fr))', 'repeat(3, auto)']}
+            gap={2}
+          >
+            <Button
+              w={['100%', 'auto']}
+              minW={0}
+              px={[2, 4]}
+              variant={'whiteBase'}
+              onClick={onOpenDefaultModel}
+            >
+              {t('config_model:model.default_model')}
+            </Button>
+            <Button
+              w={['100%', 'auto']}
+              minW={0}
+              px={[2, 4]}
+              variant={'whiteBase'}
+              onClick={onOpenJsonConfig}
+            >
+              {t('config_model:model.json_config')}
+            </Button>
+            <AddModelButton
+              w={['100%', 'auto']}
+              minW={0}
+              px={[2, 4]}
+              buttonBoxProps={{ w: ['100%', 'fit-content'] }}
+              onCreate={onCreateModel}
+            />
+          </Grid>
+        </ModelTabHeader>
       )}
-      <MyBox flex={'1 0 0'} isLoading={isLoading}>
-        <Flex flexDirection={'column'} h={'100%'}>
-          <Flex>
-            <HStack flexShrink={0}>
-              <Box fontSize={'sm'} color={'myGray.900'}>
-                {t('common:model.provider')}
-              </Box>
-              <MySelect
-                w={'200px'}
-                bg={'myGray.50'}
-                value={provider}
-                onChange={setProvider}
-                list={filterProviderList}
-              />
-            </HStack>
-            <HStack flexShrink={0} ml={6}>
-              <Box fontSize={'sm'} color={'myGray.900'}>
-                {t('common:model.model_type')}
-              </Box>
-              <MySelect
-                w={'150px'}
-                bg={'myGray.50'}
-                value={modelType}
-                onChange={setModelType}
-                list={selectModelTypeList}
-              />
-            </HStack>
-            <Box flex={1} />
-            <Box flex={'0 0 250px'}>
+      <Box display={'flex'} flex={'1 0 0'} h={0} minH={0} flexDirection={'column'}>
+        <Flex {...accountPageRootStyles} h={'100%'} flexDirection={'column'}>
+          <Flex
+            px={6}
+            flexDirection={['column', 'row']}
+            gap={[3, 6]}
+            alignItems={['stretch', 'flex-start']}
+          >
+            <SingleSelectFilter
+              title={t('common:model.provider')}
+              value={provider}
+              options={filterProviderList}
+              onChange={setProvider}
+              showSearch
+              maxW={'240px'}
+              listSize={'lg'}
+            />
+            <SingleSelectFilter
+              title={t('common:model.model_type')}
+              value={modelType}
+              options={selectModelTypeList}
+              onChange={setModelType}
+            />
+            <Box
+              ml={[0, 'auto']}
+              w={'100%'}
+              maxW={['100%', '200px']}
+              flex={['none', '0 0 200px']}
+              flexShrink={0}
+            >
               <SearchInput
-                bg={'myGray.50'}
+                bg={'myGray.25'}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t('common:model.search_name_placeholder')}
               />
             </Box>
           </Flex>
-          <TableContainer mt={5} flex={'1 0 0'} h={0} overflowY={'auto'}>
-            <Table>
-              <Thead>
-                <Tr color={'myGray.600'}>
-                  <Th fontSize={'xs'}>
-                    <HStack
-                      spacing={1}
-                      cursor={'pointer'}
-                      onClick={() => setShowModelId(!showModelId)}
-                    >
-                      <Box>
-                        {showModelId ? t('account:model.model_id') : t('common:model.name')}
+          <MyBox {...accountContentScrollStyles} flex={'1 0 0'} h={0} mt={5} isLoading={isLoading}>
+            <TableContainer h={'100%'} minH={0} overflowY={['visible', 'auto']} px={6}>
+              <Table>
+                <Thead>
+                  <Tr color={'myGray.600'}>
+                    <Th fontSize={'xs'}>
+                      <HStack
+                        spacing={1}
+                        cursor={'pointer'}
+                        onClick={() => setShowModelId(!showModelId)}
+                      >
+                        <Box>
+                          {showModelId ? t('config_model:model.model_id') : t('common:model.name')}
+                        </Box>
+                        <MyIcon name={'modal/changePer'} w={'1rem'} />
+                      </HStack>
+                    </Th>
+                    <Th fontSize={'xs'}>{t('common:model.model_type')}</Th>
+                    {feConfigs?.isPlus && <Th fontSize={'xs'}>{t('common:model.billing')}</Th>}
+                    <Th fontSize={'xs'}>
+                      <Box
+                        cursor={'pointer'}
+                        onClick={() => setShowActive(!showActive)}
+                        color={showActive ? 'primary.600' : 'myGray.600'}
+                      >
+                        {t('config_model:model.active')}({activeModelLength})
                       </Box>
-                      <MyIcon name={'modal/changePer'} w={'1rem'} />
-                    </HStack>
-                  </Th>
-                  <Th fontSize={'xs'}>{t('common:model.model_type')}</Th>
-                  {feConfigs?.isPlus && <Th fontSize={'xs'}>{t('common:model.billing')}</Th>}
-                  <Th fontSize={'xs'}>
-                    <Box
-                      cursor={'pointer'}
-                      onClick={() => setShowActive(!showActive)}
-                      color={showActive ? 'primary.600' : 'myGray.600'}
-                    >
-                      {t('account:model.active')}({activeModelLength})
-                    </Box>
-                  </Th>
-                  <Th fontSize={'xs'}></Th>
-                </Tr>
-              </Thead>
-              <Tbody>
-                {modelList.map((item) => (
-                  <Tr key={item.model} _hover={{ bg: 'myGray.50' }}>
-                    <Td fontSize={'sm'}>
-                      <HStack>
-                        <Avatar src={item.avatar} w={'1.2rem'} borderRadius={'50%'} />
-                        <Flex alignItems={'center'} gap={1} minW={0}>
-                          <CopyBox
-                            value={showModelId ? item.model : item.name}
-                            color={'myGray.900'}
-                            fontWeight={'500'}
-                          >
-                            {showModelId ? item.model : item.name}
-                          </CopyBox>
-                          {item.testMode && <TestModeBetaTag />}
-                        </Flex>
-                      </HStack>
-                      <HStack mt={2}>
-                        {item.contextToken && (
-                          <MyTag type="borderFill" colorSchema="blue" py={0.5}>
-                            {Math.floor(item.contextToken / 1000)}k
-                          </MyTag>
-                        )}
-                        {item.vision && (
-                          <MyTag type="borderFill" colorSchema="green" py={0.5}>
-                            {item.type === ModelTypeEnum.llm
-                              ? t('account:model.vision_tag')
-                              : t('common:core.ai.model.multimodal')}
-                          </MyTag>
-                        )}
-                        {item.toolChoice && (
-                          <MyTag type="borderFill" colorSchema="adora" py={0.5}>
-                            {t('account:model.tool_choice_tag')}
-                          </MyTag>
-                        )}
-                      </HStack>
-                    </Td>
-                    <Td>
-                      <MyTag colorSchema={item.tagColor as any}>{item.typeLabel}</MyTag>
-                    </Td>
-                    {feConfigs?.isPlus && <Td fontSize={'sm'}>{item.priceLabel}</Td>}
-                    <Td fontSize={'sm'}>
-                      <Switch
-                        size={'sm'}
-                        isChecked={item.isActive}
-                        onChange={(e) =>
-                          updateModel({
-                            model: item.model,
-                            metadata: { isActive: e.target.checked }
-                          })
-                        }
-                        colorScheme={'myBlue'}
-                      />
-                    </Td>
-                    <Td>
-                      <HStack>
-                        <MyIconButton
-                          icon={'core/chat/sendLight'}
-                          tip={t('account:model.test_model')}
-                          onClick={() => onTestModel({ model: item.model })}
-                        />
-                        <MyIconButton
-                          icon={'common/settingLight'}
-                          tip={t('account:model.edit_model')}
-                          onClick={() => onEditModel(item.model)}
-                        />
-                        {item.isCustom && (
-                          <PopoverConfirm
-                            Trigger={
-                              <Box>
-                                <MyIconButton icon={'delete'} hoverColor={'red.500'} />
-                              </Box>
-                            }
-                            type="delete"
-                            content={t('account:model.delete_model_confirm')}
-                            onConfirm={() => deleteModel({ model: item.model })}
-                          />
-                        )}
-                      </HStack>
-                    </Td>
+                    </Th>
+                    <Th fontSize={'xs'}></Th>
                   </Tr>
-                ))}
-              </Tbody>
-            </Table>
-          </TableContainer>
+                </Thead>
+                <Tbody>
+                  {modelList.map((item) => (
+                    <Tr key={item.model} _hover={{ bg: 'myGray.50' }}>
+                      <Td fontSize={'sm'}>
+                        <HStack>
+                          <Avatar src={item.avatar} w={'1.2rem'} borderRadius={'50%'} />
+                          <Flex alignItems={'center'} gap={1} minW={0}>
+                            <CopyBox
+                              value={showModelId ? item.model : item.name}
+                              color={'myGray.900'}
+                              fontWeight={'500'}
+                            >
+                              {showModelId ? item.model : item.name}
+                            </CopyBox>
+                            {item.testMode && <TestModeBetaTag />}
+                          </Flex>
+                        </HStack>
+                        <ModelCapabilityTags
+                          mt={2}
+                          contextToken={item.contextToken}
+                          showVision={!!item.vision}
+                          showVideo={!!item.video}
+                          showAudio={!!item.audio}
+                          showReasoning={!!item.reasoning}
+                        />
+                      </Td>
+                      <Td>
+                        <MyTag colorSchema={item.tagColor as any}>{item.typeLabel}</MyTag>
+                      </Td>
+                      {feConfigs?.isPlus && <Td fontSize={'sm'}>{item.priceLabel}</Td>}
+                      <Td fontSize={'sm'}>
+                        <Switch
+                          size={'sm'}
+                          isChecked={item.isActive}
+                          onChange={(e) => toggleModelActive(item.modelId, e.target.checked)}
+                          colorScheme={'myBlue'}
+                        />
+                      </Td>
+                      <Td>
+                        <HStack>
+                          <MyIconButton
+                            icon={'core/chat/sendLight'}
+                            tip={t('config_model:model.test_model')}
+                            isLoading={testingModelIds.has(item.modelId)}
+                            onClick={() => onTestModel({ modelId: item.modelId })}
+                          />
+                          <MyIconButton
+                            icon={'common/settingLight'}
+                            tip={t('config_model:model.edit_model')}
+                            onClick={() => onEditModel(item.modelId!)}
+                          />
+                          {item.isCustom && (
+                            <PopoverConfirm
+                              Trigger={
+                                <Box>
+                                  <MyIconButton icon={'delete'} hoverColor={'red.500'} />
+                                </Box>
+                              }
+                              type="delete"
+                              content={t('config_model:model.delete_model_confirm')}
+                              onConfirm={() => deleteModel({ modelId: item.modelId })}
+                            />
+                          )}
+                        </HStack>
+                      </Td>
+                    </Tr>
+                  ))}
+                </Tbody>
+              </Table>
+            </TableContainer>
+          </MyBox>
         </Flex>
-      </MyBox>
+      </Box>
 
       {!!editModelData && (
         <ModelEditModal
@@ -483,7 +580,12 @@ const ModelTable = ({ Tab }: { Tab: React.ReactNode }) => {
         <JsonConfigModal onClose={onCloseJsonConfig} onSuccess={refreshModels} />
       )}
       {isOpenDefaultModel && (
-        <DefaultModelModal onClose={onCloseDefaultModel} onSuccess={refreshModels} />
+        <DefaultModelModal
+          models={systemModelList}
+          defaultModelIds={adminConfig?.defaultModelIds ?? {}}
+          onClose={onCloseDefaultModel}
+          onSuccess={refreshModels}
+        />
       )}
     </>
   );
@@ -496,7 +598,7 @@ const JsonConfigModal = ({
   onClose: () => void;
   onSuccess: () => void;
 }) => {
-  const { t } = useTranslation();
+  const { t } = useClientTranslation('config_model');
 
   const [data, setData] = useState<string>('');
   const { loading } = useRequest(getModelConfigJson, {
@@ -519,13 +621,13 @@ const JsonConfigModal = ({
       isLoading={loading}
       onClose={onClose}
       iconSrc="modal/edit"
-      title={t('account:model.json_config')}
+      title={t('config_model:model.json_config')}
       w={'100%'}
       h={'100%'}
     >
       <ModalBody display={'flex'} flexDirection={'column'}>
         <Box fontSize={'sm'} color={'myGray.500'}>
-          {t('account:model.json_config_tip')}
+          {t('config_model:model.json_config_tip')}
         </Box>
         <Box mt={2} flex={1} w={'100%'} overflow={'hidden'}>
           <JsonEditor value={data} onChange={setData} resize h={'100%'} />
@@ -539,7 +641,7 @@ const JsonConfigModal = ({
         <PopoverConfirm
           Trigger={<Button>{t('common:Confirm')}</Button>}
           type="info"
-          content={t('account:model.json_config_confirm')}
+          content={t('config_model:model.json_config_confirm')}
           onConfirm={() => runAsync({ config: data })}
         />
       </ModalFooter>
@@ -553,23 +655,30 @@ const labelStyles = {
   mb: 0.5
 };
 const DefaultModelModal = ({
+  models,
+  defaultModelIds,
   onSuccess,
   onClose
 }: {
+  models: SystemModelDataType[];
+  defaultModelIds: ModelDefaultIds;
   onSuccess: () => void;
   onClose: () => void;
 }) => {
-  const { t } = useTranslation();
-  const {
-    defaultModels,
-    llmModelList,
-    embeddingModelList,
-    ttsModelList,
-    sttModelList,
-    reRankModelList,
-    getVlmModelList
-  } = useSystemStore();
-  const vlmModelList = useMemo(() => getVlmModelList(), [getVlmModelList]);
+  const { t } = useClientTranslation('config_model');
+  const activeModels = models.filter((model) => model.isActive);
+  const llmModelList = activeModels.filter((model) => model.type === ModelTypeEnum.llm);
+  const embeddingModelList = activeModels.filter((model) => model.type === ModelTypeEnum.embedding);
+  const ttsModelList = activeModels.filter((model) => model.type === ModelTypeEnum.tts);
+  const sttModelList = activeModels.filter((model) => model.type === ModelTypeEnum.stt);
+  const reRankModelList = activeModels.filter((model) => model.type === ModelTypeEnum.rerank);
+  const vlmModelList = llmModelList.filter((model) => !!model.config.vision);
+  const defaultModels = Object.fromEntries(
+    Object.entries(defaultModelIds).map(([key, modelId]) => [
+      key,
+      models.find((model) => model.modelId === modelId)
+    ])
+  ) as Record<keyof ModelDefaultIds, SystemModelDataType | undefined>;
 
   // Create a copy of defaultModels for local state management
   const [defaultData, setDefaultData] = useState(defaultModels);
@@ -586,7 +695,7 @@ const DefaultModelModal = ({
     <MyModal
       isOpen
       onClose={onClose}
-      title={t('account:default_model_config')}
+      title={t('config_model:default_model_config')}
       iconSrc="modal/edit"
     >
       <ModalBody>
@@ -594,16 +703,17 @@ const DefaultModelModal = ({
           <Box {...labelStyles}>{t('common:model.type.chat')}</Box>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.llm}
               bg="myGray.50"
-              value={defaultData.llm?.model}
+              value={defaultData.llm?.modelId}
               list={llmModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  llm: llmModelList.find((item) => item.model === e)
+                  llm: llmModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -613,16 +723,17 @@ const DefaultModelModal = ({
           <Box {...labelStyles}>{t('common:model.type.embedding')}</Box>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.embedding}
               bg="myGray.50"
-              value={defaultData.embedding?.model}
+              value={defaultData.embedding?.modelId}
               list={embeddingModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  embedding: embeddingModelList.find((item) => item.model === e)
+                  embedding: embeddingModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -632,16 +743,17 @@ const DefaultModelModal = ({
           <Box {...labelStyles}>{t('common:model.type.tts')}</Box>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.tts}
               bg="myGray.50"
-              value={defaultData.tts?.model}
+              value={defaultData.tts?.modelId}
               list={ttsModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  tts: ttsModelList.find((item) => item.model === e)
+                  tts: ttsModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -651,16 +763,17 @@ const DefaultModelModal = ({
           <Box {...labelStyles}>{t('common:model.type.stt')}</Box>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.stt}
               bg="myGray.50"
-              value={defaultData.stt?.model}
+              value={defaultData.stt?.modelId}
               list={sttModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  stt: sttModelList.find((item) => item.model === e)
+                  stt: sttModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -670,16 +783,17 @@ const DefaultModelModal = ({
           <Box {...labelStyles}>{t('common:model.type.reRank')}</Box>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.rerank}
               bg="myGray.50"
-              value={defaultData.rerank?.model}
+              value={defaultData.rerank?.modelId}
               list={reRankModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  rerank: reRankModelList.find((item) => item.model === e)
+                  rerank: reRankModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -693,16 +807,17 @@ const DefaultModelModal = ({
           </Flex>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.llm}
               bg="myGray.50"
-              value={defaultData.datasetTextLLM?.model}
+              value={defaultData.datasetTextLLM?.modelId}
               list={llmModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  datasetTextLLM: llmModelList.find((item) => item.model === e)
+                  datasetTextLLM: llmModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -710,21 +825,47 @@ const DefaultModelModal = ({
         </Box>
         <Box>
           <Flex mt={4} {...labelStyles} alignItems={'center'}>
-            <Box mr={0.5}>{t('account_model:vlm_model')}</Box>
-            <QuestionTip label={t('account_model:vlm_model_tip')} />
+            <Box mr={0.5}>{t('config_model:vlm_model')}</Box>
+            <QuestionTip label={t('config_model:vlm_model_tip')} />
           </Flex>
           <Box flex={1}>
             <AIModelSelector
+              modelType={ModelTypeEnum.llm}
               bg="myGray.50"
-              value={defaultData.datasetImageLLM?.model}
+              value={defaultData.datasetImageLLM?.modelId}
               list={vlmModelList.map((item) => ({
-                value: item.model,
+                value: item.modelId,
                 label: item.name
               }))}
               onChange={(e) => {
                 setDefaultData((state) => ({
                   ...state,
-                  datasetImageLLM: vlmModelList.find((item) => item.model === e)
+                  datasetImageLLM: vlmModelList.find((item) => item.modelId === e)
+                }));
+              }}
+            />
+          </Box>
+        </Box>
+        <Box>
+          <Flex mt={4} {...labelStyles} alignItems={'center'}>
+            <Box mr={0.5}>{t('config_model:chat_title_model')}</Box>
+            <QuestionTip label={t('config_model:chat_title_model_tip')} />
+          </Flex>
+          <Box flex={1}>
+            <AIModelSelector
+              modelType={ModelTypeEnum.llm}
+              bg="myGray.50"
+              value={defaultData.chatTitleLLM?.modelId || ''}
+              canBeUnset
+              unsetLabel={t('config_model:not_set_chat_title_model')}
+              list={llmModelList.map((item) => ({
+                value: item.modelId,
+                label: item.name
+              }))}
+              onChange={(e) => {
+                setDefaultData((state) => ({
+                  ...state,
+                  chatTitleLLM: llmModelList.find((item) => item.modelId === e)
                 }));
               }}
             />
@@ -739,13 +880,14 @@ const DefaultModelModal = ({
           isLoading={loading}
           onClick={() =>
             runAsync({
-              [ModelTypeEnum.llm]: defaultData.llm?.model,
-              [ModelTypeEnum.embedding]: defaultData.embedding?.model,
-              [ModelTypeEnum.tts]: defaultData.tts?.model,
-              [ModelTypeEnum.stt]: defaultData.stt?.model,
-              [ModelTypeEnum.rerank]: defaultData.rerank?.model,
-              datasetTextLLM: defaultData.datasetTextLLM?.model,
-              datasetImageLLM: defaultData.datasetImageLLM?.model
+              [ModelTypeEnum.llm]: defaultData.llm?.modelId,
+              [ModelTypeEnum.embedding]: defaultData.embedding?.modelId,
+              [ModelTypeEnum.tts]: defaultData.tts?.modelId,
+              [ModelTypeEnum.stt]: defaultData.stt?.modelId,
+              [ModelTypeEnum.rerank]: defaultData.rerank?.modelId,
+              datasetTextLLMModelId: defaultData.datasetTextLLM?.modelId,
+              datasetImageLLMModelId: defaultData.datasetImageLLM?.modelId,
+              chatTitleLLMModelId: defaultData.chatTitleLLM?.modelId
             })
           }
         >

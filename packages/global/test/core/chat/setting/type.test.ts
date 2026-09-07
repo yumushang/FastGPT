@@ -27,9 +27,26 @@ describe('ChatSelectedToolSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should reject invalid pluginId', () => {
+  it.each([
+    'systemTool-websearch',
+    'commercial-dalle3',
+    'mcp-507f1f77bcf86cd799439011/searchTool',
+    'http-507f1f77bcf86cd799439011/apiTool',
+    'invalid',
+    ''
+  ])('should validate arbitrary string pluginId: %s', (pluginId) => {
     const result = ChatSelectedToolSchema.safeParse({
-      pluginId: 'invalid',
+      pluginId,
+      inputs: {},
+      name: '测试工具',
+      avatar: '/icon/tool.svg'
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject non-string pluginId', () => {
+    const result = ChatSelectedToolSchema.safeParse({
+      pluginId: 123,
       inputs: {},
       name: '测试工具',
       avatar: '/icon/tool.svg'
@@ -72,7 +89,7 @@ describe('ChatSettingModelSchema', () => {
       quickAppIds: ['507f1f77bcf86cd799439014'],
       selectedTools: [
         {
-          pluginId: '507f1f77bcf86cd799439015',
+          pluginId: 'systemTool-websearch',
           inputs: {}
         }
       ],
@@ -107,6 +124,18 @@ describe('ChatSettingModelSchema', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it('should default missing favouriteTags to an empty array', () => {
+    const result = ChatSettingModelSchema.parse({
+      _id: '507f1f77bcf86cd799439011',
+      appId: '507f1f77bcf86cd799439012',
+      teamId: '507f1f77bcf86cd799439013',
+      quickAppIds: [],
+      selectedTools: []
+    });
+
+    expect(result.favouriteTags).toEqual([]);
+  });
 });
 
 describe('ChatSettingSchema', () => {
@@ -124,7 +153,7 @@ describe('ChatSettingSchema', () => {
       ],
       selectedTools: [
         {
-          pluginId: '507f1f77bcf86cd799439015',
+          pluginId: 'commercial-dalle3',
           inputs: {},
           name: '工具名称',
           avatar: '/icon/tool.svg'
@@ -164,5 +193,17 @@ describe('ChatSettingSchema', () => {
       favouriteTags: []
     });
     expect(result.success).toBe(true);
+  });
+
+  it('should default missing favouriteTags in the response to an empty array', () => {
+    const result = ChatSettingSchema.parse({
+      _id: '507f1f77bcf86cd799439011',
+      appId: '507f1f77bcf86cd799439012',
+      teamId: '507f1f77bcf86cd799439013',
+      quickAppList: [],
+      selectedTools: []
+    });
+
+    expect(result.favouriteTags).toEqual([]);
   });
 });

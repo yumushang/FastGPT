@@ -16,11 +16,10 @@ import {
   Td,
   TableContainer,
   Box,
-  Flex,
   Button,
   HStack
 } from '@chakra-ui/react';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import MyIconButton from '@fastgpt/web/components/common/Icon/button';
 import { useUserStore } from '@/web/support/user/useUserStore';
@@ -34,14 +33,14 @@ import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
 import MyNumberInput from '@fastgpt/web/components/common/Input/NumberInput';
 import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
-import type { localeType } from '@fastgpt/global/common/i18n/type';
 import Avatar from '@fastgpt/web/components/common/Avatar';
+import ModelTabHeader from '../ModelTabHeader';
 
 const EditChannelModal = dynamic(() => import('./EditChannelModal'), { ssr: false });
 const ModelTest = dynamic(() => import('./ModelTest'), { ssr: false });
 
 const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useClientTranslation('config_model');
   const { userInfo } = useUserStore();
   const { aiproxyChannels } = useSystemStore();
 
@@ -55,7 +54,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
     manual: false
   });
 
-  const { data: channelProviders = {} } = useRequest(getChannelProviders, {
+  const { data: _channelProviders = {} } = useRequest(getChannelProviders, {
     manual: false
   });
 
@@ -97,26 +96,34 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
   return (
     <>
       {isRoot && (
-        <Flex alignItems={'center'}>
-          {Tab}
-          <Box flex={1} />
-          <Button variant={'whiteBase'} mr={2} onClick={() => setEditChannel(defaultChannel)}>
-            {t('account_model:create_channel')}
+        <ModelTabHeader Tab={Tab}>
+          <Button
+            w={['100%', 'auto']}
+            variant={'primary'}
+            onClick={() => setEditChannel(defaultChannel)}
+          >
+            {t('config_model:create_channel')}
           </Button>
-        </Flex>
+        </ModelTabHeader>
       )}
-      <MyBox flex={'1 0 0'} h={0} isLoading={isLoading}>
-        <TableContainer h={'100%'} overflowY={'auto'} fontSize={'sm'}>
+      <MyBox flex={'1 0 0'} h={0} minH={0} isLoading={isLoading}>
+        <TableContainer
+          h={['auto', '100%']}
+          minH={0}
+          overflowY={['visible', 'auto']}
+          px={6}
+          fontSize={'sm'}
+        >
           <Table>
             <Thead>
               <Tr>
                 <Th>ID</Th>
-                <Th>{t('account_model:channel_name')}</Th>
-                <Th>{t('account_model:channel_type')}</Th>
-                <Th>{t('account_model:channel_status')}</Th>
+                <Th>{t('config_model:channel_name')}</Th>
+                <Th>{t('config_model:channel_type')}</Th>
+                <Th>{t('config_model:channel_status')}</Th>
                 <Th>
-                  {t('account_model:channel_priority')}
-                  <QuestionTip label={t('account_model:channel_priority_tip')} />
+                  {t('config_model:channel_priority')}
+                  <QuestionTip label={t('config_model:channel_priority_tip')} />
                 </Th>
                 <Th></Th>
               </Tr>
@@ -145,7 +152,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                         type="borderFill"
                       >
                         {t(ChannelStautsMap[item.status]?.label as any) ||
-                          t('account_model:channel_status_unknown')}
+                          t('config_model:channel_status_unknown')}
                       </MyTag>
                     </Td>
                     <Td>
@@ -175,7 +182,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                             children: [
                               {
                                 icon: 'core/chat/sendLight',
-                                label: t('account_model:model_test'),
+                                label: t('config_model:model_test'),
                                 onClick: () =>
                                   setTestModelData({
                                     channelId: item.id,
@@ -186,7 +193,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                                 ? [
                                     {
                                       icon: 'common/disable',
-                                      label: t('account_model:forbid_channel'),
+                                      label: t('config_model:forbid_channel'),
                                       onClick: () =>
                                         updateChannelStatus(
                                           item.id,
@@ -197,7 +204,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                                 : [
                                     {
                                       icon: 'common/enable',
-                                      label: t('account_model:enable_channel'),
+                                      label: t('config_model:enable_channel'),
                                       onClick: () =>
                                         updateChannelStatus(
                                           item.id,
@@ -207,7 +214,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                                   ]),
                               {
                                 icon: 'common/settingLight',
-                                label: t('account_model:edit'),
+                                label: t('config_model:edit'),
                                 onClick: () => setEditChannel(item)
                               },
                               {
@@ -217,7 +224,7 @@ const ChannelTable = ({ Tab }: { Tab: React.ReactNode }) => {
                                 onClick: () =>
                                   openConfirm({
                                     onConfirm: () => onDeleteChannel(item.id),
-                                    customContent: t('account_model:confirm_delete_channel', {
+                                    customContent: t('config_model:confirm_delete_channel', {
                                       name: item.name
                                     })
                                   })()

@@ -1,25 +1,26 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import type { BoxProps } from '@chakra-ui/react';
-import { Box, Grid, HStack, useTheme } from '@chakra-ui/react';
+import { Box, Flex, Grid, useTheme } from '@chakra-ui/react';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import { addHours } from 'date-fns';
 import dayjs from 'dayjs';
 import DateRangePicker, {
   type DateRangeType
 } from '@fastgpt/web/components/common/DateRangePicker';
-import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
-import MySelect from '@fastgpt/web/components/common/MySelect';
+import { SingleSelectFilter } from '@fastgpt/web/components/common/TagFilter';
 import { getChannelList, getDashboardV2 } from '@/web/core/ai/channel';
-import { getSystemModelList } from '@/web/core/ai/config';
 import AreaChartComponent from '@fastgpt/web/components/common/charts/AreaChartComponent';
 import FillRowTabs from '@fastgpt/web/components/common/Tabs/FillRowTabs';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useAdminModelConfig } from '@/web/core/ai/model/useAdminModelConfig';
 import { calculateModelPrice } from '@fastgpt/global/core/ai/pricing';
 import DataTableComponent from './DataTableComponent';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import type { ModelPriceTierType } from '@fastgpt/global/core/ai/model.schema';
+import { accountContentScrollStyles } from '@/pageComponents/account/styles';
+import ModelTabHeader from '../ModelTabHeader';
 
 export type ModelDashboardData = {
   x: string;
@@ -59,9 +60,10 @@ const getDefaultDateRange = (): DateRangeType => {
 };
 
 const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useClientTranslation('config_model');
   const theme = useTheme();
-  const { feConfigs, getModelProvider } = useSystemStore();
+  const { feConfigs } = useSystemStore();
+  const { getModelProvider, systemModelList } = useAdminModelConfig();
 
   const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart');
 
@@ -89,19 +91,11 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
   // Fetch channel list with "All" option
   const { data: channelList = [] } = useRequest(
     async () => {
-      const res = await getChannelList().then((res) =>
-        res.map((item) => ({
-          label: item.name,
-          value: `${item.id}`
-        }))
-      );
-      return [
-        {
-          label: t('common:All'),
-          value: ''
-        },
-        ...res
-      ];
+      const res = (await getChannelList()).map((item) => ({
+        label: item.name,
+        value: `${item.id}`
+      }));
+      return [{ label: t('common:All'), value: '' }, ...res];
     },
     {
       manual: false
@@ -109,9 +103,6 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
   );
 
   // Get model list filtered by selected channel
-  const { data: systemModelList = [] } = useRequest(getSystemModelList, {
-    manual: false
-  });
   const llmModelSet = useMemo(
     () =>
       new Set(
@@ -132,19 +123,13 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
         const provider = getModelProvider(item.provider, i18n.language);
         return {
           order: provider.order,
-          icon: provider.avatar,
+          avatar: provider.avatar,
           label: item.model,
           value: item.model
         };
       })
       .sort((a, b) => a.order - b.order);
-    return [
-      {
-        label: t('common:All'),
-        value: ''
-      },
-      ...res
-    ];
+    return [{ label: t('common:All'), value: '' }, ...res];
   }, [getModelProvider, i18n.language, systemModelList, t]);
   // Model price map
   const modelPriceMap = useMemo(() => {
@@ -171,13 +156,13 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
   const computeTimespan = (hoursDiff: number) => {
     const options: { label: string; value: 'minute' | 'hour' | 'day' }[] = [];
     if (hoursDiff <= 1 * 24) {
-      options.push({ label: t('account_model:timespan_minute'), value: 'minute' });
+      options.push({ label: t('config_model:timespan_minute'), value: 'minute' });
     }
     if (hoursDiff < 7 * 24) {
-      options.push({ label: t('account_model:timespan_hour'), value: 'hour' });
+      options.push({ label: t('config_model:timespan_hour'), value: 'hour' });
     }
     if (hoursDiff >= 1 * 24) {
-      options.push({ label: t('account_model:timespan_day'), value: 'day' });
+      options.push({ label: t('config_model:timespan_day'), value: 'day' });
     }
 
     const defaultTimespan: 'minute' | 'hour' | 'day' = (() => {
@@ -392,101 +377,95 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
   >('totalTokens');
 
   return (
-    <>
-      <Box>{Tab}</Box>
+    <MyBox display={'flex'} flex={'1 0 0'} h={0} minH={0} flexDirection={'column'} gap={4}>
+      <ModelTabHeader Tab={Tab} />
 
-      <HStack spacing={4} justifyContent="space-between">
-        <HStack spacing={4}>
-          <HStack>
-            <FormLabel>{t('common:user.Time')}</FormLabel>
-            <Box>
-              <DateRangePicker
-                defaultDate={filterProps.dateRange}
-                dateRange={filterProps.dateRange}
-                onSuccess={handleDateRangeChange}
-              />
-            </Box>
-          </HStack>
-          <HStack>
-            <FormLabel>{t('account_model:channel_name')}</FormLabel>
-            <Box flex={'1 0 0'}>
-              <MySelect<string>
-                bg={'myGray.50'}
-                isSearch
-                list={channelList}
-                placeholder={t('account_model:select_channel')}
-                value={filterProps.channelId}
-                onChange={(val) => setFilterProps({ ...filterProps, channelId: val })}
-              />
-            </Box>
-          </HStack>
-          <HStack>
-            <FormLabel>{t('account_model:model_name')}</FormLabel>
-            <Box flex={'1 0 0'}>
-              <MySelect<string>
-                bg={'myGray.50'}
-                isSearch
-                list={modelList}
-                placeholder={t('account_model:select_model')}
-                value={filterProps.model}
-                onChange={(val) => setFilterProps({ ...filterProps, model: val })}
-              />
-            </Box>
-          </HStack>
+      <Flex
+        px={6}
+        flexDirection={['column', 'row']}
+        flexWrap={['nowrap', 'wrap']}
+        alignItems={['stretch', 'flex-start']}
+        justifyContent={'space-between'}
+        gap={[3, 4]}
+      >
+        <Flex
+          flexDirection={['column', 'row']}
+          flexWrap={['nowrap', 'wrap']}
+          alignItems={['stretch', 'flex-start']}
+          gap={[3, 4]}
+        >
+          <DateRangePicker
+            formLabel={t('common:user.Time')}
+            w={'fit-content'}
+            flexShrink={0}
+            defaultDate={filterProps.dateRange}
+            dateRange={filterProps.dateRange}
+            onSuccess={handleDateRangeChange}
+          />
+          <SingleSelectFilter
+            title={t('config_model:channel_name')}
+            value={filterProps.channelId ?? ''}
+            options={channelList}
+            onChange={(val) => setFilterProps({ ...filterProps, channelId: val || undefined })}
+            showSearch
+          />
+          <SingleSelectFilter
+            title={t('config_model:model_name')}
+            value={filterProps.model ?? ''}
+            options={modelList}
+            onChange={(val) => setFilterProps({ ...filterProps, model: val || undefined })}
+            showSearch
+          />
           {viewMode === 'chart' && (
-            <HStack>
-              <FormLabel>{t('account_model:timespan_label')}</FormLabel>
-              <Box flex={'1 0 0'}>
-                <MySelect<'minute' | 'hour' | 'day'>
-                  bg={'myGray.50'}
-                  list={timespanOptions}
-                  value={filterProps.timespan}
-                  onChange={(val) => {
-                    setFilterProps({ ...filterProps, timespan: val });
-                  }}
-                />
-              </Box>
-            </HStack>
+            <SingleSelectFilter
+              title={t('config_model:timespan_label')}
+              value={filterProps.timespan}
+              options={timespanOptions}
+              onChange={(val) => {
+                setFilterProps({ ...filterProps, timespan: val });
+              }}
+            />
           )}
-        </HStack>
+        </Flex>
 
         <FillRowTabs<'chart' | 'table'>
+          w={['100%', 'auto']}
+          flexShrink={0}
+          size={'sm'}
           list={[
             {
-              label: t('account_model:view_chart'),
+              label: t('config_model:view_chart'),
               value: 'chart'
             },
             {
-              label: t('account_model:view_table'),
+              label: t('config_model:view_table'),
               value: 'table'
             }
           ]}
-          py={1.5}
-          px={4}
           value={viewMode}
           onChange={(val) => setViewMode(val)}
         />
-      </HStack>
+      </Flex>
 
-      <MyBox flex={'1 0 0'} h={0} overflowY={'auto'} isLoading={isLoading}>
+      <MyBox {...accountContentScrollStyles} flex={'1 0 0'} h={0} px={6} isLoading={isLoading}>
         {viewMode === 'chart' ? (
           dashboardData.length > 0 && (
             <>
               <Box {...ChartsBoxStyles}>
                 <AreaChartComponent
                   data={chartData}
-                  title={t('account_model:model_request_times')}
+                  title={t('config_model:model_request_times')}
                   enableCumulative={true}
                   lines={[
                     {
                       dataKey: 'totalCalls',
-                      name: t('account_model:model_request_times'),
+                      name: t('config_model:model_request_times'),
                       color: theme.colors.primary['600']
                     }
                   ]}
                   tooltipItems={[
                     {
-                      label: t('account_model:model_request_times'),
+                      label: t('config_model:model_request_times'),
                       dataKey: 'totalCalls',
                       color: theme.colors.primary['600']
                     }
@@ -498,18 +477,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:model_error_request_times')}
+                    title={t('config_model:model_error_request_times')}
                     enableCumulative={false}
                     lines={[
                       {
                         dataKey: 'errorCalls',
-                        name: t('account_model:model_error_request_times'),
+                        name: t('config_model:model_error_request_times'),
                         color: '#f98e1a'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:model_error_request_times'),
+                        label: t('config_model:model_error_request_times'),
                         dataKey: 'errorCalls',
                         color: '#f98e1a'
                       }
@@ -519,18 +498,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:model_error_rate')}
+                    title={t('config_model:model_error_rate')}
                     enableCumulative={false}
                     lines={[
                       {
                         dataKey: 'errorRate',
-                        name: t('account_model:model_error_rate'),
+                        name: t('config_model:model_error_rate'),
                         color: '#e84738'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:model_error_rate'),
+                        label: t('config_model:model_error_rate'),
                         dataKey: 'errorRate',
                         color: '#e84738'
                       }
@@ -542,18 +521,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
               <Box mt={5} {...ChartsBoxStyles}>
                 <AreaChartComponent
                   data={chartData}
-                  title={t('account_model:dashboard_token_usage')}
+                  title={t('config_model:dashboard_token_usage')}
                   enableCumulative={true}
                   lines={[
                     {
                       dataKey: tokensUsageType,
-                      name: t('account_model:dashboard_token_usage'),
+                      name: t('config_model:dashboard_token_usage'),
                       color: theme.colors.primary['600']
                     }
                   ]}
                   tooltipItems={[
                     {
-                      label: t('account_model:dashboard_token_usage'),
+                      label: t('config_model:dashboard_token_usage'),
                       dataKey: tokensUsageType,
                       color: theme.colors.primary['600']
                     }
@@ -562,15 +541,15 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                     <FillRowTabs<'inputTokens' | 'outputTokens' | 'totalTokens'>
                       list={[
                         {
-                          label: t('account_model:all'),
+                          label: t('config_model:all'),
                           value: 'totalTokens'
                         },
                         {
-                          label: t('account_model:input'),
+                          label: t('config_model:input'),
                           value: 'inputTokens'
                         },
                         {
-                          label: t('account_model:output'),
+                          label: t('config_model:output'),
                           value: 'outputTokens'
                         }
                       ]}
@@ -587,18 +566,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box mt={5} {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:aipoint_usage')}
+                    title={t('config_model:aipoint_usage')}
                     enableCumulative={true}
                     lines={[
                       {
                         dataKey: 'totalCost',
-                        name: t('account_model:aipoint_usage'),
+                        name: t('config_model:aipoint_usage'),
                         color: '#8774EE'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:aipoint_usage'),
+                        label: t('config_model:aipoint_usage'),
                         dataKey: 'totalCost',
                         color: '#8774EE'
                       }
@@ -611,18 +590,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:avg_response_time')}
+                    title={t('config_model:avg_response_time')}
                     enableCumulative={false}
                     lines={[
                       {
                         dataKey: 'avgResponseTime',
-                        name: t('account_model:avg_response_time'),
+                        name: t('config_model:avg_response_time'),
                         color: '#36B37E'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:avg_response_time'),
+                        label: t('config_model:avg_response_time'),
                         dataKey: 'avgResponseTime',
                         color: '#36B37E',
                         formatter: (value: number) => `${value.toFixed(2)}s`
@@ -633,18 +612,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:avg_ttfb')}
+                    title={t('config_model:avg_ttfb')}
                     enableCumulative={false}
                     lines={[
                       {
                         dataKey: 'avgTtfb',
-                        name: t('account_model:avg_ttfb'),
+                        name: t('config_model:avg_ttfb'),
                         color: '#FF5630'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:avg_ttfb'),
+                        label: t('config_model:avg_ttfb'),
                         dataKey: 'avgTtfb',
                         color: '#FF5630',
                         formatter: (value: number) => `${value.toFixed(2)}s`
@@ -659,18 +638,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                   <Box {...ChartsBoxStyles}>
                     <AreaChartComponent
                       data={chartData}
-                      title={t('account_model:max_rpm')}
+                      title={t('config_model:max_rpm')}
                       enableCumulative={false}
                       lines={[
                         {
                           dataKey: 'maxRpm',
-                          name: t('account_model:max_rpm'),
+                          name: t('config_model:max_rpm'),
                           color: '#6554C0'
                         }
                       ]}
                       tooltipItems={[
                         {
-                          label: t('account_model:max_rpm'),
+                          label: t('config_model:max_rpm'),
                           dataKey: 'maxRpm',
                           color: '#6554C0'
                         }
@@ -680,18 +659,18 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                   <Box {...ChartsBoxStyles}>
                     <AreaChartComponent
                       data={chartData}
-                      title={t('account_model:max_tpm')}
+                      title={t('config_model:max_tpm')}
                       enableCumulative={false}
                       lines={[
                         {
                           dataKey: 'maxTpm',
-                          name: t('account_model:max_tpm'),
+                          name: t('config_model:max_tpm'),
                           color: '#FF8B00'
                         }
                       ]}
                       tooltipItems={[
                         {
-                          label: t('account_model:max_tpm'),
+                          label: t('config_model:max_tpm'),
                           dataKey: 'maxTpm',
                           color: '#FF8B00'
                         }
@@ -706,23 +685,23 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
                 <Box mt={5} {...ChartsBoxStyles}>
                   <AreaChartComponent
                     data={chartData}
-                    title={t('account_model:cache_hit_analysis')}
+                    title={t('config_model:cache_hit_analysis')}
                     enableCumulative={true}
                     lines={[
                       {
                         dataKey: 'cacheHitRate',
-                        name: t('account_model:cache_hit_rate'),
+                        name: t('config_model:cache_hit_rate'),
                         color: '#8774EE'
                       }
                     ]}
                     tooltipItems={[
                       {
-                        label: t('account_model:cache_hit_rate'),
+                        label: t('config_model:cache_hit_rate'),
                         dataKey: 'cacheHitRate',
                         color: '#8774EE'
                       },
                       {
-                        label: t('account_model:cache_hit_count'),
+                        label: t('config_model:cache_hit_count'),
                         dataKey: 'cacheHitCount',
                         color: theme.colors.green['600']
                       }
@@ -743,7 +722,7 @@ const ModelDashboard = ({ Tab }: { Tab: React.ReactNode }) => {
           />
         )}
       </MyBox>
-    </>
+    </MyBox>
   );
 };
 

@@ -4,7 +4,7 @@ import type {
   GetHistoriesResponseType
 } from '@fastgpt/global/openapi/core/chat/history/api';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
-import { ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatSourceEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
@@ -14,6 +14,10 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { MongoResourcePermission } from '@fastgpt/service/support/permission/schema';
 import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
 import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
+import { MongoAgentSkills } from '@fastgpt/service/core/ai/skill/model/schema';
+import { AgentSkillSourceEnum } from '@fastgpt/global/core/ai/skill/constants';
+import { MongoOutLink } from '@fastgpt/service/support/outLink/schema';
+import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
 
 describe('getHistories api test', () => {
   let testUser: Awaited<ReturnType<typeof getUser>>;
@@ -47,6 +51,7 @@ describe('getHistories api test', () => {
       MongoChat.create({
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId: chatIds[0],
         source: ChatSourceEnum.online,
@@ -56,6 +61,7 @@ describe('getHistories api test', () => {
       MongoChat.create({
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId: chatIds[1],
         source: ChatSourceEnum.online,
@@ -65,6 +71,7 @@ describe('getHistories api test', () => {
       MongoChat.create({
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId: chatIds[2],
         source: ChatSourceEnum.online,
@@ -134,6 +141,7 @@ describe('getHistories api test', () => {
     await MongoChat.create({
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       chatId: apiChatId,
       source: ChatSourceEnum.api,
@@ -239,6 +247,7 @@ describe('getHistories api test', () => {
     await MongoChat.create({
       teamId: otherUser.teamId,
       tmbId: otherUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId: String(otherApp._id),
       chatId: otherChatId,
       source: ChatSourceEnum.online,
@@ -262,7 +271,78 @@ describe('getHistories api test', () => {
     expect(res.data.list.find((chat) => chat.chatId === otherChatId)).toBeUndefined();
   });
 
-  it('should return empty list when appId does not exist', async () => {
+  it('should list share histories by outLinkAuthData without appId', async () => {
+    const shareId = `share-${getNanoid(8)}`;
+    const outLinkUid = `share-user-${getNanoid(8)}`;
+    const otherOutLinkUid = `share-user-${getNanoid(8)}`;
+    const shareChatId = getNanoid();
+    const otherShareChatId = getNanoid();
+
+    await MongoOutLink.create({
+      shareId,
+      teamId: testUser.teamId,
+      tmbId: testUser.tmbId,
+      appId,
+      type: PublishChannelEnum.share,
+      name: 'History Share Link',
+      showCite: true,
+      showRunningStatus: true,
+      showSkillReferences: false,
+      showFullText: false,
+      canDownloadSource: false,
+      showWholeResponse: false
+    });
+
+    await Promise.all([
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId: shareChatId,
+        source: ChatSourceEnum.share,
+        shareId,
+        outLinkUid,
+        title: 'Current Share Chat'
+      }),
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId: otherShareChatId,
+        source: ChatSourceEnum.share,
+        shareId,
+        outLinkUid: otherOutLinkUid,
+        title: 'Other Share Chat'
+      })
+    ]);
+
+    const res = await Call<GetHistoriesBodyType, any, GetHistoriesResponseType>(handler, {
+      body: {
+        outLinkAuthData: {
+          shareId,
+          outLinkUid
+        }
+      },
+      query: {
+        offset: 0,
+        pageSize: 10
+      }
+    });
+
+    expect(res.code).toBe(200);
+    expect(res.data.total).toBe(1);
+    expect(res.data.list).toHaveLength(1);
+    expect(res.data.list[0]).toMatchObject({
+      chatId: shareChatId,
+      appId,
+      title: 'Current Share Chat'
+    });
+    expect(res.data.list.find((chat) => chat.chatId === otherShareChatId)).toBeUndefined();
+  });
+
+  it('should fail when appId does not exist', async () => {
     const nonExistentAppId = '507f1f77bcf86cd799439011'; // Valid ObjectId format but non-existent
 
     const res = await Call<GetHistoriesBodyType, any, GetHistoriesResponseType>(handler, {
@@ -276,9 +356,8 @@ describe('getHistories api test', () => {
       }
     });
 
-    expect(res.code).toBe(200);
-    expect(res.data.list).toHaveLength(0);
-    expect(res.data.total).toBe(0);
+    expect(res.code).toBe(500);
+    expect(res.error).toBeDefined();
   });
 
   it('should fail when appId is missing', async () => {
@@ -291,8 +370,8 @@ describe('getHistories api test', () => {
       }
     });
 
-    expect(res.code).toBe(200);
-    expect(res.data.list).toHaveLength(0);
+    expect(res.code).toBe(500);
+    expect(res.error).toBeDefined();
   });
 
   it('should include all required fields in response', async () => {
@@ -342,7 +421,7 @@ describe('getHistories api test', () => {
     expect(res.data.list[1].chatId).toBe(chatIds[2]);
   });
 
-  it('should return empty list when appId format is invalid', async () => {
+  it('should fail when appId format is invalid', async () => {
     const invalidAppId = 'invalid-app-id'; // Not a valid ObjectId format
 
     const res = await Call<GetHistoriesBodyType, any, GetHistoriesResponseType>(handler, {
@@ -356,12 +435,11 @@ describe('getHistories api test', () => {
       }
     });
 
-    expect(res.code).toBe(200);
-    expect(res.data.list).toHaveLength(0);
-    expect(res.data.total).toBe(0);
+    expect(res.code).toBe(500);
+    expect(res.error).toBeDefined();
   });
 
-  it('should accept empty string for appId and return empty list', async () => {
+  it('should fail when appId is empty string', async () => {
     const res = await Call<GetHistoriesBodyType, any, GetHistoriesResponseType>(handler, {
       auth: testUser,
       body: {
@@ -373,8 +451,78 @@ describe('getHistories api test', () => {
       }
     });
 
+    expect(res.code).toBe(500);
+    expect(res.error).toBeDefined();
+  });
+
+  it('should list skill edit histories by skillId and source-aware match', async () => {
+    const skill = await MongoAgentSkills.create({
+      name: 'History Skill',
+      source: AgentSkillSourceEnum.personal,
+      teamId: testUser.teamId,
+      tmbId: testUser.tmbId
+    });
+    const skillId = String(skill._id);
+    const debugChatId = getNanoid();
+    const onlineChatId = getNanoid();
+    const legacyChatId = getNanoid();
+
+    await Promise.all([
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: debugChatId,
+        source: ChatSourceEnum.test,
+        title: 'Skill Debug Session'
+      }),
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: onlineChatId,
+        source: ChatSourceEnum.online,
+        title: 'Skill Online Session'
+      }),
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: legacyChatId,
+        source: ChatSourceEnum.test,
+        title: 'Legacy Skill Debug Session'
+      })
+    ]);
+    await MongoChat.updateOne(
+      { appId: skillId, chatId: legacyChatId },
+      { $unset: { sourceType: '' } }
+    );
+
+    const res = await Call<GetHistoriesBodyType, any, GetHistoriesResponseType>(handler, {
+      auth: testUser,
+      body: {
+        skillId,
+        source: ChatSourceEnum.test
+      },
+      query: {
+        offset: 0,
+        pageSize: 10
+      }
+    });
+
     expect(res.code).toBe(200);
-    expect(res.data.list).toHaveLength(0);
-    expect(res.data.total).toBe(0);
+    expect(res.data.total).toBe(1);
+    expect(res.data.list).toHaveLength(1);
+    expect(res.data.list[0]).toMatchObject({
+      chatId: debugChatId,
+      skillId,
+      title: 'Skill Debug Session'
+    });
+    expect(res.data.list[0]).not.toHaveProperty('appId');
+    expect(res.data.list.find((item) => item.chatId === onlineChatId)).toBeUndefined();
+    expect(res.data.list.find((item) => item.chatId === legacyChatId)).toBeUndefined();
   });
 });

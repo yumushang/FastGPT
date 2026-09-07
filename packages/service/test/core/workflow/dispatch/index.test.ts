@@ -1,11 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { WorkflowQueue } from '@fastgpt/service/core/workflow/dispatch/index';
+import {
+  dispatchWorkFlow,
+  runWorkflow,
+  WorkflowQueue,
+  filterToolCallNodeResponses
+} from '@fastgpt/service/core/workflow/dispatch/index';
+import { getWorkflowNodeRunParams } from '@fastgpt/service/core/workflow/dispatch/utils/runtime';
 import { createClientAbortTracker } from '@fastgpt/service/core/workflow/dispatch/utils/clientAbort';
+import { getWorkflowResponseWrite } from '@fastgpt/service/core/workflow/dispatch/utils';
 import { createNode, createEdge } from '../utils';
+import {
+  NodeInputKeyEnum,
+  NodeOutputKeyEnum,
+  VARIABLE_NODE_ID,
+  WorkflowIOValueTypeEnum
+} from '@fastgpt/global/core/workflow/constants';
+import {
+  FlowNodeInputTypeEnum,
+  FlowNodeOutputTypeEnum
+} from '@fastgpt/global/core/workflow/node/constant';
+import type { WorkflowVariableStateLike } from '@fastgpt/service/core/workflow/types/runtime';
+import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
+import { callbackMap } from '@fastgpt/service/core/workflow/dispatch/constants';
 
 const waitWithTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -25,6 +45,96 @@ const waitWithTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label:
     }
   }
 };
+
+const createWorkflowVariableState = (
+  variables: Record<string, unknown> = {}
+): WorkflowVariableStateLike => ({
+  get: (key) => variables[key],
+  set: async (key, value) => {
+    variables[key] = value;
+    return value;
+  },
+  getStoreValue: (key) => variables[key],
+  getFileStoreValueByRuntimeUrl: () => undefined,
+  toRuntimeRecord: () => ({ ...variables }),
+  toStoreRecord: () => ({ ...variables }),
+  clone: () => createWorkflowVariableState({ ...variables })
+});
+
+describe('filterToolCallNodeResponses', () => {
+  it('hides tool errors and their descendants while keeping successful responses', () => {
+    const responses = filterToolCallNodeResponses([
+      {
+        id: 'success',
+        nodeId: 'success',
+        moduleType: FlowNodeTypeEnum.tool,
+        moduleName: 'Success'
+      },
+      {
+        id: 'failed',
+        nodeId: 'failed',
+        moduleType: FlowNodeTypeEnum.tool,
+        moduleName: 'Failed',
+        errorText: 'tool failed'
+      },
+      {
+        id: 'failed-child',
+        nodeId: 'failed-child',
+        parentId: 'failed',
+        moduleType: FlowNodeTypeEnum.tool,
+        moduleName: 'Failed child'
+      },
+      {
+        id: 'nested',
+        nodeId: 'nested',
+        moduleType: FlowNodeTypeEnum.tool,
+        moduleName: 'Nested',
+        childrenResponses: [
+          {
+            id: 'nested-error',
+            nodeId: 'nested-error',
+            moduleType: FlowNodeTypeEnum.tool,
+            moduleName: 'Nested error',
+            error: 'nested failed'
+          }
+        ]
+      }
+    ] as any);
+
+    expect(responses.map((response) => response.id)).toEqual(['success', 'nested']);
+    expect(responses[1]).not.toHaveProperty('childrenResponses');
+  });
+});
+
+describe('dispatchWorkFlow SSE initialization guard', () => {
+  it('rejects stream responses when SSE was not initialized before dispatch', async () => {
+    const res = new EventEmitter() as any;
+    Object.assign(res, {
+      closed: false,
+      destroyed: false,
+      writableEnded: false,
+      headersSent: false,
+      setHeader: vi.fn(),
+      on: vi.fn(),
+      once: vi.fn(),
+      end: vi.fn()
+    });
+    const workflowStreamResponse = getWorkflowResponseWrite({
+      res,
+      detail: true,
+      streamResponse: true
+    });
+
+    await expect(
+      dispatchWorkFlow({
+        res,
+        stream: true,
+        workflowStreamResponse,
+        responseChatItemId: 'response-id'
+      } as any)
+    ).rejects.toThrow('Workflow SSE response must be initialized before dispatchWorkFlow');
+  });
+});
 
 describe('createClientAbortTracker', () => {
   const mockRes = (overrides: Record<string, any> = {}) => {
@@ -370,6 +480,426 @@ describe('createClientAbortTracker', () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
+    }
+  });
+});
+
+describe('getWorkflowNodeRunParams', () => {
+  const createVariableState = (variables: Record<string, unknown> = {}) => {
+    let toRuntimeRecordCount = 0;
+    const state: WorkflowVariableStateLike = {
+      get: (key) => variables[key],
+      set: async (key, value) => {
+        variables[key] = value;
+        return value;
+      },
+      getStoreValue: (key) => variables[key],
+      getFileStoreValueByRuntimeUrl: () => undefined,
+      toRuntimeRecord: () => {
+        toRuntimeRecordCount += 1;
+        return { ...variables };
+      },
+      toStoreRecord: () => ({ ...variables }),
+      clone: () => createVariableState({ ...variables }).state
+    };
+
+    return {
+      state,
+      getToRuntimeRecordCount: () => toRuntimeRecordCount
+    };
+  };
+
+  it('静态 input 不应构造 runtimeVariables', () => {
+    const variableState = createVariableState({ name: 'Ada' });
+    const node = createNode('node1', FlowNodeTypeEnum.textEditor);
+    node.inputs = [
+      {
+        key: NodeInputKeyEnum.textareaInput,
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.textarea],
+        value: 'plain text',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map(),
+      variableState: variableState.state
+    });
+
+    expect(params[NodeInputKeyEnum.textareaInput]).toBe('plain text');
+    expect(variableState.getToRuntimeRecordCount()).toBe(0);
+  });
+
+  it('普通变量模板按需构造 runtimeVariables 并完成替换', () => {
+    const variableState = createVariableState({ name: 'Ada' });
+    const node = createNode('node1', FlowNodeTypeEnum.textEditor);
+    node.inputs = [
+      {
+        key: NodeInputKeyEnum.textareaInput,
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.textarea],
+        value: 'Hello {{name}}',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map(),
+      variableState: variableState.state
+    });
+
+    expect(params[NodeInputKeyEnum.textareaInput]).toBe('Hello Ada');
+    expect(variableState.getToRuntimeRecordCount()).toBe(1);
+  });
+
+  it('节点输出模板按需构造 runtimeVariables 并完成替换', () => {
+    const variableState = createVariableState({
+      unused: {
+        toJSON() {
+          throw new Error('unused variable should not be stringified');
+        }
+      }
+    });
+    const node = createNode('target', FlowNodeTypeEnum.textEditor);
+    node.inputs = [
+      {
+        key: NodeInputKeyEnum.textareaInput,
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.textarea],
+        value: 'Result: {{$source.output$}}',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+    const sourceNode = createNode('source', FlowNodeTypeEnum.textEditor);
+    sourceNode.outputs = [
+      {
+        id: 'output',
+        key: 'output',
+        type: FlowNodeOutputTypeEnum.static,
+        value: 'done',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map([['source', sourceNode]]),
+      variableState: variableState.state
+    });
+
+    expect(params[NodeInputKeyEnum.textareaInput]).toBe('Result: done');
+    expect(variableState.getToRuntimeRecordCount()).toBe(1);
+  });
+
+  it('纯引用 input 直接解析原始对象', () => {
+    const refValue = { nested: true };
+    const variableState = createVariableState({ payload: refValue });
+    const node = createNode('node1', FlowNodeTypeEnum.textEditor);
+    node.inputs = [
+      {
+        key: 'payload',
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.reference],
+        value: [VARIABLE_NODE_ID, 'payload'],
+        valueType: WorkflowIOValueTypeEnum.object
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map(),
+      variableState: variableState.state
+    });
+
+    expect(params.payload).toBe(refValue);
+    expect(variableState.getToRuntimeRecordCount()).toBe(1);
+  });
+
+  it('同节点引用工具参数时不读取 input value', () => {
+    const variableState = createVariableState();
+    const node = createNode('code', FlowNodeTypeEnum.code);
+    node.inputs = [
+      {
+        key: 'customParam',
+        label: '',
+        canEdit: true,
+        defaultToAgentGenerated: true,
+        renderTypeList: [FlowNodeInputTypeEnum.agentGenerated],
+        value: 'agent value',
+        valueType: WorkflowIOValueTypeEnum.string
+      },
+      {
+        key: 'codeInput',
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.reference],
+        value: ['code', 'customParam'],
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map([['code', node]]),
+      variableState: variableState.state
+    });
+
+    expect(params.codeInput).toBeUndefined();
+  });
+
+  it('跨节点引用工具参数时不读取目标节点 input value', () => {
+    const variableState = createVariableState();
+    const node = createNode('code', FlowNodeTypeEnum.code);
+    const sourceNode = createNode('source', FlowNodeTypeEnum.code);
+    node.inputs = [
+      {
+        key: 'codeInput',
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.reference],
+        value: ['source', 'customParam'],
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+    sourceNode.inputs = [
+      {
+        key: 'customParam',
+        label: '',
+        canEdit: true,
+        defaultToAgentGenerated: true,
+        renderTypeList: [FlowNodeInputTypeEnum.agentGenerated],
+        value: 'agent value',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map([
+        ['code', node],
+        ['source', sourceNode]
+      ]),
+      variableState: variableState.state
+    });
+
+    expect(params.codeInput).toBeUndefined();
+  });
+
+  it('dynamic input 保持顶层和动态参数对象同步写入', () => {
+    const variableState = createVariableState({ name: 'Ada' });
+    const node = createNode('node1', FlowNodeTypeEnum.textEditor);
+    node.inputs = [
+      {
+        key: NodeInputKeyEnum.addInputParam,
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.addInputParam],
+        value: undefined
+      },
+      {
+        key: 'dynamicName',
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.input],
+        value: '{{name}}',
+        valueType: WorkflowIOValueTypeEnum.string,
+        canEdit: true
+      }
+    ];
+
+    const params = getWorkflowNodeRunParams({
+      node,
+      runtimeNodesMap: new Map(),
+      variableState: variableState.state
+    });
+
+    expect(params[NodeInputKeyEnum.addInputParam]).toEqual({ dynamicName: 'Ada' });
+    expect(params.dynamicName).toBe('Ada');
+  });
+});
+
+describe('runWorkflow catchError', () => {
+  it('捕获 throw 异常后，下游节点应能引用错误输出', async () => {
+    const originalTextEditorDispatch = callbackMap[FlowNodeTypeEnum.textEditor];
+    const errorText = 'upstream failed';
+    const appId = '67e0d5535c02d1d5cdede721';
+    const teamId = '654a4107c32f3bf5f998452f';
+    const tmbId = '65ab7007462ada7dbb899948';
+
+    callbackMap[FlowNodeTypeEnum.textEditor] = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(errorText))
+      .mockImplementationOnce(async ({ params }) => {
+        return {
+          data: {
+            [NodeOutputKeyEnum.text]: params[NodeInputKeyEnum.textareaInput]
+          },
+          [DispatchNodeResponseKeyEnum.nodeResponse]: {
+            textOutput: params[NodeInputKeyEnum.textareaInput]
+          }
+        };
+      });
+
+    const sourceNode = createNode('source', FlowNodeTypeEnum.textEditor);
+    sourceNode.isEntry = true;
+    sourceNode.catchError = true;
+    sourceNode.outputs = [
+      {
+        id: NodeOutputKeyEnum.errorText,
+        key: NodeOutputKeyEnum.errorText,
+        type: FlowNodeOutputTypeEnum.error,
+        label: '',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    const targetNode = createNode('target', FlowNodeTypeEnum.textEditor);
+    targetNode.inputs = [
+      {
+        key: NodeInputKeyEnum.textareaInput,
+        label: '',
+        renderTypeList: [FlowNodeInputTypeEnum.textarea],
+        value: `caught: {{$source.${NodeOutputKeyEnum.errorText}$}}`,
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+    targetNode.outputs = [
+      {
+        id: NodeOutputKeyEnum.text,
+        key: NodeOutputKeyEnum.text,
+        type: FlowNodeOutputTypeEnum.static,
+        label: '',
+        valueType: WorkflowIOValueTypeEnum.string
+      }
+    ];
+
+    try {
+      const result = await runWorkflow({
+        apiVersion: 'v2',
+        mode: 'chat',
+        runningAppInfo: {
+          id: appId,
+          name: 'catch error test',
+          teamId,
+          tmbId
+        },
+        runningUserInfo: {
+          teamId,
+          tmbId,
+          teamName: 'team',
+          memberName: 'member',
+          contact: '',
+          username: 'user'
+        },
+        uid: 'user-catch-error-test',
+        lang: 'zh-CN',
+        histories: [],
+        query: [],
+        variables: {},
+        chatConfig: {},
+        runtimeNodes: [sourceNode, targetNode],
+        runtimeEdges: [
+          {
+            source: 'source',
+            target: 'target',
+            sourceHandle: 'source-source_catch-right',
+            targetHandle: 'target-target-left',
+            status: 'waiting'
+          }
+        ],
+        variableState: createWorkflowVariableState(),
+        externalProvider: {},
+        workflowDispatchDeep: 0,
+        maxRunTimes: 10,
+        stream: false,
+        responseDetail: true,
+        responseAllData: true,
+        checkIsStopping: () => false
+      } as any);
+
+      expect(callbackMap[FlowNodeTypeEnum.textEditor]).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(callbackMap[FlowNodeTypeEnum.textEditor]).mock.calls[1][0].params).toEqual(
+        expect.objectContaining({
+          [NodeInputKeyEnum.textareaInput]: `caught: ${errorText}`
+        })
+      );
+      expect(
+        result.debugResponse.memoryNodes
+          .find((node) => node.nodeId === 'source')
+          ?.outputs.find((output) => output.key === NodeOutputKeyEnum.errorText)?.value
+      ).toBe(errorText);
+      expect(
+        result.debugResponse.memoryNodes
+          .find((node) => node.nodeId === 'target')
+          ?.outputs.find((output) => output.key === NodeOutputKeyEnum.text)?.value
+      ).toBe(`caught: ${errorText}`);
+    } finally {
+      callbackMap[FlowNodeTypeEnum.textEditor] = originalTextEditorDispatch;
+    }
+  });
+});
+
+describe('runWorkflow assistant response aggregation', () => {
+  it('preserves reasoning when a stopped chat node has not produced answer text', async () => {
+    const originalChatNodeDispatch = callbackMap[FlowNodeTypeEnum.chatNode];
+    const reasoningText = 'Partial reasoning before the user stopped the workflow.';
+    const chatNode = createNode('chat', FlowNodeTypeEnum.chatNode);
+    chatNode.isEntry = true;
+
+    callbackMap[FlowNodeTypeEnum.chatNode] = vi.fn().mockResolvedValue({
+      data: {
+        answerText: '',
+        reasoningText
+      },
+      [DispatchNodeResponseKeyEnum.answerText]: '',
+      [DispatchNodeResponseKeyEnum.reasoningText]: reasoningText
+    });
+
+    try {
+      const result = await runWorkflow({
+        apiVersion: 'v2',
+        mode: 'chat',
+        runningAppInfo: {
+          id: '67e0d5535c02d1d5cdede721',
+          name: 'reasoning persistence test',
+          teamId: '654a4107c32f3bf5f998452f',
+          tmbId: '65ab7007462ada7dbb899948'
+        },
+        runningUserInfo: {
+          teamId: '654a4107c32f3bf5f998452f',
+          tmbId: '65ab7007462ada7dbb899948',
+          teamName: 'team',
+          memberName: 'member',
+          contact: '',
+          username: 'user'
+        },
+        uid: 'reasoning-persistence-test',
+        lang: 'zh-CN',
+        histories: [],
+        query: [],
+        variables: {},
+        chatConfig: {},
+        runtimeNodes: [chatNode],
+        runtimeEdges: [],
+        variableState: createWorkflowVariableState(),
+        externalProvider: {},
+        workflowDispatchDeep: 0,
+        maxRunTimes: 10,
+        stream: false,
+        responseDetail: true,
+        responseAllData: true,
+        checkIsStopping: () => false
+      } as any);
+
+      expect(callbackMap[FlowNodeTypeEnum.chatNode]).toHaveBeenCalledTimes(1);
+      expect(result[DispatchNodeResponseKeyEnum.assistantResponses]).toEqual([
+        {
+          reasoning: {
+            content: reasoningText
+          }
+        }
+      ]);
+    } finally {
+      callbackMap[FlowNodeTypeEnum.chatNode] = originalChatNodeDispatch;
     }
   });
 });

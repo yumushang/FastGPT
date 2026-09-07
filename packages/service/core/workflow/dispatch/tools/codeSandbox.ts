@@ -1,10 +1,10 @@
-import type { ModuleDispatchProps } from '@fastgpt/global/core/workflow/runtime/type';
 import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { type DispatchNodeResultType } from '@fastgpt/global/core/workflow/runtime/type';
+import type { DispatchNodeResultType, ModuleDispatchProps } from '../../types/runtime';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { codeSandbox } from '../../../../thirdProvider/codeSandbox';
 import { serviceEnv } from '../../../../env';
+import { getNodeErrResponse } from '../utils';
 
 type RunCodeType = ModuleDispatchProps<{
   [NodeInputKeyEnum.codeType]: string;
@@ -31,15 +31,16 @@ export const dispatchCodeSandbox = async (props: RunCodeType): Promise<RunCodeRe
   } = props;
 
   if (!serviceEnv.CODE_SANDBOX_URL) {
-    return {
-      error: {
-        [NodeOutputKeyEnum.error]: 'Can not find CODE_SANDBOX_URL in env'
+    return getNodeErrResponse({
+      error: 'Can not find CODE_SANDBOX_URL in env',
+      customErr: {
+        error: 'Can not find CODE_SANDBOX_URL in env'
       },
       [DispatchNodeResponseKeyEnum.nodeResponse]: {
         errorText: 'Can not find CODE_SANDBOX_URL in env',
         customInputs: customVariables
       }
-    };
+    });
   }
 
   try {
@@ -59,32 +60,20 @@ export const dispatchCodeSandbox = async (props: RunCodeType): Promise<RunCodeRe
         customOutputs: codeReturn,
         codeLog: log
       },
-      [DispatchNodeResponseKeyEnum.toolResponses]: codeReturn
+      [DispatchNodeResponseKeyEnum.toolResponse]: codeReturn
     };
-  } catch (error) {
+  } catch (error: any) {
     const text = getErrText(error, 'Request code sandbox failed');
 
-    // @adapt
-    if (catchError === undefined) {
-      return {
-        data: {
-          [NodeOutputKeyEnum.error]: { message: text }
-        },
-        [DispatchNodeResponseKeyEnum.nodeResponse]: {
-          customInputs: customVariables,
-          errorText: text
-        }
-      };
-    }
-
-    return {
-      error: {
+    return getNodeErrResponse({
+      error: text,
+      customErr: {
         [NodeOutputKeyEnum.error]: text
       },
       [DispatchNodeResponseKeyEnum.nodeResponse]: {
         customInputs: customVariables,
         errorText: text
       }
-    };
+    });
   }
 };

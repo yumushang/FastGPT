@@ -6,17 +6,20 @@ import {
 import json5 from 'json5';
 import { createLLMResponse } from '../llm/request';
 import { getLogger, LogCategories } from '../../../common/logger';
+import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 
 const logger = getLogger(LogCategories.MODULE.AI.FUNCTIONS);
 
 export async function createQuestionGuide({
   messages,
   model,
-  customPrompt
+  customPrompt,
+  teamId
 }: {
   messages: ChatCompletionMessageParam[];
-  model: string;
+  model: LLMSystemModelDataType;
   customPrompt?: string;
+  teamId: string;
 }): Promise<{
   result: string[];
   inputTokens: number;
@@ -34,12 +37,13 @@ export async function createQuestionGuide({
     answerText: answer,
     usage: { inputTokens, outputTokens }
   } = await createLLMResponse({
+    teamId,
+    saveLLMResponseRecord: false,
     body: {
       model,
-      temperature: 0.1,
-      max_tokens: 200,
       messages: concatMessages,
-      stream: true
+      stream: true,
+      ...(model.config.reasoning ? { reasoning_effort: 'none' as const } : {})
     }
   });
 

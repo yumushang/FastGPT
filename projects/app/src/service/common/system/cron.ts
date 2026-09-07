@@ -7,7 +7,7 @@ import { TimerIdEnum } from '@fastgpt/service/common/system/timerLock/constants'
 import { addHours } from 'date-fns';
 import { getScheduleTriggerApp } from '@/service/core/app/utils';
 import { cronRefreshModels } from '@fastgpt/service/core/ai/config/utils';
-import { cronJob as sandboxCronJob } from '@fastgpt/service/core/ai/sandbox/controller';
+import { runSandboxArchiveCron as sandboxCronJob } from '@fastgpt/service/core/ai/sandbox/interface/admin';
 import { clearExpiredS3FilesCron } from '@fastgpt/service/common/s3/lifecycle/cleanup';
 import { cleanStaleGeneratingChats } from '@fastgpt/service/core/chat/cleanStaleGeneratingChats';
 
@@ -65,13 +65,13 @@ const scheduleTriggerAppCron = () => {
   getScheduleTriggerApp();
 };
 
-/** 超过 30 分钟仍为 generating 的会话纠正为 done（与 cleanStaleGeneratingChats 阈值一致） */
+/** 基于 Redis stream activity 快速纠正异常中断的 generating 会话，保留 30 分钟兜底 */
 const cleanStaleGeneratingChatCron = () => {
-  setCron('*/5 * * * *', async () => {
+  setCron('*/1 * * * *', async () => {
     if (
       await checkTimerLock({
         timerId: TimerIdEnum.cleanStaleGeneratingChat,
-        lockMinuted: 4
+        lockMinuted: 1
       })
     ) {
       await cleanStaleGeneratingChats();

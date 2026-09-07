@@ -1,8 +1,9 @@
 import { NextAPI } from '@/service/middleware/entry';
-import { authChatCrud, authCollectionInChat } from '@/service/support/permission/auth/chat';
+import { authCollectionInChat } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
 import { type DatasetDataSchemaType } from '@fastgpt/global/core/dataset/type';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { type FilterQuery, Types } from 'mongoose';
 import { quoteDataFieldSelector } from '@/service/core/chat/constants';
 import { processChatTimeFilter } from '@/service/core/chat/utils';
@@ -14,6 +15,8 @@ import {
   GetCollectionQuoteBodySchema,
   type GetCollectionQuoteResType
 } from '@fastgpt/global/openapi/core/chat/record/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { buildChatSourceQuery } from '@fastgpt/service/core/chat/source';
 
 type BaseMatchType = FilterQuery<DatasetDataSchemaType>;
 
@@ -26,34 +29,45 @@ async function handler(req: ApiRequestProps): Promise<GetCollectionQuoteResType>
 
     collectionId,
     chatItemDataId,
-    appId,
+    sourceType,
+    sourceId,
     chatId,
-    shareId,
-    outLinkUid,
-    teamId,
-    teamToken,
+    outLinkAuthData,
     pageSize
-  } = GetCollectionQuoteBodySchema.parse(req.body);
+  } = parseApiInput({ req, bodySchema: GetCollectionQuoteBodySchema }).body;
 
   const limitedPageSize = pageSize;
 
-  const [collection, { chat, showFullText }, chatItem] = await Promise.all([
+  const authRes = await authChatTargetCrud({
+    req,
+    authToken: true,
+    authApiKey: true,
+    sourceType,
+    sourceId,
+    chatId,
+    outLinkAuthData
+  });
+  const resolvedSourceId = authRes.sourceId;
+
+  const [collection, chatItem] = await Promise.all([
     getCollectionWithDataset(collectionId),
-    authChatCrud({
-      req,
-      authToken: true,
-      appId,
+    MongoChatItem.findOne(
+      {
+        ...buildChatSourceQuery({ sourceType, sourceId: resolvedSourceId }),
+        chatId,
+        dataId: chatItemDataId
+      },
+      'time'
+    ).lean(),
+    authCollectionInChat({
+      sourceType,
+      sourceId: resolvedSourceId,
       chatId,
-      shareId,
-      outLinkUid,
-      teamId,
-      teamToken
-    }),
-    MongoChatItem.findOne({ appId, chatId, dataId: chatItemDataId }, 'time').lean(),
-    authCollectionInChat({ appId, chatId, chatItemDataId, collectionIds: [collectionId] })
+      collectionIds: [collectionId]
+    })
   ]);
 
-  if (!showFullText || !chat || !chatItem || initialAnchor === undefined) {
+  if (!authRes.showFullText || !authRes.chat || !chatItem || initialAnchor === undefined) {
     return Promise.reject(ChatErrEnum.unAuthChat);
   }
 
@@ -108,6 +122,7 @@ async function handleInitialLoad({
 }): Promise<GetCollectionQuoteResType> {
   const centerNode = await MongoDatasetData.findOne(
     {
+      ...baseMatch,
       _id: new Types.ObjectId(initialId)
     },
     quoteDataFieldSelector
@@ -120,9 +135,10 @@ async function handleInitialLoad({
       .lean();
 
     const hasMoreNext = list.length === pageSize;
+    const citeList = await getFormatDatasetCiteList(list);
 
     return {
-      list: processChatTimeFilter(getFormatDatasetCiteList(list), chatTime).map((item) => ({
+      list: processChatTimeFilter(citeList, chatTime).map((item) => ({
         ...item,
         id: item._id,
         anchor: item.index
@@ -146,9 +162,10 @@ async function handleInitialLoad({
   );
 
   const resultList = [...prevList, centerNode, ...nextList];
+  const citeList = await getFormatDatasetCiteList(resultList);
 
   return {
-    list: processChatTimeFilter(getFormatDatasetCiteList(resultList), chatTime).map((item) => ({
+    list: processChatTimeFilter(citeList, chatTime).map((item) => ({
       ...item,
       id: item._id,
       anchor: item.index
@@ -177,7 +194,8 @@ async function handlePaginatedLoad({
     ? await getPrevNodes(prevId, nextAnchor, pageSize, baseMatch)
     : await getNextNodes(nextId!, nextAnchor, pageSize, baseMatch);
 
-  const processedList = processChatTimeFilter(getFormatDatasetCiteList(list), chatTime);
+  const citeList = await getFormatDatasetCiteList(list);
+  const processedList = processChatTimeFilter(citeList, chatTime);
 
   return {
     list: processedList.map((item) => ({ ...item, id: item._id, anchor: item.index })),

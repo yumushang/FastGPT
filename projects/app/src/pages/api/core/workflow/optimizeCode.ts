@@ -7,16 +7,17 @@ import { createLLMResponse } from '@fastgpt/service/core/ai/llm/request';
 import { authCert } from '@fastgpt/service/support/permission/auth/common';
 import { createUsage } from '@fastgpt/service/support/wallet/usage/controller';
 import { formatModelChars2Points } from '@fastgpt/service/support/wallet/usage/utils';
-import type { ApiRequestProps, ApiResponseType } from '@fastgpt/service/type/next';
+import type { ApiRequestProps, ApiResponseType } from '@fastgpt/next/type';
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
+import {
+  OptimizeCodeBodySchema,
+  OptimizeCodeResponseSchema,
+  type OptimizeCodeBody
+} from '@fastgpt/global/openapi/core/workflow/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { getLLMModelData } from '@fastgpt/service/core/ai/model';
 const logger = getLogger(LogCategories.MODULE.WORKFLOW.OPTIMIZE_CODE);
-
-type OptimizeCodeBody = {
-  optimizerInput: string;
-  model: string;
-  conversationHistory?: Array<ChatCompletionMessageParam>;
-};
 
 const getPromptNodeCopilotSystemPrompt = () => {
   return `
@@ -84,14 +85,22 @@ function main({paramName, paramRefer, paramType}) {
 };
 
 async function handler(req: ApiRequestProps<OptimizeCodeBody>, res: ApiResponseType) {
-  try {
-    const { optimizerInput, model, conversationHistory = [] } = req.body;
+  const {
+    optimizerInput,
+    modelId,
+    conversationHistory = []
+  } = parseApiInput({
+    req,
+    bodySchema: OptimizeCodeBodySchema
+  }).body;
 
+  try {
     const { teamId, tmbId } = await authCert({
       req,
       authToken: true,
       authApiKey: true
     });
+    const modelData = getLLMModelData({ modelId });
 
     res.setHeader('Content-Type', 'text/event-stream;charset=utf-8');
     res.setHeader('X-Accel-Buffering', 'no');
@@ -110,11 +119,11 @@ async function handler(req: ApiRequestProps<OptimizeCodeBody>, res: ApiResponseT
     ];
 
     const llmResponse = await createLLMResponse({
+      teamId,
+      saveLLMResponseRecord: false,
       body: {
-        model,
+        model: modelData,
         messages,
-        temperature: 0.1,
-        max_tokens: 2000,
         stream: true,
         useVision: false
       },
@@ -122,15 +131,17 @@ async function handler(req: ApiRequestProps<OptimizeCodeBody>, res: ApiResponseT
         responseWrite({
           res,
           event: SseResponseEventEnum.answer,
-          data: JSON.stringify({
-            choices: [
-              {
-                delta: {
-                  content: text
+          data: OptimizeCodeResponseSchema.parse(
+            JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    content: text
+                  }
                 }
-              }
-            ]
-          })
+              ]
+            })
+          )
         });
       }
     });
@@ -139,11 +150,11 @@ async function handler(req: ApiRequestProps<OptimizeCodeBody>, res: ApiResponseT
     responseWrite({
       res,
       event: SseResponseEventEnum.answer,
-      data: '[DONE]'
+      data: OptimizeCodeResponseSchema.parse('[DONE]')
     });
 
-    const { totalPoints, modelName } = formatModelChars2Points({
-      model,
+    const { totalPoints } = formatModelChars2Points({
+      model: modelData,
       inputTokens,
       outputTokens
     });
@@ -158,7 +169,7 @@ async function handler(req: ApiRequestProps<OptimizeCodeBody>, res: ApiResponseT
         {
           moduleName: i18nT('common:support.wallet.usage.Code Copilot'),
           amount: totalPoints,
-          model: modelName,
+          modelId: modelData.modelId,
           inputTokens,
           outputTokens
         }

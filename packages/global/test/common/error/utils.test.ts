@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { getErrText, UserError } from '@fastgpt/global/common/error/utils';
+import { getErrText, ToastHandledError, UserError } from '@fastgpt/global/common/error/utils';
 import { ERROR_ENUM, ERROR_RESPONSE } from '@fastgpt/global/common/error/errorCode';
+import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
 
 describe('getErrText', () => {
+  it('maps the model domain error code to the user-facing message', () => {
+    expect(getErrText(ModelErrEnum.unExist)).toBe(ERROR_RESPONSE[ModelErrEnum.unExist].message);
+  });
+
   it('should return mapped message for error enum', () => {
     const result = getErrText(ERROR_ENUM.unAuthorization);
 
@@ -45,6 +50,49 @@ describe('getErrText', () => {
 
     expect(getErrText(err)).toBe('https://xxx xxx');
   });
+
+  it('should parse errorText field', () => {
+    const err = {
+      errorText: 'Sandbox is not configured'
+    };
+    expect(getErrText(err)).toBe('Sandbox is not configured');
+  });
+
+  it('should use localized reason when locale is provided', () => {
+    const err = {
+      response: {
+        data: {
+          error: {
+            message: 'English message',
+            reason: {
+              en: 'English reason',
+              'zh-CN': '中文原因'
+            }
+          }
+        }
+      }
+    };
+
+    expect(getErrText(err, '', 'zh-CN')).toBe('中文原因');
+  });
+
+  it('should keep existing nested object behavior when locale is not provided', () => {
+    const err = {
+      response: {
+        data: {
+          error: {
+            message: 'English message',
+            reason: {
+              en: 'English reason',
+              'zh-CN': '中文原因'
+            }
+          }
+        }
+      }
+    };
+
+    expect(getErrText(err)).toBe('');
+  });
 });
 
 describe('UserError', () => {
@@ -54,5 +102,15 @@ describe('UserError', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe('UserError');
     expect(err.message).toBe('boom');
+  });
+});
+
+describe('ToastHandledError', () => {
+  it('should set name to ToastHandledError', () => {
+    const err = new ToastHandledError('handled');
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('ToastHandledError');
+    expect(err.message).toBe('handled');
   });
 });

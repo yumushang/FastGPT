@@ -1,19 +1,21 @@
 import { DatasetSourceReadTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { rawText2Chunks, readDatasetSourceRawText } from '@fastgpt/service/core/dataset/read';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
-import {
-  OwnerPermissionVal,
-  WritePermissionVal
-} from '@fastgpt/global/support/permission/constant';
-import { authCollectionFile } from '@fastgpt/service/support/permission/auth/file';
+import type { ApiRequestProps } from '@fastgpt/next/type';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { authDatasetFileKey } from '@fastgpt/service/support/permission/auth/file';
 import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import { isAuthorizedDatasetFileS3Key } from '@fastgpt/service/common/s3/sources/dataset/key';
 import {
   computedCollectionChunkSettings,
-  getLLMMaxChunkSize
+  getLLMMaxChunkSize,
+  maxPreviewChunkCount
 } from '@fastgpt/global/core/dataset/training/utils';
 import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
-import { getEmbeddingModel, getLLMModel } from '@fastgpt/service/core/ai/model';
+import {
+  getDatasetAgentModel,
+  getDatasetEmbeddingModel
+} from '@fastgpt/service/core/dataset/model';
 import { replaceS3KeyToPreviewUrl } from '@fastgpt/service/core/dataset/utils';
 import { addDays } from 'date-fns';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
@@ -42,14 +44,21 @@ async function handler(
     throw new Error('sourceId is empty');
   }
 
+  if (
+    type === DatasetSourceReadTypeEnum.fileLocal &&
+    !isAuthorizedDatasetFileS3Key({ key: sourceId, datasetId })
+  ) {
+    return Promise.reject(CommonErrEnum.unAuthFile);
+  }
+
   const fileAuthRes =
     type === DatasetSourceReadTypeEnum.fileLocal
-      ? await authCollectionFile({
+      ? await authDatasetFileKey({
           req,
           authToken: true,
           authApiKey: true,
           fileId: sourceId,
-          per: OwnerPermissionVal
+          per: WritePermissionVal
         })
       : undefined;
 
@@ -67,8 +76,8 @@ async function handler(
 
   const formatChunkSettings = computedCollectionChunkSettings({
     ...chunkSettings,
-    llmModel: getLLMModel(dataset.agentModel),
-    vectorModel: getEmbeddingModel(dataset.vectorModel)
+    llmModel: getDatasetAgentModel(dataset),
+    vectorModel: getDatasetEmbeddingModel(dataset)
   });
 
   const { rawText } = await readDatasetSourceRawText({
@@ -90,15 +99,18 @@ async function handler(
     chunkSize: formatChunkSettings.chunkSize,
     paragraphChunkDeep: formatChunkSettings.paragraphChunkDeep,
     paragraphChunkMinSize: formatChunkSettings.paragraphChunkMinSize,
-    maxSize: getLLMMaxChunkSize(getLLMModel(dataset.agentModel)),
+    maxSize: getLLMMaxChunkSize(getDatasetAgentModel(dataset)),
     overlapRatio,
-    customReg: formatChunkSettings.chunkSplitter ? [formatChunkSettings.chunkSplitter] : []
+    customReg: formatChunkSettings.chunkSplitter ? [formatChunkSettings.chunkSplitter] : [],
+    maxChunks: maxPreviewChunkCount
   });
 
-  const chunksWithJWT = chunks.slice(0, 10).map((chunk) => ({
-    q: replaceS3KeyToPreviewUrl(chunk.q, addDays(new Date(), 1)),
-    a: replaceS3KeyToPreviewUrl(chunk.a, addDays(new Date(), 1))
-  }));
+  const chunksWithJWT = await Promise.all(
+    chunks.slice(0, 10).map(async (chunk) => ({
+      q: await replaceS3KeyToPreviewUrl(chunk.q, addDays(new Date(), 1)),
+      a: await replaceS3KeyToPreviewUrl(chunk.a, addDays(new Date(), 1))
+    }))
+  );
 
   return GetPreviewChunksResponseSchema.parse({
     chunks: chunksWithJWT,

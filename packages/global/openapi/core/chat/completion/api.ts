@@ -2,20 +2,61 @@ import z from 'zod';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import { ChatCompletionMessageParamSchema } from '../../../../core/ai/llm/type';
 import { getNanoid } from '../../../../common/string/tools';
-import { AppChatConfigTypeSchema, AppSchemaTypeSchema } from '../../../../core/app/type';
+import { AppSchemaTypeSchema } from '../../../../core/app/type';
 import { AuthUserTypeEnum } from '../../../../support/permission/constant';
 import { OutLinkChatAuthSchema } from '../../../../support/permission/chat';
-import { StoreEdgeItemTypeSchema } from '../../../../core/workflow/type/edge';
-import { OpenAPIStoreNodeItemTypeSchema } from '../../workflow/node';
+import {
+  CanonicalSelectedToolsValueSchema,
+  CanonicalWorkflowDataSchema
+} from '../../../../core/workflow/migration';
+import { NodeInputKeyEnum } from '../../../../core/workflow/constants';
+import {
+  OpenAPIFlowNodeInputItemTypeSchema,
+  OpenAPIStoreNodeItemTypeSchema
+} from '../../workflow/node';
+import { AppChatConfigInputSchema } from '../../app/common/api';
 
 const nullishToUndefined = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((v) => v ?? undefined, schema);
 
+const ChatTestNodeInputSchema = OpenAPIFlowNodeInputItemTypeSchema.superRefine((input, ctx) => {
+  if (input.key !== NodeInputKeyEnum.selectedTools || input.value === undefined) return;
+
+  const result = CanonicalSelectedToolsValueSchema.safeParse(input.value);
+  if (result.success) return;
+
+  result.error.issues.forEach((issue) => {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['value', ...issue.path],
+      message: issue.message
+    });
+  });
+});
+
+const ChatTestNodeSchema = OpenAPIStoreNodeItemTypeSchema.extend({
+  inputs: z.array(ChatTestNodeInputSchema)
+});
+
 const WebCompletionsSchema = z.object({
-  chatId: nullishToUndefined(z.string().max(1024).optional()).meta({
-    description: '聊天ID, 传入的话会自动获取历史记录，不传入则认为是新对话'
+  chatId: z
+    .preprocess(
+      (value) =>
+        value === null || value === undefined || (typeof value === 'string' && !value.trim())
+          ? undefined
+          : value,
+      z
+        .string()
+        .max(1024)
+        .default(() => getNanoid(24))
+    )
+    .meta({
+      description: '会话 ID；未传入或传入空字符串时自动生成新会话 ID'
+    }),
+  appId: nullishToUndefined(ObjectIdSchema.optional()).meta({
+    description:
+      '应用 ID。推荐在请求体中传入；APIKey 调用时优先级为 body.appId > Authorization 中的 apiKey-appId 后缀 > 旧 APIKey 绑定 appId。apiKey-appId 仅用于兼容 OpenAI SDK，不会写入数据库'
   }),
-  appId: nullishToUndefined(ObjectIdSchema.optional()),
   customUid: nullishToUndefined(z.string().max(1024).optional()).meta({
     description: '自定义用户ID(分享链接)'
   }),
@@ -34,30 +75,64 @@ const ChatCompletionCreateParamsSchema = z.object({
   })
 });
 
-export const CompletionsPropsSchema = OutLinkChatAuthSchema.extend(WebCompletionsSchema.shape)
-  .extend(ChatCompletionCreateParamsSchema.shape)
-  .extend({
-    variables: nullishToUndefined(z.record(z.string(), z.any()).default({})).meta({
-      description: '全局变量或插件输入'
+export const ChatCompletionAuthProxySchema = z
+  .object({
+    username: nullishToUndefined(z.string().trim().min(1).max(128).optional()).meta({
+      example: 'user@example.com',
+      description: 'API Key 代理调用的团队成员用户名'
     }),
-    responseChatItemId: nullishToUndefined(
-      z
-        .string()
-        .default(() => getNanoid())
-        .meta({
-          description: '自定义响应的 assistant 的消息 ID，如果不传入，则自动生成一个'
-        })
-    ),
-    detail: nullishToUndefined(z.boolean().default(false)).meta({
-      description: '是否返回详细信息，包括 reasoning_content, tool_calls, usage 等'
-    }),
-    retainDatasetCite: nullishToUndefined(z.boolean().default(false)).meta({
-      description: '是否保留数据集引用'
-    }),
-    showSkillReferences: nullishToUndefined(z.boolean().default(false)).meta({
-      description: '是否显示技能引用'
+    tmbId: nullishToUndefined(ObjectIdSchema.optional()).meta({
+      description: 'API Key 代理调用的团队成员 ID'
     })
+  })
+  .refine(({ username, tmbId }) => !!username || !!tmbId, {
+    message: 'authProxy.username or authProxy.tmbId is required'
+  })
+  .meta({
+    description:
+      'API Key 代理调用身份。仅开启 authProxy 的团队级 API Key 可用，username 与 tmbId 同时传入时必须指向同一团队成员'
   });
+export type ChatCompletionAuthProxy = z.infer<typeof ChatCompletionAuthProxySchema>;
+
+export const CompletionsPropsSchema = WebCompletionsSchema.extend({
+  ...ChatCompletionCreateParamsSchema.shape,
+  outLinkAuthData: nullishToUndefined(OutLinkChatAuthSchema.optional()).meta({
+    description: '外链鉴权数据。share 模式传 shareId/outLinkUid。'
+  }),
+  authProxy: nullishToUndefined(ChatCompletionAuthProxySchema.optional()).meta({
+    description: 'API Key 代理调用身份'
+  }),
+  variables: nullishToUndefined(z.record(z.string(), z.any()).default({})).meta({
+    description: '全局变量或插件输入'
+  }),
+  responseChatItemId: nullishToUndefined(
+    z
+      .string()
+      .default(() => getNanoid())
+      .meta({
+        description: '自定义响应的 assistant 的消息 ID，如果不传入，则自动生成一个'
+      })
+  ),
+  detail: nullishToUndefined(z.boolean().default(false)).meta({
+    description: '是否返回详细信息，包括 reasoning_content, tool_calls, usage 等'
+  }),
+  retainDatasetCite: nullishToUndefined(z.boolean().default(false)).meta({
+    description: '是否保留数据集引用'
+  }),
+  showSkillReferences: nullishToUndefined(z.boolean().default(false)).meta({
+    description: '是否显示技能引用'
+  })
+}).superRefine(({ outLinkAuthData }, ctx) => {
+  const hasShareId = !!outLinkAuthData?.shareId;
+  const hasOutLinkUid = !!outLinkAuthData?.outLinkUid;
+
+  if (hasShareId !== hasOutLinkUid) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'outLinkAuthData.shareId and outLinkAuthData.outLinkUid must be provided together'
+    });
+  }
+});
 export type CompletionsProps = z.infer<typeof CompletionsPropsSchema>;
 
 /* =============== Response =============== */
@@ -66,7 +141,7 @@ const ChatCompletionResponseMessageSchema = z.object({
   role: z.literal('assistant').meta({ description: '消息角色' }),
   content: z.any().meta({
     description:
-      '消息内容。普通对话为字符串；detail=true 或工作流命中交互节点时，可能为带 type 字段的对象数组（type 取值: text / interactive / tool / file / reasoning）'
+      '消息内容。普通对话为字符串；detail=true 或工作流命中交互节点时，可能为按字段名区分的对象数组（如 text / interactive / tool / file / reasoning）。v1 会额外补充 type 字段，取值为 text / interactive / tool / file / reasoning；v2 不补充 type。当元素包含 interactive 字段时，只返回交互展示配置，不返回 entryNodeIds / memoryEdges / nodeOutputs 等内部运行态字段'
   }),
   reasoning_content: z.string().optional().meta({ description: '思考过程内容（仅推理模型有）' })
 });
@@ -91,6 +166,7 @@ const ChatCompletionUsageSchema = z.object({
 
 export const CompletionsResponseSchema = z.object({
   id: z.string().meta({ description: '对话 ID（chatId）' }),
+  title: z.string().optional().meta({ description: '未命名会话标题生成成功时返回的对话标题' }),
   model: z.literal('').meta({ description: '模型名称，v1 接口固定为空字符串' }),
   usage: ChatCompletionUsageSchema.meta({
     description: 'Token 用量。v1 接口为占位值，需要时请从 responseData 计算'
@@ -106,6 +182,15 @@ export const CompletionsResponseSchema = z.object({
     .meta({ description: '工作流执行后更新的变量（仅 detail=true 时返回）' })
 });
 export type CompletionsResponseType = z.infer<typeof CompletionsResponseSchema>;
+
+/* =============== Shared workflow SSE response =============== */
+
+export const ChatWorkflowSseResponseSchema = z.string().meta({
+  example: 'event: answer\ndata: {"choices":[...]}\n\n',
+  description:
+    '工作流 SSE 事件流；根据接口版本和 detail 配置返回 answer、flowNodeResponse、interactive 等事件，最后以 [DONE] 结束'
+});
+export type ChatWorkflowSseResponseType = z.infer<typeof ChatWorkflowSseResponseSchema>;
 
 export const AuthResponseSchema = z.object({
   teamId: ObjectIdSchema.meta({ description: '团队ID' }),
@@ -132,19 +217,63 @@ export type AuthResponseType = z.infer<typeof AuthResponseSchema>;
 
 /* ====== Chat test ====== */
 export const ChatTestPropsSchema = z.object({
-  messages: z.array(ChatCompletionMessageParamSchema).meta({ description: '消息列表' }),
-  responseChatItemId: z
-    .string()
-    .nullish()
-    .meta({ description: '自定义响应的 assistant 的消息 ID，如果不传入，则自动生成一个' }),
-  nodes: z.array(OpenAPIStoreNodeItemTypeSchema).meta({ description: '节点列表' }),
-  edges: z.array(StoreEdgeItemTypeSchema).meta({ description: '边列表' }),
-  chatConfig: AppChatConfigTypeSchema.meta({ description: '聊天配置' }),
+  messages: z.array(ChatCompletionMessageParamSchema).meta({
+    example: [{ role: 'user', content: '你好' }],
+    description: '消息列表，最后一条消息作为本次用户问题'
+  }),
+  responseChatItemId: z.string().nullish().meta({
+    example: 'response-chat-item-id',
+    description: '自定义响应消息 ID，不传时自动生成'
+  }),
+  nodes: z.array(ChatTestNodeSchema).meta({
+    example: [],
+    description: '临时执行的工作流节点列表'
+  }),
+  edges: CanonicalWorkflowDataSchema.shape.edges.meta({
+    example: [],
+    description: '临时执行的工作流连线列表'
+  }),
+  chatConfig: AppChatConfigInputSchema.meta({
+    example: {},
+    description: '当前格式的聊天配置'
+  }),
   variables: nullishToUndefined(z.record(z.string(), z.any()).default({})).meta({
+    example: {},
     description: '全局变量或插件输入'
   }),
-  appId: ObjectIdSchema.meta({ description: '应用ID' }),
-  appName: z.string().meta({ description: '应用名称' }),
-  chatId: z.string().meta({ description: '聊天ID' })
+  appId: ObjectIdSchema.meta({
+    example: '68ad85a7463006c963799a05',
+    description: '应用 ID'
+  }),
+  appName: z.string().meta({
+    example: '主页助手',
+    description: '应用名称'
+  }),
+  chatId: z.string().meta({
+    example: 'chat-id',
+    description: '会话 ID'
+  })
 });
 export type ChatTestPropsType = z.infer<typeof ChatTestPropsSchema>;
+
+/* ============================================================================
+ * API: 应用聊天及工作流执行
+ * Route: POST /api/proApi/core/chat/chatHome
+ * Method: POST
+ * Description: 使用主页聊天配置和临时工作流执行一次应用对话，返回 SSE 流。
+ * Tags: ['会话操作', 'Write']
+ * ============================================================================ */
+
+export const ChatHomeBodySchema = ChatTestPropsSchema.extend({
+  retainDatasetCite: z.boolean().optional().meta({
+    example: true,
+    description: '是否保留知识库引用信息'
+  }),
+  showSkillReferences: z.boolean().optional().meta({
+    example: true,
+    description: '是否返回技能引用信息'
+  })
+}).meta({
+  description: '主页聊天使用的应用工作流和运行参数'
+});
+export type ChatHomeBodyType = z.infer<typeof ChatHomeBodySchema>;

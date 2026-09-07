@@ -1,19 +1,19 @@
 import React from 'react';
-import { Box, Button, Flex, Input, ModalBody, ModalFooter, Textarea } from '@chakra-ui/react';
-import { useForm } from 'react-hook-form';
-import MyModal from '@fastgpt/web/components/common/MyModal';
+import { Box, Button, Flex, Input, Textarea } from '@chakra-ui/react';
+import { useForm, useWatch } from 'react-hook-form';
+import MyModal from '@fastgpt/web/components/v2/common/MyModal';
 import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import MyPopover from '@fastgpt/web/components/common/MyPopover';
 import { useTranslation } from 'next-i18next';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { useToast } from '@fastgpt/web/hooks/useToast';
 import { useUploadAvatar } from '@fastgpt/web/common/file/hooks/useUploadAvatar';
 import { getUploadAvatarPresignedUrl } from '@/web/common/file/api';
 import { postCreateSkill } from '@/web/core/skill/api';
 import { useRouter } from 'next/router';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { getDocPath } from '@/web/common/system/doc';
 
 const DEFAULT_SKILL_AVATAR = 'core/skill/default';
 
@@ -21,31 +21,30 @@ type FormType = {
   avatar: string;
   name: string;
   intro?: string;
-  requirement: string;
 };
 
 type Props = {
   parentId?: string | null;
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (skillId: string) => void | Promise<void>;
+  /** 创建成功后在新标签页打开详情；默认 false 在当前页跳转。 */
+  openDetailInNewTab?: boolean;
 };
 
-const CreateSkillModal = ({ parentId, onClose, onSuccess }: Props) => {
+const CreateSkillModal = ({ parentId, onClose, onSuccess, openDetailInNewTab = false }: Props) => {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const router = useRouter();
-  const { defaultModels } = useSystemStore();
 
-  const { register, setValue, watch, handleSubmit } = useForm<FormType>({
+  const { register, setValue, control, handleSubmit } = useForm<FormType>({
     defaultValues: {
       avatar: DEFAULT_SKILL_AVATAR,
       name: '',
-      intro: '',
-      requirement: t('skill:skill_requirement_default')
+      intro: ''
     }
   });
 
-  const avatar = watch('avatar');
-  const requirement = watch('requirement');
+  const avatar = useWatch({ control, name: 'avatar' });
 
   const { Component: AvatarUploader, handleFileSelectorOpen: handleAvatarSelectorOpen } =
     useUploadAvatar(getUploadAvatarPresignedUrl, {
@@ -54,29 +53,62 @@ const CreateSkillModal = ({ parentId, onClose, onSuccess }: Props) => {
       }
     });
 
-  const { runAsync: onCreate, loading: isCreating } = useRequest(
-    async ({ avatar, name, intro, requirement }: FormType) => {
-      const trimmedRequirement = requirement.trim();
-      const defaultModel = defaultModels.llm?.model;
+  const { runAsync: createSkill, loading: isCreating } = useRequest(
+    async ({ avatar, name, intro }: FormType) => {
       return postCreateSkill({
         parentId: parentId ?? null,
         name: name.trim(),
         description: intro?.trim() || undefined,
-        requirements: trimmedRequirement || undefined,
-        model: trimmedRequirement && defaultModel ? defaultModel : undefined,
         avatar: avatar || undefined
       });
     },
     {
-      onSuccess(skillId) {
-        onSuccess?.();
-        onClose();
-        router.push(`/skill/detail?skillId=${skillId}`);
-      },
-      successToast: t('common:create_success'),
       errorToast: t('common:create_failed')
     }
   );
+
+  const handleConfirm = () => {
+    const onValid = async (data: FormType) => {
+      // 校验通过后再于同步用户手势内预建空白窗口：handleSubmit 同步校验通过后会立即调用 onValid，
+      // 仍在 click 手势调用栈内，不会被 Safari / 严格弹窗策略拦截。
+      // 关键：放在这里（而非校验前）可避免名称为空时「先开空白标签页、onInvalid 又关掉」造成的闪退。
+      // 注：不能用 noopener —— 需保留窗口句柄以便创建成功后设置 location；目标页为同源可信路由。
+      const popup = openDetailInNewTab ? window.open('', '_blank') : null;
+
+      let skillId: string;
+      try {
+        skillId = await createSkill(data);
+      } catch {
+        // 创建失败：关掉预建窗口（useRequest 已展示错误提示）。
+        popup?.close();
+        return;
+      }
+
+      // 创建成功后立即关闭弹窗：后续回调失败不应让弹窗卡住，也不应掩盖创建已成功。
+      onClose();
+
+      // 打开详情页：新标签页模式下若窗口被拦截则不跳走当前页（如 Agent 编辑器）；
+      // 当前页模式下直接 router.push。
+      const detailUrl = `/skill/detail?skillId=${skillId}`;
+      if (openDetailInNewTab) {
+        if (popup && !popup.closed) {
+          popup.location.href = detailUrl;
+        }
+      } else {
+        await router.push(detailUrl);
+      }
+
+      // 创建后的关联/刷新交给调用方，由调用方自行处理异常。
+      await onSuccess?.(skillId);
+    };
+
+    const onInvalid = () => {
+      // 校验未通过（名称为空 / 纯空格）：稳定提示错误，弹窗保持打开，不再开/关空白标签页。
+      toast({ status: 'warning', title: t('common:name_is_empty') });
+    };
+
+    handleSubmit(onValid, onInvalid)();
+  };
 
   return (
     <>
@@ -84,104 +116,80 @@ const CreateSkillModal = ({ parentId, onClose, onSuccess }: Props) => {
         isOpen
         onClose={onClose}
         title={t('skill:create_skill')}
-        w={'600px'}
+        size={'md'}
+        isCentered
+        borderRadius={'10px'}
         closeOnOverlayClick={false}
+        footer={
+          <>
+            <Button variant={'whiteBase'} onClick={onClose}>
+              {t('common:Cancel')}
+            </Button>
+            <Button isLoading={isCreating} onClick={handleConfirm}>
+              {t('common:Confirm')}
+            </Button>
+          </>
+        }
       >
-        <ModalBody>
+        <Flex flexDirection={'column'} gap={6}>
           {/* 图标 & 名称 */}
-          <Box mb={5}>
-            <FormLabel required mb={2.5}>
-              {t('common:app_icon_and_name')}
-            </FormLabel>
+          <Box>
+            <Flex justify={'space-between'} alignItems={'center'}>
+              <FormLabel mb={2}>{t('skill:skill_avatar_and_name')}</FormLabel>
+              <Flex
+                as={'span'}
+                alignItems={'center'}
+                color={'primary.600'}
+                fontSize={'sm'}
+                cursor={'pointer'}
+                onClick={() => window.open(getDocPath('/guide/build/skill/development'), '_blank')}
+              >
+                <MyIcon name={'book'} w={4} mr={0.5} />
+                {t('common:Instructions')}
+              </Flex>
+            </Flex>
             <Flex alignItems={'center'}>
               <MyTooltip label={t('common:set_avatar')}>
                 <Flex
                   borderRadius={'6px'}
-                  w={10}
-                  h={10}
+                  w={'34px'}
+                  h={'34px'}
                   border={'1px solid'}
                   borderColor={'myGray.200'}
                   justifyContent={'center'}
                   alignItems={'center'}
-                  mr={2.5}
+                  mr={3}
+                  p={'4px'}
                   cursor={'pointer'}
                   onClick={handleAvatarSelectorOpen}
                 >
-                  <Avatar src={avatar} borderRadius={'4.667px'} />
+                  <Avatar src={avatar} w={'24px'} borderRadius={'6px'} />
                 </Flex>
               </MyTooltip>
               <Input
                 flex={1}
-                h={'34px'}
+                size={'sm'}
                 placeholder={t('skill:skill_name_placeholder')}
-                {...register('name', { required: true })}
+                {...register('name', {
+                  required: true,
+                  setValueAs: (value: string) => value.trim()
+                })}
               />
             </Flex>
           </Box>
 
           {/* 介绍 */}
-          <Box mb={5}>
-            <FormLabel mb={2.5}>{t('skill:skill_intro_label')}</FormLabel>
+          <Box>
+            <FormLabel mb={2}>{t('skill:skill_intro_label')}</FormLabel>
             <Textarea
               {...register('intro')}
-              rows={3}
+              h={'60px'}
+              minH={'60px'}
               placeholder={t('skill:skill_intro_placeholder')}
               resize={'vertical'}
             />
           </Box>
-
-          {/* Skill 需求 */}
-          <Box>
-            <Flex alignItems={'center'} mb={2.5}>
-              <FormLabel required>{t('skill:skill_requirement_label')}</FormLabel>
-              <MyPopover
-                trigger={'hover'}
-                placement={'right-start'}
-                hasArrow={false}
-                p={0}
-                w={'320px'}
-                Trigger={
-                  <Box ml={1} display={'inline-flex'} alignItems={'center'} cursor={'default'}>
-                    <MyIcon name={'help' as any} w={'16px'} color={'myGray.500'} />
-                  </Box>
-                }
-              >
-                {() => (
-                  <Box p={'12px'}>
-                    <Box fontSize={'xs'} color={'#333'} mb={2}>
-                      {t('skill:skill_requirement_tooltip_title')}
-                    </Box>
-                    <Box
-                      fontSize={'xs'}
-                      color={'#333'}
-                      border={'1px solid #E8EBF0'}
-                      borderRadius={'4px'}
-                      p={'10px'}
-                      whiteSpace={'pre-wrap'}
-                      cursor={'default'}
-                    >
-                      {t('skill:skill_requirement_tooltip_example')}
-                    </Box>
-                  </Box>
-                )}
-              </MyPopover>
-            </Flex>
-            <Textarea
-              value={requirement}
-              onChange={(e) => setValue('requirement', e.target.value)}
-              minH={'120px'}
-              resize={'vertical'}
-            />
-          </Box>
-        </ModalBody>
-        <ModalFooter gap={2}>
-          <Button variant={'whiteBase'} onClick={onClose}>
-            {t('common:Cancel')}
-          </Button>
-          <Button isLoading={isCreating} onClick={handleSubmit((data) => onCreate(data))}>
-            {t('common:Confirm')}
-          </Button>
-        </ModalFooter>
+        </Flex>
       </MyModal>
       <AvatarUploader />
     </>

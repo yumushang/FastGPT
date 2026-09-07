@@ -1,6 +1,6 @@
-import { type AppTemplateSchemaType } from '@fastgpt/global/core/app/type';
-import { connectionMongo, getMongoModel } from '../../../common/mongo/index';
-import { UserTagsEnum } from '@fastgpt/global/support/user/type';
+import { type AppTemplateStorageSchemaType } from '@fastgpt/global/core/app/type';
+import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo/index';
+import { UserTagsSchema } from '@fastgpt/global/support/user/type';
 const { Schema } = connectionMongo;
 
 export const collectionName = 'app_templates';
@@ -23,11 +23,11 @@ const AppTemplateSchema = new Schema({
   isPromoted: Boolean,
   promoteTags: {
     type: [String],
-    enum: UserTagsEnum.enum
+    enum: UserTagsSchema.enum
   },
   hideTags: {
     type: [String],
-    enum: UserTagsEnum.enum
+    enum: UserTagsSchema.enum
   },
   recommendText: String,
   userGuide: Object,
@@ -39,9 +39,9 @@ const AppTemplateSchema = new Schema({
   workflow: Object
 });
 
-AppTemplateSchema.index({ templateId: 1 });
+defineIndex(AppTemplateSchema, { key: { templateId: 1 } });
 
-export const MongoAppTemplate = getMongoModel<AppTemplateSchemaType>(
+export const MongoAppTemplate = getMongoModel<AppTemplateStorageSchemaType>(
   collectionName,
   AppTemplateSchema
 );

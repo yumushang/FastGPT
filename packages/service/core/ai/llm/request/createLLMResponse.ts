@@ -7,7 +7,7 @@ import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/co
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { countGptMessagesTokens } from '../../../../common/string/tiktoken/index';
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
-import { getLLMModel } from '../../model';
+import { mergeAssistantFieldMessages } from '@fastgpt/global/core/chat/adapt';
 import { promptToolCallMessageRewrite } from '../promptCall';
 import { loadRequestMessages } from '../utils';
 import { createLLMRequestId } from '../../record/controller';
@@ -15,7 +15,10 @@ import type { AIApiRequestMeta } from '../../config';
 import { createChatCompletion } from './createChatCompletion';
 import { useLLMResponseAccumulator } from './hooks/useLLMResponseAccumulator';
 import { llmCompletionsBodyFormat } from './requestBody';
-import { saveLLMErrorRecord, saveLLMResponseRecord } from './records';
+import {
+  saveLLMErrorRecord as persistLLMErrorRecord,
+  saveLLMResponseRecord as persistLLMResponseRecord
+} from './records';
 import { createCompleteResponse } from './response/complete';
 import { normalizeCompletionFinishReason } from './response/normalize';
 import { createStreamResponse } from './response/stream';
@@ -36,15 +39,27 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
 ): Promise<LLMResponse> => {
   const requestId = createLLMRequestId();
 
-  const { throwError = true, body, custonHeaders, userKey, maxContinuations = 1 } = args;
-  const { messages, useVision, tools, toolCallMode } = body;
-  const model = getLLMModel(body.model);
+  const {
+    throwError = true,
+    body,
+    custonHeaders,
+    timeout,
+    userKey,
+    maxContinuations = 1,
+    saveLLMResponseRecord = true,
+    teamId
+  } = args;
+  const { messages, useVision, useAudio, useVideo, extractFiles, tools, toolCallMode } = body;
+  const model = body.model;
 
   // 先把 messages 中的文件/图片等 FastGPT 扩展结构加载成模型可直接消费的消息。
   const requestMessages = await loadRequestMessages({
     messages,
-    useVision: useVision && model.vision,
-    supportReason: model.reasoning
+    useVision: useVision && model.config.vision,
+    useAudio: useAudio && model.config.audio,
+    useVideo: useVideo && model.config.video,
+    extractFiles,
+    supportReason: model.config.reasoning
   });
   const rewriteMessages = (() => {
     if (tools?.length && toolCallMode === 'prompt') {
@@ -59,11 +74,15 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
     messages: rewriteMessages
   });
   const accumulator = useLLMResponseAccumulator();
-  let currentMessages = [...requestBody.messages];
+  const initialRequestMessages = mergeAssistantFieldMessages(
+    requestBody.messages as ChatCompletionMessageParam[]
+  ) as ChatCompletionMessageParam[];
+  let currentMessages: ChatCompletionMessageParam[] = [...initialRequestMessages];
   let continuationCount = 0;
   let aiRequestMeta: AIApiRequestMeta = {
     usedUserOpenAIKey: false
   };
+  let hasSavedLLMRequestRecord = false;
 
   try {
     // 自带“继续”的循环：finish_reason=length 时追加已生成内容后继续请求。
@@ -75,10 +94,11 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
       } = await createChatCompletion({
         body: {
           ...requestBody,
-          messages: currentMessages
+          messages: currentMessages as typeof requestBody.messages
         },
         modelData,
         userKey,
+        timeout,
         options: {
           headers: {
             Accept: 'application/json, text/plain, */*',
@@ -89,7 +109,6 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
       aiRequestMeta = requestMeta;
       // 连续输出补偿请求可能多次进入循环，但本次调用对外只认第一次响应形态。
       accumulator.setFirstResponseType(currentIsStreamResponse);
-
       const parsedResponse = await (async () => {
         if (currentIsStreamResponse) {
           return createStreamResponse({
@@ -116,9 +135,11 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
 
       if (accumulator.shouldContinue()) {
         // 继续输出时，用原始 requestBody.messages 做基础，避免把 rewrite 前 messages 混回上下文。
-        currentMessages = accumulator.buildContinuationMessages({
-          baseMessages: requestBody.messages as ChatCompletionMessageParam[]
-        }) as typeof currentMessages;
+        currentMessages = mergeAssistantFieldMessages(
+          accumulator.buildContinuationMessages({
+            baseMessages: requestBody.messages as ChatCompletionMessageParam[]
+          })
+        ) as ChatCompletionMessageParam[];
 
         logger.debug(`Continue LLM response due to length limit`, {
           continuationCount,
@@ -158,12 +179,15 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
     // 但类型层 InferCompletionsBody 落到了 SDK 形态（messages/tools 是 v6 后的 union）
     const inputTokens =
       usage?.prompt_tokens ||
-      (await countGptMessagesTokens(
-        requestBody.messages as ChatCompletionMessageParam[],
-        requestBody.tools as ChatCompletionTool[] | undefined
-      ));
+      (await countGptMessagesTokens({
+        messages: requestBody.messages as ChatCompletionMessageParam[],
+        tools: requestBody.tools as ChatCompletionTool[] | undefined
+      }));
     const outputTokens =
-      usage?.completion_tokens || (await countGptMessagesTokens([assistantMessage]));
+      usage?.completion_tokens ||
+      (await countGptMessagesTokens({
+        messages: [assistantMessage]
+      }));
 
     /**
      * 空响应不一定是请求异常，可能是模型返回 stop 但没有内容。
@@ -195,19 +219,23 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
       (finish_reason === 'stop' || !finish_reason || isEmptyToolCallsFinish);
     const responseEmptyTip = isNotResponse ? getEmptyResponseTip() : undefined;
 
-    // 保存详情只记录实际请求与模型响应，不把用于计费分支的 usedUserOpenAIKey 写入详情。
-    saveLLMResponseRecord({
-      requestId,
-      requestBody: requestBody as ChatCompletionCreateParams,
-      answerText,
-      reasoningText,
-      toolCalls,
-      finishReason: finish_reason,
-      usage,
-      inputTokens,
-      outputTokens,
-      error: error ?? responseEmptyTip
-    });
+    if (saveLLMResponseRecord && teamId) {
+      // 保存详情只记录实际请求与模型响应，不把用于计费分支的 usedUserOpenAIKey 写入详情。
+      persistLLMResponseRecord({
+        teamId,
+        requestId,
+        requestBody: requestBody as ChatCompletionCreateParams,
+        answerText,
+        reasoningText,
+        toolCalls,
+        finishReason: finish_reason,
+        usage,
+        inputTokens,
+        outputTokens,
+        error: error ?? responseEmptyTip
+      });
+      hasSavedLLMRequestRecord = true;
+    }
 
     if (error && throwError) {
       throw error;
@@ -226,19 +254,24 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
         outputTokens,
         usedUserOpenAIKey: aiRequestMeta.usedUserOpenAIKey
       },
+      rawUsage: usage,
       requestId,
 
-      requestMessages,
+      requestMessages: initialRequestMessages,
       assistantMessage,
-      completeMessages: [...requestMessages, assistantMessage]
+      completeMessages: [...initialRequestMessages, assistantMessage]
     };
   } catch (error) {
     // createChatCompletion 抛错或解析阶段抛错都会落到这里，保证 requestId 对应的错误详情被保存。
-    saveLLMErrorRecord({
-      requestId,
-      requestBody: requestBody as ChatCompletionCreateParams,
-      error
-    });
+    // 如果已拿到模型响应并保存过包含 error 的详情，throwError 再抛出时不重复写同一个 requestId。
+    if (saveLLMResponseRecord && teamId && !hasSavedLLMRequestRecord) {
+      persistLLMErrorRecord({
+        teamId,
+        requestId,
+        requestBody: requestBody as ChatCompletionCreateParams,
+        error
+      });
+    }
 
     if (throwError) {
       throw error;
@@ -256,8 +289,8 @@ export const createLLMResponse = async <T extends ChatCompletionCreateParams>(
         outputTokens: 0,
         usedUserOpenAIKey: false
       },
-      requestMessages: requestBody.messages as ChatCompletionMessageParam[],
-      completeMessages: [...requestBody.messages] as ChatCompletionMessageParam[]
+      requestMessages: initialRequestMessages,
+      completeMessages: [...initialRequestMessages]
     };
   }
 };

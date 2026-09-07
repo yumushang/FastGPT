@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { replaceJsonBodyString } from '@fastgpt/service/core/workflow/dispatch/tools/http468';
+import { afterEach, describe, it, expect } from 'vitest';
+import {
+  getWorkflowHttpNodeHttpsAgentConfig,
+  replaceJsonBodyString
+} from '@fastgpt/service/core/workflow/dispatch/tools/http468';
 import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
 
 describe('replaceJsonBodyString', () => {
@@ -638,5 +641,50 @@ describe('replaceJsonBodyString', () => {
       expect(typeof parsed.templateTests.inject).toBe('string');
       expect(parsed.templateTests.inject).toBe(''); // Non-existent variables become "null"
     });
+  });
+});
+
+describe('getWorkflowHttpNodeHttpsAgentConfig', () => {
+  const originalSystemEnv = global.systemEnv;
+
+  afterEach(() => {
+    global.systemEnv = originalSystemEnv;
+  });
+
+  it('should not inject safe axios TLS option when ignoreHttpsCertificate is disabled', () => {
+    global.systemEnv = {
+      ...originalSystemEnv,
+      workflowHttpNode: {
+        ignoreHttpsCertificate: false
+      }
+    };
+
+    expect(getWorkflowHttpNodeHttpsAgentConfig('https://example.com')).toEqual({});
+  });
+
+  it('should inject safe axios TLS option only for HTTPS requests when enabled', () => {
+    global.systemEnv = {
+      ...originalSystemEnv,
+      workflowHttpNode: {
+        ignoreHttpsCertificate: true
+      }
+    };
+
+    const httpsConfig = getWorkflowHttpNodeHttpsAgentConfig('https://example.com');
+    expect(httpsConfig.__safeAxios).toEqual({ rejectUnauthorized: false });
+    expect(httpsConfig).not.toHaveProperty('httpsAgent');
+    expect(httpsConfig).not.toHaveProperty('proxy');
+    expect(getWorkflowHttpNodeHttpsAgentConfig('http://example.com')).toEqual({});
+  });
+
+  it('should ignore invalid urls and let request layer report url errors', () => {
+    global.systemEnv = {
+      ...originalSystemEnv,
+      workflowHttpNode: {
+        ignoreHttpsCertificate: true
+      }
+    };
+
+    expect(getWorkflowHttpNodeHttpsAgentConfig('invalid-url')).toEqual({});
   });
 });

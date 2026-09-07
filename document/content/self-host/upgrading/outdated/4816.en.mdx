@@ -1,6 +1,9 @@
 ---
-title: V4.8.16 (Configuration File Update)
+title: V4.8.16
 description: FastGPT V4.8.16 Release Notes
+releaseTime: '2024-12-23'
+upgradeTags:
+  - CONFIG
 ---
 
 ## Upgrade Guide
@@ -13,7 +16,7 @@ description: FastGPT V4.8.16 Release Notes
 
 ### 2. Update configuration file
 
-Refer to the latest [configuration file documentation](../../config/json.en.mdx) and update your `config.json` or admin model configuration. Add the `provider` field to LLMModel and VectorModel for model categorization. For example:
+Update your `config.json` or admin model configuration. Add the `provider` field to LLMModel and VectorModel for model categorization. The legacy `config.json` guide is no longer maintained. For current versions, see [Model Configuration](../../config/model/intro.en.mdx). For example:
 
 ```json
 {
@@ -44,12 +47,12 @@ Refer to the latest [configuration file documentation](../../config/json.en.mdx)
 
 ## Full Release Notes
 
-1. New - SearXNG search plugin. [View tutorial](../../../guide/build/tools/system-plugins/searxng_plugin_guide.en.mdx)
-2. New - Commercial edition supports scheduled sync for API Knowledge Bases and link collections.
+1. New - SearXNG search plugin.
+2. New - Commercial edition supports scheduled sync for API Datasets and link collections.
 3. New - "Suggested questions" supports model selection and custom prompts.
 4. New - DingTalk and WeCom bot webhook plugins.
-5. New - Commercial edition supports DingTalk SSO login configuration. [View tutorial](../../../guide/admin/sso.en.mdx#钉钉)
-6. New - Commercial edition supports Lark and Yuque Knowledge Base import. [View tutorial](../../../guide/dataset/third-party/lark_dataset.en.mdx)
+5. New - Commercial edition supports DingTalk SSO login configuration. [View tutorial](../../../guide/admin/sso.en.mdx#dingtalk)
+6. New - Commercial edition supports Lark and Yuque Dataset import. [View tutorial](../../../guide/dataset/third-party/lark_dataset.en.mdx)
 7. New - Sandbox adds `createHmac` encryption global method.
 8. New - Right-click in workflow supports "Collapse all".
 9. Improved - Model selector.
@@ -58,7 +61,7 @@ Refer to the latest [configuration file documentation](../../config/json.en.mdx)
 12. Improved - Workflow now performs type conversion when receiving mismatched data types, preventing `undefined`.
 13. Fixed - Unable to auto-switch default language. Share links now force a default language switch on load.
 14. Fixed - Array selector auto-compatibility with pre-4.8.13 data.
-15. Fixed - Site sync Knowledge Base not using the selector for link syncing.
+15. Fixed - Site sync Dataset not using the selector for link syncing.
 16. Fixed - Converting Simple Mode to workflow did not convert system configuration items.
 17. Fixed - Plugin standalone execution not applying initial variable values.
 18. Fixed - Workflow modal components sometimes causing page offset after closing.

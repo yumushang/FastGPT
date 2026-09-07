@@ -8,21 +8,25 @@ import { removeDatasetCiteText } from '@fastgpt/global/core/ai/llm/utils';
 import { useCreation } from 'ahooks';
 import React, { useMemo } from 'react';
 import { useContextSelector } from 'use-context-selector';
+import styles from '../../ChatContainer/ChatBox/components/AIChatBubble/index.module.scss';
+import { toChatAuthApiTarget } from '@/web/core/chat/utils';
 
 const RenderText = React.memo(function RenderText({
   showAnimation,
   text,
   chatItemDataId,
   onOpenCiteModal,
+  allowedCitationIds,
   isDisabled
 }: {
   showAnimation: boolean;
   text: string;
   chatItemDataId: string;
   onOpenCiteModal?: (e?: OnOpenCiteModalProps) => void;
+  allowedCitationIds?: Set<string>;
   isDisabled?: boolean;
 }) {
-  const appId = useContextSelector(WorkflowRuntimeContext, (v) => v.appId);
+  const sourceTarget = useContextSelector(WorkflowRuntimeContext, (v) => v.sourceTarget);
   const chatId = useContextSelector(WorkflowRuntimeContext, (v) => v.chatId);
   const outLinkAuthData = useContextSelector(WorkflowRuntimeContext, (v) => v.outLinkAuthData);
   const isShowCite = useContextSelector(ChatItemContext, (v) => v.isShowCite);
@@ -37,16 +41,24 @@ const RenderText = React.memo(function RenderText({
   }, [text, isShowCite]);
 
   const chatAuthData = useCreation(() => {
-    return { appId, chatId, chatItemDataId, ...outLinkAuthData };
-  }, [appId, chatId, chatItemDataId, outLinkAuthData]);
+    if (!sourceTarget.sourceId) return undefined;
+    return {
+      ...toChatAuthApiTarget({ sourceTarget, outLinkAuthData }),
+      chatId,
+      chatItemDataId
+    };
+  }, [sourceTarget, chatId, chatItemDataId, outLinkAuthData]);
 
   return (
     <Markdown
+      className={styles.markdown}
       source={source}
       showAnimation={showAnimation}
       chatAuthData={chatAuthData}
+      allowedCitationIds={allowedCitationIds}
       onOpenCiteModal={onOpenCiteModal}
       isDisabled={isDisabled}
+      autoPreviewHtmlCodeBlock
     />
   );
 });

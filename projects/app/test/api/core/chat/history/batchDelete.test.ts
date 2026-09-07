@@ -12,7 +12,12 @@ import { Call } from '@test/utils/request';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { MongoResourcePermission } from '@fastgpt/service/support/permission/schema';
 import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
-import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
+import { AuthUserTypeEnum, PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
+import { MongoAgentSkills } from '@fastgpt/service/core/ai/skill/model/schema';
+import { AgentSkillSourceEnum } from '@fastgpt/global/core/ai/skill/constants';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+
+type EmptyQuery = Record<string, never>;
 
 describe('batchDelete api test', () => {
   let testUser: Awaited<ReturnType<typeof getUser>>;
@@ -48,6 +53,7 @@ describe('batchDelete api test', () => {
         MongoChat.create({
           teamId: testUser.teamId,
           tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.app,
           appId,
           chatId,
           source: ChatSourceEnum.test,
@@ -63,6 +69,7 @@ describe('batchDelete api test', () => {
           teamId: testUser.teamId,
           tmbId: testUser.tmbId,
           userId: testUser.userId,
+          sourceType: ChatSourceTypeEnum.app,
           appId,
           chatId,
           dataId: getNanoid(),
@@ -85,6 +92,7 @@ describe('batchDelete api test', () => {
         MongoChatItemResponse.create({
           teamId: testUser.teamId,
           tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.app,
           appId,
           chatId,
           dataId: getNanoid(),
@@ -97,7 +105,7 @@ describe('batchDelete api test', () => {
   it('should batch delete multiple chats successfully', async () => {
     const deleteIds = [chatIds[0], chatIds[1]];
 
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -137,10 +145,159 @@ describe('batchDelete api test', () => {
     expect(nonDeletedChat).toBeDefined();
   });
 
+  it('should batch delete skill edit chats without deleting app chat sandboxes', async () => {
+    const skill = await MongoAgentSkills.create({
+      name: 'Batch Delete Skill',
+      source: AgentSkillSourceEnum.personal,
+      teamId: testUser.teamId,
+      tmbId: testUser.tmbId
+    });
+    const skillId = String(skill._id);
+    const skillChatIds = [getNanoid(), getNanoid()];
+
+    await Promise.all(
+      skillChatIds.map((chatId) =>
+        MongoChat.create({
+          teamId: testUser.teamId,
+          tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.skillEdit,
+          appId: skillId,
+          chatId,
+          source: ChatSourceEnum.test,
+          title: `Skill Chat ${chatId}`
+        })
+      )
+    );
+    await Promise.all(
+      skillChatIds.map((chatId) =>
+        MongoChatItem.create({
+          teamId: testUser.teamId,
+          tmbId: testUser.tmbId,
+          userId: testUser.userId,
+          sourceType: ChatSourceTypeEnum.skillEdit,
+          appId: skillId,
+          chatId,
+          dataId: getNanoid(),
+          obj: ChatRoleEnum.AI,
+          value: [{ type: 'text', text: { content: `Skill response for ${chatId}` } }]
+        })
+      )
+    );
+    await Promise.all(
+      skillChatIds.map((chatId) =>
+        MongoChatItemResponse.create({
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.skillEdit,
+          appId: skillId,
+          chatId,
+          chatItemDataId: getNanoid()
+        })
+      )
+    );
+
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
+      auth: testUser,
+      body: {
+        skillId,
+        chatIds: skillChatIds
+      }
+    });
+
+    expect(res.code).toBe(200);
+    expect(res.error).toBeUndefined();
+    expect(
+      await MongoChat.countDocuments({
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: { $in: skillChatIds }
+      })
+    ).toBe(0);
+    expect(
+      await MongoChatItem.countDocuments({
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: { $in: skillChatIds }
+      })
+    ).toBe(0);
+    expect(
+      await MongoChatItemResponse.countDocuments({
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        appId: skillId,
+        chatId: { $in: skillChatIds }
+      })
+    ).toBe(0);
+  });
+
+  it('should batch delete chatAgentHelper records from generic chat tables', async () => {
+    const helperChatId = getNanoid();
+    await Promise.all([
+      MongoChat.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId,
+        source: ChatSourceEnum.test
+      }),
+      MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId,
+        dataId: getNanoid(),
+        obj: ChatRoleEnum.AI,
+        value: [{ text: { content: 'helper response' } }]
+      }),
+      MongoChatItemResponse.create({
+        teamId: testUser.teamId,
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId,
+        chatItemDataId: getNanoid(),
+        data: { nodeId: 'helper-node' }
+      })
+    ]);
+
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
+      auth: testUser,
+      body: {
+        appId,
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        chatIds: [helperChatId]
+      }
+    });
+
+    expect(res.code).toBe(200);
+    expect(
+      await MongoChat.countDocuments({
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId
+      })
+    ).toBe(0);
+    expect(
+      await MongoChatItem.countDocuments({
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId
+      })
+    ).toBe(0);
+    expect(
+      await MongoChatItemResponse.countDocuments({
+        sourceType: ChatSourceTypeEnum.chatAgentHelper,
+        appId,
+        chatId: helperChatId
+      })
+    ).toBe(0);
+  });
+
   it('should delete single chat', async () => {
     const deleteIds = [chatIds[0]];
 
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -167,7 +324,7 @@ describe('batchDelete api test', () => {
   });
 
   it('should delete all chats when all chatIds are provided', async () => {
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -187,7 +344,7 @@ describe('batchDelete api test', () => {
   });
 
   it('should fail when chatIds is empty array', async () => {
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -200,7 +357,7 @@ describe('batchDelete api test', () => {
   });
 
   it('should fail when chatIds is not an array', async () => {
-    const res = await Call<any, {}, any>(handler, {
+    const res = await Call<any, EmptyQuery, any>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -213,7 +370,7 @@ describe('batchDelete api test', () => {
   });
 
   it('should fail when appId is missing', async () => {
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId: '',
@@ -228,7 +385,7 @@ describe('batchDelete api test', () => {
   it('should fail when user does not have permission', async () => {
     const unauthorizedUser = await getUser('unauthorized-user-batch-delete');
 
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: unauthorizedUser,
       body: {
         appId,
@@ -240,11 +397,41 @@ describe('batchDelete api test', () => {
     expect(res.error).toBeDefined();
   });
 
+  it('should reject APIKey member without chat log permission', async () => {
+    const noLogPermissionUser = await getUser(
+      'no-log-permission-user-batch-delete',
+      testUser.teamId
+    );
+
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
+      auth: {
+        ...noLogPermissionUser,
+        authType: AuthUserTypeEnum.apikey,
+        appId,
+        legacyAppId: appId,
+        apikey: 'app-api-key'
+      },
+      body: {
+        appId,
+        chatIds: [chatIds[0]]
+      }
+    });
+
+    expect(res.code).toBe(500);
+    expect(res.error).toBeDefined();
+
+    const chat = await MongoChat.findOne({
+      appId,
+      chatId: chatIds[0]
+    });
+    expect(chat).toBeDefined();
+  });
+
   it('should succeed even when some chatIds do not exist', async () => {
     const nonExistentChatId = getNanoid();
     const deleteIds = [chatIds[0], nonExistentChatId];
 
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -278,6 +465,7 @@ describe('batchDelete api test', () => {
     await MongoChat.create({
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId: otherAppId,
       chatId: otherChatId,
       source: ChatSourceEnum.test,
@@ -285,7 +473,7 @@ describe('batchDelete api test', () => {
     });
 
     // Try to delete a chat from the first app
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,
@@ -319,6 +507,7 @@ describe('batchDelete api test', () => {
         MongoChat.create({
           teamId: testUser.teamId,
           tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.app,
           appId,
           chatId,
           source: ChatSourceEnum.test,
@@ -327,7 +516,7 @@ describe('batchDelete api test', () => {
       )
     );
 
-    const res = await Call<ChatBatchDeleteBodyType, {}>(handler, {
+    const res = await Call<ChatBatchDeleteBodyType, EmptyQuery>(handler, {
       auth: testUser,
       body: {
         appId,

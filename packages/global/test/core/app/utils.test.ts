@@ -17,7 +17,6 @@ describe('getDefaultAppForm', () => {
     const result = getDefaultAppForm();
 
     expect(result.aiSettings).toEqual({
-      model: '',
       isResponseAnswerText: true,
       maxHistories: 6
     });
@@ -32,10 +31,10 @@ describe('getDefaultAppForm', () => {
       limit: 3000,
       searchMode: DatasetSearchModeEnum.embedding,
       usingReRank: true,
-      rerankModel: '',
       rerankWeight: 0.5,
       datasetSearchUsingExtensionQuery: true,
-      datasetSearchExtensionBg: ''
+      datasetSearchExtensionBg: '',
+      authTmbId: false
     });
   });
 
@@ -172,5 +171,15 @@ describe('formatToolError', () => {
     const result = formatToolError('pluginUnExist');
     expect(result).toBeDefined();
     expect(typeof result).toBe('string');
+  });
+
+  it.each([
+    'plugin.team_not_installed',
+    'plugin.team_source_forbidden',
+    'plugin.team_id_required',
+    'plugin.team_source_install_failed',
+    'plugin.version_required'
+  ])('should format team plugin error %s as a deleted tool error', (error) => {
+    expect(formatToolError(error)).toBe('common:error.tool_not_exist');
   });
 });

@@ -245,6 +245,15 @@ export enum TrainingModeEnum {
   imageParse = 'imageParse'
 }
 
+export const DatasetSynonymCollectionName = 'dataset_synonyms';
+export const DatasetSynonymMappingCollectionName = 'dataset_synonym_mappings';
+
+export enum CollectionTrainingStatusEnum {
+  running = 'running',
+  error = 'error',
+  ready = 'ready'
+}
+
 /* ------------ search -------------- */
 export enum DatasetSearchModeEnum {
   embedding = 'embedding',

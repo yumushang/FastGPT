@@ -1,17 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 import {
   getWorkflowResponseWrite,
   getWorkflowChildResponseWrite,
   filterOrphanEdges,
   filterToolNodeIdByEdges,
+  getAgentLoopHistories,
   getHistories,
   checkQuoteQAValue,
   filterSystemVariables,
   formatHttpError,
   rewriteRuntimeWorkFlow,
   getNodeErrResponse,
-  safePoints
+  safePoints,
+  summarizeRuntimeNodeResponses
 } from '@fastgpt/service/core/workflow/dispatch/utils';
 import { WorkflowVariableState } from '../../../../core/workflow/dispatch/utils/variables';
 import { responseWrite } from '@fastgpt/service/common/response';
@@ -22,7 +24,11 @@ import {
   SseResponseEventEnum,
   DispatchNodeResponseKeyEnum
 } from '@fastgpt/global/core/workflow/runtime/constants';
-import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { workflowSseEvent } from '@fastgpt/global/core/workflow/runtime/sse';
+import {
+  FlowNodeInputTypeEnum,
+  FlowNodeTypeEnum
+} from '@fastgpt/global/core/workflow/node/constant';
 import type { RuntimeEdgeItemType } from '@fastgpt/global/core/workflow/type/edge';
 import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
 
@@ -32,9 +38,15 @@ vi.mock('@fastgpt/service/core/workflow/utils', () => ({
     mockGetSystemToolRunTimeNodeFromSystemToolset(...args)
 }));
 
+const mockAuthAppByTmbId = vi.fn();
+vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
+  authAppByTmbId: (...args: any[]) => mockAuthAppByTmbId(...args)
+}));
+
 const mockMongoAppFindOne = vi.fn();
 const mockMongoAppFind = vi.fn(() => ({ lean: vi.fn().mockResolvedValue([]) }));
 vi.mock('@fastgpt/service/core/app/schema', () => ({
+  AppCollectionName: 'apps',
   MongoApp: {
     findOne: (...args: any[]) => mockMongoAppFindOne(...args),
     find: (...args: any[]) => mockMongoAppFind(...args)
@@ -74,7 +86,7 @@ describe('getWorkflowResponseWrite', () => {
 
   it('should not write when res is undefined', () => {
     const fn = getWorkflowResponseWrite({ detail: true, streamResponse: true });
-    fn({ event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi'));
     // No error thrown
   });
 
@@ -83,7 +95,7 @@ describe('getWorkflowResponseWrite', () => {
     res.closed = true;
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: true, streamResponse: true });
-    fn({ event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi'));
     expect(responseWrite).not.toHaveBeenCalled();
   });
 
@@ -91,7 +103,7 @@ describe('getWorkflowResponseWrite', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: true, streamResponse: false });
-    fn({ event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi'));
     expect(responseWrite).not.toHaveBeenCalled();
   });
 
@@ -99,7 +111,7 @@ describe('getWorkflowResponseWrite', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: false, streamResponse: true });
-    fn({ event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi'));
     expect(responseWrite).toHaveBeenCalled();
   });
 
@@ -107,7 +119,7 @@ describe('getWorkflowResponseWrite', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: false, streamResponse: true });
-    fn({ event: SseResponseEventEnum.fastAnswer, data: { text: 'hi' } });
+    fn(workflowSseEvent.fastAnswerDelta('hi'));
     expect(responseWrite).toHaveBeenCalled();
   });
 
@@ -115,7 +127,7 @@ describe('getWorkflowResponseWrite', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: false, streamResponse: true });
-    fn({ event: SseResponseEventEnum.flowNodeStatus, data: {} });
+    fn(workflowSseEvent.flowNodeStatus('test node'));
     expect(responseWrite).not.toHaveBeenCalled();
   });
 
@@ -128,7 +140,7 @@ describe('getWorkflowResponseWrite', () => {
       streamResponse: true,
       showNodeStatus: false
     });
-    fn({ event: SseResponseEventEnum.flowNodeStatus, data: {} });
+    fn(workflowSseEvent.flowNodeStatus('test node'));
     expect(responseWrite).not.toHaveBeenCalled();
   });
 
@@ -141,11 +153,19 @@ describe('getWorkflowResponseWrite', () => {
       streamResponse: true,
       showNodeStatus: false
     });
-    fn({ event: SseResponseEventEnum.toolCall, data: {} });
+    fn(
+      workflowSseEvent.toolCall({
+        id: 'tool-call-id',
+        toolName: 'tool',
+        toolAvatar: '',
+        functionName: 'tool',
+        params: ''
+      })
+    );
     expect(responseWrite).not.toHaveBeenCalled();
   });
 
-  it('should include stepId and responseValueId when detail is true', () => {
+  it('should include responseValueId when detail is true', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({
@@ -154,7 +174,7 @@ describe('getWorkflowResponseWrite', () => {
       streamResponse: true,
       id: 'test-id'
     });
-    fn({ id: 'rid', stepId: 'sid', event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi', 'rid'));
     expect(responseWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         res,
@@ -162,7 +182,6 @@ describe('getWorkflowResponseWrite', () => {
       })
     );
     const callData = JSON.parse(vi.mocked(responseWrite).mock.calls[0][0].data as string);
-    expect(callData.stepId).toBe('sid');
     expect(callData.responseValueId).toBe('rid');
   });
 
@@ -170,8 +189,20 @@ describe('getWorkflowResponseWrite', () => {
     const res = mockRes();
     vi.mocked(responseWrite).mockClear();
     const fn = getWorkflowResponseWrite({ res, detail: false, streamResponse: true });
-    fn({ event: SseResponseEventEnum.answer, data: { text: 'hi' } });
+    fn(workflowSseEvent.answerDelta('hi'));
     expect(responseWrite).toHaveBeenCalledWith(expect.objectContaining({ event: undefined }));
+  });
+
+  it('should keep chatTitle event name when detail is false', () => {
+    const res = mockRes();
+    vi.mocked(responseWrite).mockClear();
+    const fn = getWorkflowResponseWrite({ res, detail: false, streamResponse: true });
+    fn(workflowSseEvent.chatTitle('Generated Title'));
+    expect(responseWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: SseResponseEventEnum.chatTitle
+      })
+    );
   });
 
   it('should continue mirroring direct chunks after response is closed', () => {
@@ -201,28 +232,44 @@ describe('getWorkflowResponseWrite', () => {
 
 describe('getWorkflowChildResponseWrite', () => {
   it('should return undefined when fn is undefined', () => {
-    const result = getWorkflowChildResponseWrite({ id: 'id', stepId: 'step' });
+    const result = getWorkflowChildResponseWrite({ id: 'id' });
     expect(result).toBeUndefined();
   });
 
-  it('should return a wrapper function that passes id and stepId', () => {
+  it('should return a wrapper function that passes id', () => {
     const mockFn = vi.fn();
     const wrapped = getWorkflowChildResponseWrite({
       id: 'child-id',
-      stepId: 'child-step',
       fn: mockFn as any
     });
     expect(wrapped).toBeDefined();
-    wrapped!({
-      event: SseResponseEventEnum.answer,
-      data: { text: 'hi' }
-    });
+    wrapped!(workflowSseEvent.answerDelta('hi'));
     expect(mockFn).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'child-id',
-        stepId: 'child-step',
-        event: SseResponseEventEnum.answer,
-        data: { text: 'hi' }
+        event: SseResponseEventEnum.answer
+      })
+    );
+  });
+
+  it('should preserve explicit child event id', () => {
+    const mockFn = vi.fn();
+    const wrapped = getWorkflowChildResponseWrite({
+      id: 'node-response-id',
+      fn: mockFn as any
+    });
+
+    wrapped!(
+      workflowSseEvent.toolParams({
+        id: 'tool-call-id',
+        params: 'delta'
+      })
+    );
+
+    expect(mockFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tool-call-id',
+        event: SseResponseEventEnum.toolParams
       })
     );
   });
@@ -502,6 +549,106 @@ describe('getHistories', () => {
     expect(getHistories(0, MockHistories)).toEqual([]);
   });
 
+  it('keeps only the pending interactive round when agent history is 0', () => {
+    const pendingRound: ChatItemMiniType[] = [
+      ...MockHistories,
+      {
+        obj: ChatRoleEnum.Human,
+        value: [{ text: { content: 'need a choice' } }]
+      },
+      {
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            interactive: {
+              type: 'agentAsk',
+              askId: 'ask_1',
+              params: {
+                description: 'Choose one',
+                questions: [
+                  {
+                    question: 'Choose one?',
+                    options: [
+                      { summary: 'A', value: 'A' },
+                      { summary: 'B', value: 'B' }
+                    ]
+                  }
+                ]
+              }
+            } as any
+          }
+        ]
+      }
+    ];
+
+    expect(getAgentLoopHistories(0, pendingRound)).toEqual(pendingRound.slice(-2));
+  });
+
+  it('keeps only the pending child-tool round when agent history is 0', () => {
+    const pendingRound: ChatItemMiniType[] = [
+      {
+        obj: ChatRoleEnum.Human,
+        value: [{ text: { content: 'run the tool' } }]
+      },
+      {
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            interactive: {
+              type: 'toolChildrenInteractive',
+              params: {
+                toolParams: {
+                  toolCallId: 'tool_1'
+                },
+                childrenResponse: {
+                  type: 'userSelect',
+                  params: {
+                    description: 'Choose one',
+                    userSelectOptions: []
+                  }
+                }
+              }
+            } as any
+          }
+        ]
+      }
+    ];
+
+    expect(getAgentLoopHistories(0, pendingRound)).toEqual(pendingRound);
+  });
+
+  it('does not retain completed or non-interactive history when agent history is 0', () => {
+    const completedRound: ChatItemMiniType[] = [
+      {
+        obj: ChatRoleEnum.Human,
+        value: [{ text: { content: 'need a choice' } }]
+      },
+      {
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            interactive: {
+              type: 'agentPlanAskQuery',
+              askId: 'ask_1',
+              params: {
+                content: 'Choose one',
+                options: ['A', 'B', 'C'],
+                answer: 'A'
+              }
+            }
+          }
+        ]
+      }
+    ];
+
+    expect(getAgentLoopHistories(0, completedRound)).toEqual([]);
+    expect(getAgentLoopHistories(0, MockHistories)).toEqual([]);
+  });
+
+  it('keeps configured agent history unchanged when history is not 0', () => {
+    expect(getAgentLoopHistories(1, MockHistories)).toEqual(getHistories(1, MockHistories));
+  });
+
   it('should use default empty histories', () => {
     expect(getHistories(1)).toEqual([]);
   });
@@ -681,7 +828,7 @@ describe('WorkflowVariableState file store conversion', () => {
     ]);
   });
 
-  it('should convert runtime urls to file store values when file metadata is provided', async () => {
+  it('should preserve private file metadata when updating with its runtime url', async () => {
     const state = await createFileVariableState({
       files: [
         {
@@ -776,6 +923,40 @@ describe('formatHttpError', () => {
 });
 
 describe('rewriteRuntimeWorkFlow', () => {
+  beforeEach(() => {
+    mockAuthAppByTmbId.mockReset();
+    mockMongoAppFindOne.mockReset();
+    mockMongoAppFind.mockReset();
+    mockMongoAppFind.mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    mockAuthAppByTmbId.mockImplementation(async ({ appId }: { appId: string }) => {
+      const findOneQuery = mockMongoAppFindOne({ _id: appId });
+      if (findOneQuery) {
+        const app = await findOneQuery.lean();
+        if (app) return { app };
+      }
+
+      const findQuery = mockMongoAppFind({ _id: { $in: [appId] } });
+      const [app] = await findQuery.lean();
+      if (app) return { app };
+      throw new Error('app not found');
+    });
+    mockGetMCPChildren.mockReset();
+    mockGetHTTPToolList.mockReset();
+
+    mockGetMCPChildren.mockImplementation(
+      async (app: { modules?: Array<{ toolConfig?: any }> }) => {
+        const toolSet = app.modules?.[0]?.toolConfig?.mcpToolSet;
+        return toolSet && Array.isArray(toolSet.toolList) ? toolSet.toolList : [];
+      }
+    );
+    mockGetHTTPToolList.mockImplementation(
+      async (app: { modules?: Array<{ toolConfig?: any }> }) => {
+        const toolSet = app.modules?.[0]?.toolConfig?.httpToolSet;
+        return toolSet && Array.isArray(toolSet.toolList) ? toolSet.toolList : [];
+      }
+    );
+  });
+
   const makeNode = (
     nodeId: string,
     flowNodeType: string,
@@ -783,6 +964,7 @@ describe('rewriteRuntimeWorkFlow', () => {
   ): RuntimeNodeItemType =>
     ({
       nodeId,
+      name: nodeId,
       flowNodeType,
       inputs: [],
       outputs: [],
@@ -808,7 +990,7 @@ describe('rewriteRuntimeWorkFlow', () => {
     const edges = [makeEdge('n1', 'n2')];
     const originalNodesLen = nodes.length;
     const originalEdgesLen = edges.length;
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
     expect(nodes.length).toBe(originalNodesLen);
     expect(edges.length).toBe(originalEdgesLen);
   });
@@ -826,7 +1008,7 @@ describe('rewriteRuntimeWorkFlow', () => {
     const childNode = makeNode('child1', 'systemTool');
     mockGetSystemToolRunTimeNodeFromSystemToolset.mockResolvedValue([childNode]);
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(nodes.find((n) => n.nodeId === 'ts1')).toBeUndefined();
     expect(nodes.find((n) => n.nodeId === 'child1')).toBeDefined();
@@ -840,7 +1022,7 @@ describe('rewriteRuntimeWorkFlow', () => {
       name: 'MCPTool',
       avatar: 'avatar.png',
       toolConfig: {
-        mcpToolSet: { toolId: 'mcp-tool-1' }
+        mcpToolSet: { toolId: 'mcp-app-1' }
       }
     } as any);
     const parentNode = makeNode('parent', FlowNodeTypeEnum.chatNode);
@@ -850,16 +1032,101 @@ describe('rewriteRuntimeWorkFlow', () => {
     ];
 
     mockMongoAppFindOne.mockReturnValue({
-      lean: vi.fn().mockResolvedValue({ _id: 'mcp-app-1', name: 'TestApp' })
+      lean: vi.fn().mockResolvedValue({
+        _id: 'mcp-app-1',
+        name: 'TestApp',
+        modules: [
+          {
+            toolConfig: {
+              mcpToolSet: {
+                url: 'https://mcp.example.com',
+                toolList: []
+              }
+            }
+          }
+        ]
+      })
     });
-    mockGetMCPChildren.mockResolvedValue([{ name: 'tool1', description: 'desc', inputSchema: {} }]);
+    mockGetMCPChildren.mockResolvedValue([
+      { name: 'tool1', description: 'desc', inputSchema: {}, url: 'https://mcp.example.com' }
+    ]);
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(nodes.find((n) => n.nodeId === 'ts2')).toBeUndefined();
-    expect(nodes.find((n) => n.nodeId === 'ts20')).toBeDefined();
+    expect(nodes.find((n) => n.nodeId === 'ts20')).toMatchObject({
+      toolConfig: {
+        mcpTool: {
+          toolId: 'mcp-mcp-app-1/tool1'
+        }
+      }
+    });
     expect(edges.find((e) => e.target === 'ts2')).toBeUndefined();
     expect(edges.find((e) => e.target === 'ts20')).toBeDefined();
+  });
+
+  it('should keep resumed MCP toolSet memory edge after child node is rebuilt', async () => {
+    const toolSetNode = makeNode('ts2', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'mcp-app-1',
+      name: 'MCPTool',
+      avatar: 'avatar.png',
+      toolConfig: {
+        // 模拟前端 preview 后的 ToolSet 节点：保留工具名，但没有完整 inputSchema。
+        mcpToolSet: { toolId: 'mcp-tool-1', toolList: [{ name: 'tool1', description: 'desc' }] }
+      }
+    } as any);
+    const parentNode = makeNode('parent', FlowNodeTypeEnum.toolCall);
+    const nodes = [parentNode, toolSetNode];
+    // 交互暂停会保存 ToolSet 展开后的运行态边；续跑时 store nodes 里仍只有 ToolSet。
+    const edges = [
+      makeEdge('parent', 'ts20', { sourceHandle: 'selectedTools', targetHandle: 'selectedTools' })
+    ];
+
+    const fullSchema = {
+      type: 'object',
+      properties: { city: { type: 'string', isToolParam: false } }
+    };
+    mockMongoAppFindOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'mcp-app-1',
+        name: 'TestApp',
+        modules: [
+          {
+            toolConfig: {
+              mcpToolSet: {
+                url: 'https://mcp.example.com',
+                toolList: []
+              }
+            }
+          }
+        ]
+      })
+    });
+    mockGetMCPChildren.mockResolvedValue([
+      {
+        name: 'tool1',
+        description: 'desc',
+        inputSchema: fullSchema,
+        url: 'https://mcp.example.com'
+      }
+    ]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
+    const filteredEdges = filterOrphanEdges({ nodes, edges, workflowId: 'workflow-app' });
+
+    expect(nodes.find((n) => n.nodeId === 'ts20')?.jsonSchema).toEqual(fullSchema);
+    expect(nodes.find((n) => n.nodeId === 'ts20')?.toolConfig).not.toHaveProperty('mcpToolSet');
+    expect(nodes.find((n) => n.nodeId === 'ts20')?.inputs[0]).toMatchObject({
+      key: 'city',
+      selectedType: FlowNodeInputTypeEnum.agentGenerated,
+      renderTypeList: [
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.input,
+        FlowNodeInputTypeEnum.reference
+      ]
+    });
+    expect(filteredEdges).toHaveLength(1);
+    expect(filteredEdges[0].target).toBe('ts20');
   });
 
   it('should skip MCP toolSet when app not found', async () => {
@@ -876,41 +1143,75 @@ describe('rewriteRuntimeWorkFlow', () => {
       lean: vi.fn().mockResolvedValue(null)
     });
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(nodes.find((n) => n.nodeId === 'ts3')).toBeUndefined();
   });
 
-  it('should handle HTTP toolSet nodes', async () => {
-    const toolSetNode = makeNode('ts4', FlowNodeTypeEnum.toolSet, {
-      pluginId: 'http-plugin-1',
-      name: 'HTTPTool',
-      avatar: 'avatar.png',
-      toolConfig: {
-        httpToolSet: {}
-      }
-    } as any);
-    const parentNode = makeNode('parent', FlowNodeTypeEnum.chatNode);
-    const nodes = [parentNode, toolSetNode];
-    const edges = [
-      makeEdge('parent', 'ts4', { sourceHandle: 'out', targetHandle: 'selectedTools' })
-    ];
+  it.each([undefined, '', 'http-plugin-1'])(
+    'should handle HTTP toolSet nodes with legacy id %j',
+    async (toolId) => {
+      const toolSetNode = makeNode('ts4', FlowNodeTypeEnum.toolSet, {
+        pluginId: 'http-plugin-1',
+        name: 'HTTPTool',
+        avatar: 'avatar.png',
+        toolConfig: {
+          httpToolSet: { toolId }
+        }
+      } as any);
+      const parentNode = makeNode('parent', FlowNodeTypeEnum.chatNode);
+      const nodes = [parentNode, toolSetNode];
+      const edges = [
+        makeEdge('parent', 'ts4', { sourceHandle: 'out', targetHandle: 'selectedTools' })
+      ];
 
-    mockMongoAppFindOne.mockReturnValue({
-      lean: vi.fn().mockResolvedValue({ _id: 'http-plugin-1', name: 'HTTPApp' })
-    });
-    mockGetHTTPToolList.mockResolvedValue([
-      { name: 'api1', description: 'desc1', url: 'http://example.com/api1' },
-      { name: 'api2', description: 'desc2', url: 'http://example.com/api2' }
-    ]);
+      mockMongoAppFindOne.mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'http-plugin-1', name: 'HTTPApp' })
+      });
+      mockGetHTTPToolList.mockResolvedValue([
+        {
+          name: 'api1',
+          description: 'desc1',
+          url: 'http://example.com/api1',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              manual: { type: 'string', isToolParam: false },
+              generated: { type: 'string', isToolParam: true }
+            },
+            required: ['manual', 'generated']
+          },
+          requestSchema: {
+            type: 'object',
+            properties: {
+              manual: { type: 'string', isToolParam: true },
+              generated: { type: 'string', isToolParam: true }
+            },
+            required: ['manual', 'generated']
+          }
+        },
+        { name: 'api2', description: 'desc2', url: 'http://example.com/api2' }
+      ]);
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+      await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
-    expect(nodes.find((n) => n.nodeId === 'ts4')).toBeUndefined();
-    expect(nodes.find((n) => n.nodeId === 'ts40')).toBeDefined();
-    expect(nodes.find((n) => n.nodeId === 'ts41')).toBeDefined();
-    expect(edges.filter((e) => e.target === 'ts40' || e.target === 'ts41').length).toBe(2);
-  });
+      expect(nodes.find((n) => n.nodeId === 'ts4')).toBeUndefined();
+      expect(nodes.find((n) => n.nodeId === 'ts40')?.inputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: 'manual',
+            selectedType: FlowNodeInputTypeEnum.input
+          }),
+          expect.objectContaining({
+            key: 'generated',
+            selectedType: FlowNodeInputTypeEnum.agentGenerated
+          })
+        ])
+      );
+      expect(nodes.find((n) => n.nodeId === 'ts41')).toBeDefined();
+      expect(edges.filter((e) => e.target === 'ts40' || e.target === 'ts41').length).toBe(2);
+    }
+  );
 
   // Helper: route MongoApp.find responses by the toolsetId it queries, since
   // parseMcpTool and parseHttpTool may both hit MongoApp.find in parallel.
@@ -926,14 +1227,23 @@ describe('rewriteRuntimeWorkFlow', () => {
     const mcpToolNode = makeNode('mcp1', FlowNodeTypeEnum.tool, {
       toolConfig: {
         mcpTool: { toolId: 'mcp-toolset-1/toolA' }
-      }
+      },
+      inputs: [
+        {
+          key: 'x',
+          valueType: 'string',
+          required: true,
+          renderTypeList: [FlowNodeInputTypeEnum.input, FlowNodeInputTypeEnum.reference],
+          selectedType: FlowNodeInputTypeEnum.input
+        }
+      ]
     } as any);
     const nodes = [mcpToolNode];
     const edges: RuntimeEdgeItemType[] = [];
 
     const toolAInputSchema = {
       type: 'object',
-      properties: { x: { type: 'string' } }
+      properties: { x: { type: 'string', isToolParam: true } }
     };
     setupFindByIdMap({
       'toolset-1': {
@@ -942,6 +1252,7 @@ describe('rewriteRuntimeWorkFlow', () => {
           {
             toolConfig: {
               mcpToolSet: {
+                url: 'https://mcp.example.com',
                 toolList: [
                   {
                     name: 'toolA',
@@ -956,24 +1267,49 @@ describe('rewriteRuntimeWorkFlow', () => {
       }
     });
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(mcpToolNode.jsonSchema).toEqual(toolAInputSchema);
     expect(mcpToolNode.intro).toBe('tool A description');
+    expect(mcpToolNode.inputs[0]).toMatchObject({
+      selectedType: FlowNodeInputTypeEnum.input,
+      renderTypeList: [
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.input,
+        FlowNodeInputTypeEnum.reference
+      ]
+    });
   });
 
   it('should inject jsonSchema and intro for standalone HTTP tool nodes', async () => {
     const httpToolNode = makeNode('http1', FlowNodeTypeEnum.tool, {
       toolConfig: {
         httpTool: { toolId: 'http-toolset-1/toolB' }
-      }
+      },
+      inputs: [
+        {
+          key: 'y',
+          valueType: 'number',
+          required: true,
+          renderTypeList: [
+            FlowNodeInputTypeEnum.agentGenerated,
+            FlowNodeInputTypeEnum.numberInput,
+            FlowNodeInputTypeEnum.reference
+          ],
+          selectedType: FlowNodeInputTypeEnum.agentGenerated
+        }
+      ]
     } as any);
     const nodes = [httpToolNode];
     const edges: RuntimeEdgeItemType[] = [];
 
+    const toolBInputSchema = {
+      type: 'object',
+      properties: { y: { type: 'number', isToolParam: false } }
+    };
     const toolBRequestSchema = {
       type: 'object',
-      properties: { y: { type: 'number' } }
+      properties: { y: { type: 'number', isToolParam: false } }
     };
     setupFindByIdMap({
       'toolset-1': {
@@ -986,6 +1322,7 @@ describe('rewriteRuntimeWorkFlow', () => {
                   {
                     name: 'toolB',
                     description: 'tool B description',
+                    inputSchema: toolBInputSchema,
                     requestSchema: toolBRequestSchema
                   }
                 ]
@@ -996,10 +1333,131 @@ describe('rewriteRuntimeWorkFlow', () => {
       }
     });
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(httpToolNode.jsonSchema).toEqual(toolBRequestSchema);
     expect(httpToolNode.intro).toBe('tool B description');
+    expect(httpToolNode.inputs[0]).toMatchObject({
+      selectedType: FlowNodeInputTypeEnum.agentGenerated,
+      renderTypeList: [
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.numberInput,
+        FlowNodeInputTypeEnum.reference
+      ]
+    });
+  });
+
+  it('should use the remote default only when a saved tool input has no selection', async () => {
+    const mcpToolNode = makeNode('mcp1', FlowNodeTypeEnum.tool, {
+      toolConfig: { mcpTool: { toolId: 'mcp-toolset-1/toolA' } },
+      inputs: [
+        {
+          key: 'query',
+          valueType: 'string',
+          required: true,
+          renderTypeList: [FlowNodeInputTypeEnum.input, FlowNodeInputTypeEnum.reference]
+        }
+      ]
+    } as any);
+    const httpToolNode = makeNode('http1', FlowNodeTypeEnum.tool, {
+      toolConfig: { httpTool: { toolId: 'http-toolset-1/toolB' } },
+      inputs: [
+        {
+          key: 'count',
+          valueType: 'number',
+          required: true,
+          renderTypeList: [FlowNodeInputTypeEnum.numberInput, FlowNodeInputTypeEnum.reference]
+        }
+      ]
+    } as any);
+    setupFindByIdMap({
+      'toolset-1': {
+        _id: 'toolset-1',
+        modules: [
+          {
+            toolConfig: {
+              mcpToolSet: {
+                url: 'https://mcp.example.com',
+                toolList: [
+                  {
+                    name: 'toolA',
+                    inputSchema: {
+                      type: 'object',
+                      properties: { query: { type: 'string', isToolParam: true } }
+                    }
+                  }
+                ]
+              },
+              httpToolSet: {
+                toolList: [
+                  {
+                    name: 'toolB',
+                    inputSchema: {
+                      type: 'object',
+                      properties: { count: { type: 'number', isToolParam: false } }
+                    },
+                    requestSchema: { type: 'object', properties: {} }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+
+    await rewriteRuntimeWorkFlow({
+      teamId: 'team1',
+      tmbId: 'tmb1',
+      nodes: [mcpToolNode, httpToolNode],
+      edges: []
+    });
+
+    expect(mcpToolNode.inputs[0].selectedType).toBe(FlowNodeInputTypeEnum.agentGenerated);
+    expect(httpToolNode.inputs[0].selectedType).toBe(FlowNodeInputTypeEnum.numberInput);
+  });
+
+  it('should fall back to inputSchema for legacy scalar HTTP request schemas', async () => {
+    const httpToolNode = makeNode('http1', FlowNodeTypeEnum.tool, {
+      toolConfig: {
+        httpTool: { toolId: 'http-toolset-1/toolLegacy' }
+      }
+    } as any);
+    const inputSchema = {
+      type: 'object',
+      properties: { query: { type: 'string' } },
+      required: ['query']
+    };
+    setupFindByIdMap({
+      'toolset-1': {
+        _id: 'toolset-1',
+        modules: [
+          {
+            toolConfig: {
+              httpToolSet: {
+                toolList: [
+                  {
+                    name: 'toolLegacy',
+                    description: 'legacy HTTP tool',
+                    inputSchema,
+                    requestSchema: { type: 'string' }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+
+    await rewriteRuntimeWorkFlow({
+      teamId: 'team1',
+      tmbId: 'tmb1',
+      nodes: [httpToolNode],
+      edges: []
+    });
+
+    expect(httpToolNode.jsonSchema).toEqual(inputSchema);
   });
 
   it('should preserve tool names containing slashes when injecting schema', async () => {
@@ -1032,7 +1490,7 @@ describe('rewriteRuntimeWorkFlow', () => {
       }
     });
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(httpToolNode.jsonSchema).toEqual({ type: 'object' });
     expect(httpToolNode.intro).toBe('nested tool');
@@ -1051,7 +1509,7 @@ describe('rewriteRuntimeWorkFlow', () => {
 
     setupFindByIdMap({});
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(httpToolNode.jsonSchema).toEqual({ type: 'original' });
     expect(httpToolNode.intro).toBe('original');
@@ -1070,7 +1528,7 @@ describe('rewriteRuntimeWorkFlow', () => {
 
     setupFindByIdMap({});
 
-    await rewriteRuntimeWorkFlow({ teamId: 'team1', nodes, edges });
+    await rewriteRuntimeWorkFlow({ teamId: 'team1', tmbId: 'tmb1', nodes, edges });
 
     expect(httpToolNode.jsonSchema).toEqual({ type: 'original' });
     expect(httpToolNode.intro).toBe('original');
@@ -1085,10 +1543,10 @@ describe('getNodeErrResponse', () => {
       'errorText',
       'test error'
     );
-    expect(result[DispatchNodeResponseKeyEnum.toolResponses]).toHaveProperty('error', 'test error');
+    expect(result[DispatchNodeResponseKeyEnum.toolResponse]).toHaveProperty('error', 'test error');
   });
 
-  it('should include customErr in error and toolResponses', () => {
+  it('should include customErr in error and toolResponse', () => {
     const result = getNodeErrResponse({
       error: 'fail',
       customErr: { code: 500, detail: 'internal' }
@@ -1098,7 +1556,7 @@ describe('getNodeErrResponse', () => {
       code: 500,
       detail: 'internal'
     });
-    expect(result[DispatchNodeResponseKeyEnum.toolResponses]).toEqual({
+    expect(result[DispatchNodeResponseKeyEnum.toolResponse]).toEqual({
       error: 'fail',
       code: 500,
       detail: 'internal'
@@ -1135,6 +1593,87 @@ describe('getNodeErrResponse', () => {
     expect(result.error).toEqual({
       [NodeOutputKeyEnum.errorText]: 'fail'
     });
+  });
+});
+
+describe('summarizeRuntimeNodeResponses', () => {
+  it('deduplicates flattened child rows that are already included in parent child stats', () => {
+    const summary = summarizeRuntimeNodeResponses(undefined, [
+      {
+        id: 'parent',
+        nodeId: 'parent-node',
+        moduleName: 'Parent',
+        totalPoints: 1,
+        childTotalPoints: 2,
+        childResponseCount: 1
+      },
+      {
+        id: 'child',
+        parentId: 'parent',
+        nodeId: 'child-node',
+        moduleName: 'Child',
+        totalPoints: 2
+      }
+    ]);
+
+    expect(summary.childTotalPoints).toBe(3);
+    expect(summary.childResponseCount).toBe(2);
+  });
+
+  it('counts nested children when only an in-memory child tree is available', () => {
+    const summary = summarizeRuntimeNodeResponses(undefined, [
+      {
+        id: 'parent',
+        nodeId: 'parent-node',
+        moduleName: 'Parent',
+        totalPoints: 1,
+        childrenResponses: [
+          {
+            id: 'child',
+            nodeId: 'child-node',
+            moduleName: 'Child',
+            totalPoints: 2
+          }
+        ]
+      }
+    ]);
+
+    expect(summary.childTotalPoints).toBe(3);
+    expect(summary.childResponseCount).toBe(2);
+  });
+
+  it('does not count the same response id again across incremental summaries', () => {
+    const firstSummary = summarizeRuntimeNodeResponses(undefined, [
+      {
+        id: 'repeat',
+        nodeId: 'repeat-node',
+        moduleName: 'Repeat',
+        runningTime: 1,
+        totalPoints: 2
+      }
+    ]);
+    const nextSummary = summarizeRuntimeNodeResponses(firstSummary, [
+      {
+        id: 'repeat',
+        nodeId: 'repeat-node',
+        moduleName: 'Repeat',
+        runningTime: 1,
+        totalPoints: 2
+      },
+      {
+        id: 'next',
+        nodeId: 'next-node',
+        moduleName: 'Next',
+        runningTime: 3,
+        totalPoints: 4
+      }
+    ]);
+
+    expect(nextSummary.responseIds).toEqual(['repeat', 'next']);
+    expect(nextSummary.finishedNodeIds).toEqual(['repeat-node', 'next-node']);
+    expect(nextSummary).not.toHaveProperty('runningTime');
+    expect(nextSummary.childTotalPoints).toBe(6);
+    expect(nextSummary.childResponseCount).toBe(2);
   });
 });
 

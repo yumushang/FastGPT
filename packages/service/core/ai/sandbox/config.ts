@@ -1,132 +1,38 @@
+/**
+ * Sandbox 领域共享配置派生。
+ *
+ * 这里只把已校验的环境配置换算为领域使用的字节限制，不依赖 interface、application
+ * 或 infrastructure，供各层单向引用。
+ */
 import { serviceEnv } from '../../../env';
-import type {
-  OpenSandboxConfigType,
-  OpenSandboxConnectionConfig
-} from '@fastgpt-sdk/sandbox-adapter';
-import type { SandboxStorageType } from './type';
 
-// ---- sealosdevbox ----
-export type SealosConnectionConfig = {
-  baseUrl: string;
-  token: string;
-  sandboxId: string;
-};
+const MB_BYTES = 1024 * 1024;
+const RESERVED_DISK_MB = 150;
 
-export const getSealosConnectionConfig = (sandboxId: string): SealosConnectionConfig => {
-  if (!serviceEnv.AGENT_SANDBOX_SEALOS_BASEURL || !serviceEnv.AGENT_SANDBOX_SEALOS_TOKEN) {
-    throw new Error('AGENT_SANDBOX_SEALOS_BASEURL / AGENT_SANDBOX_SEALOS_TOKEN required');
-  }
-  return {
-    baseUrl: serviceEnv.AGENT_SANDBOX_SEALOS_BASEURL,
-    token: serviceEnv.AGENT_SANDBOX_SEALOS_TOKEN,
-    sandboxId
-  };
-};
-
-// ---- opensandbox ----
-export const getOpenSandboxConnectionConfig = ({
-  sessionId
-}: {
-  sessionId: string;
-}): OpenSandboxConnectionConfig => {
-  if (!serviceEnv.AGENT_SANDBOX_OPENSANDBOX_BASEURL) {
-    throw new Error('AGENT_SANDBOX_OPENSANDBOX_BASEURL is required');
-  }
-  return {
-    sessionId,
-    useServerProxy: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_USE_SERVER_PROXY,
-    baseUrl: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_BASEURL,
-    apiKey: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_API_KEY,
-    runtime: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_RUNTIME
-  };
-};
-
-export const buildOpenSandboxCreateConfig = (
-  opts: {
-    volumes?: OpenSandboxConfigType['volumes'];
-    resourceLimits?: OpenSandboxConfigType['resourceLimits'];
-    createConfig?: OpenSandboxConfigType;
-  } = {}
-): OpenSandboxConfigType => {
-  if (!serviceEnv.AGENT_SANDBOX_OPENSANDBOX_IMAGE_REPO && !opts.createConfig?.image) {
-    throw new Error('AGENT_SANDBOX_OPENSANDBOX_IMAGE_REPO is required for opensandbox provider');
-  }
-  return {
-    image: {
-      repository: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_IMAGE_REPO,
-      tag: serviceEnv.AGENT_SANDBOX_OPENSANDBOX_IMAGE_TAG
-    },
-    ...(opts.resourceLimits ? { resourceLimits: opts.resourceLimits } : {}),
-    ...opts.createConfig,
-    ...(opts.volumes ? { volumes: opts.volumes } : {})
-  };
-};
-
-// ---- volume-manager ----
-export type VolumeManagerConfig = {
-  url: string;
-  token?: string;
-  mountPath: string;
-};
-export type VolumeManagerResult = {
-  volumes: OpenSandboxConfigType['volumes'];
-  storage: SandboxStorageType;
-};
-const vmConfig = {
-  enable: serviceEnv.AGENT_SANDBOX_ENABLE_VOLUME,
-  url: serviceEnv.AGENT_SANDBOX_VOLUME_MANAGER_URL!,
-  token: serviceEnv.AGENT_SANDBOX_VOLUME_MANAGER_TOKEN,
-  mountPath: serviceEnv.AGENT_SANDBOX_VOLUME_MANAGER_MOUNT_PATH
-};
-export const buildVolumeConfig = (claimName: string, mountPath: string): VolumeManagerResult => {
-  return {
-    volumes: [{ name: 'workspace', pvc: { claimName }, mountPath }],
-    storage: {
-      volumes: [{ name: 'workspace', claimName, mountPath }],
-      mountPath
-    }
-  };
-};
-export const ensureSessionVolume = async (sessionId: string): Promise<string> => {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (vmConfig.token) headers['Authorization'] = `Bearer ${vmConfig.token}`;
-
-  const res = await fetch(`${vmConfig.url}/v1/volumes/ensure`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ sessionId })
-  });
-  if (!res.ok) {
-    throw new Error(`volume-manager error: ${res.status} ${await res.text()}`);
-  }
-  const { claimName } = (await res.json()) as { claimName: string };
-  return claimName;
-};
-export const deleteSessionVolume = async (sessionId: string): Promise<void> => {
-  if (!vmConfig.enable) return;
-  const headers: Record<string, string> = {};
-  if (vmConfig.token) headers['Authorization'] = `Bearer ${vmConfig.token}`;
-
-  const res = await fetch(`${vmConfig.url}/v1/volumes/${encodeURIComponent(sessionId)}`, {
-    method: 'DELETE',
-    headers
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`volume-manager error: ${res.status} ${await res.text()}`);
-  }
-};
-
-export const getVolumeManagerConfig = async (
-  sandboxId: string
-): Promise<VolumeManagerResult | undefined> => {
-  if (!vmConfig.enable) return undefined;
-  if (!vmConfig.url) {
+/** 获取 Agent sandbox 磁盘基准字节数，按存储容量换算并预留 150MB。 */
+export const getAgentSandboxDiskBytes = () => {
+  const storageMB = serviceEnv.AGENT_SANDBOX_STORAGE_SIZE_GI * 1024;
+  const diskMB = Math.round(storageMB / 2 - RESERVED_DISK_MB);
+  if (diskMB <= 0) {
     throw new Error(
-      'AGENT_SANDBOX_VOLUME_MANAGER_URL is required when AGENT_SANDBOX_ENABLE_VOLUME=true'
+      `AGENT_SANDBOX_STORAGE_SIZE_GI must be greater than ${RESERVED_DISK_MB * 2}MiB`
     );
   }
-  const claimName = await ensureSessionVolume(sandboxId);
-  const volumeResult = buildVolumeConfig(claimName, vmConfig.mountPath);
-
-  return volumeResult;
+  return diskMB * MB_BYTES;
 };
+
+/** 获取 sandbox 冷归档包大小上限，等于磁盘基准。 */
+export const getAgentSandboxArchiveMaxBytes = getAgentSandboxDiskBytes;
+
+/** 获取运行中 sandbox 自动暂停前允许的未活跃分钟数。 */
+export const getAgentSandboxSuspendMinutes = () => serviceEnv.AGENT_SANDBOX_SUSPEND_MINUTES;
+
+/** 获取已暂停 sandbox 自动归档前允许的未活跃天数。 */
+export const getAgentSandboxArchiveInactiveDays = () =>
+  serviceEnv.AGENT_SANDBOX_ARCHIVE_INACTIVE_DAYS;
+
+/** 获取 Skill 包大小上限，等于磁盘基准。 */
+export const getAgentSandboxSkillMaxBytes = getAgentSandboxDiskBytes;
+
+/** 获取 IDE 单文件大小上限，等于磁盘基准。 */
+export const getAgentSandboxMaxFileBytes = getAgentSandboxDiskBytes;

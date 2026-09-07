@@ -5,20 +5,15 @@ import {
 } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { LoopRunModeEnum } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRun';
-import type {
-  RuntimeNodeItemType,
-  WorkflowVariableStateLike
-} from '@fastgpt/global/core/workflow/runtime/type';
+import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
+import type { WorkflowVariableStateLike } from '@fastgpt/service/core/workflow/types/runtime';
 import type {
   FlowNodeInputItemType,
   FlowNodeOutputItemType
 } from '@fastgpt/global/core/workflow/type/io';
-import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import {
-  extractFinishedNodeIds,
   hasLoopRunBreakChild,
   injectLoopRunStart,
-  isLoopBreakHit,
   pickCustomOutputInputs,
   readCustomOutputSnapshot
 } from '@fastgpt/service/core/workflow/dispatch/loopRun/service';
@@ -59,14 +54,6 @@ const makeNode = (
     value: o.value
   }))
 });
-
-const makeResponse = (override: Partial<ChatHistoryItemResType>): ChatHistoryItemResType =>
-  ({
-    nodeId: 'n',
-    moduleType: FlowNodeTypeEnum.chatNode,
-    moduleName: 'n',
-    ...override
-  }) as ChatHistoryItemResType;
 
 const makeVariableState = (variables: Record<string, unknown> = {}): WorkflowVariableStateLike => ({
   get: (key: string) => variables[key],
@@ -135,22 +122,6 @@ describe('loopRun/service', () => {
         }
       ];
       expect(pickCustomOutputInputs(inputs, outputs)).toEqual([]);
-    });
-  });
-
-  describe('extractFinishedNodeIds', () => {
-    it('把 flowResponses 里带 nodeId 的项汇总到 Set', () => {
-      const responses = [
-        makeResponse({ nodeId: 'n1' }),
-        makeResponse({ nodeId: 'n2' }),
-        makeResponse({ nodeId: 'n1' }) // 重复
-      ];
-      const result = extractFinishedNodeIds(responses);
-      expect(result).toEqual(new Set(['n1', 'n2']));
-    });
-
-    it('空数组返回空 Set', () => {
-      expect(extractFinishedNodeIds([])).toEqual(new Set());
     });
   });
 
@@ -350,24 +321,6 @@ describe('loopRun/service', () => {
     it('空 childrenNodeIdList → false', () => {
       const nodes = [makeNode('break1', FlowNodeTypeEnum.loopRunBreak)];
       expect(hasLoopRunBreakChild(nodes, [])).toBe(false);
-    });
-  });
-
-  describe('isLoopBreakHit', () => {
-    it('含 loopRunBreak moduleType 响应 → true', () => {
-      const responses = [
-        makeResponse({ moduleType: FlowNodeTypeEnum.chatNode }),
-        makeResponse({ moduleType: FlowNodeTypeEnum.loopRunBreak })
-      ];
-      expect(isLoopBreakHit(responses)).toBe(true);
-    });
-
-    it('无 loopRunBreak → false', () => {
-      expect(isLoopBreakHit([makeResponse({ moduleType: FlowNodeTypeEnum.chatNode })])).toBe(false);
-    });
-
-    it('空数组 → false', () => {
-      expect(isLoopBreakHit([])).toBe(false);
     });
   });
 });

@@ -2,17 +2,32 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { getChatItems, updateChatFeedbackCount } from '@fastgpt/service/core/chat/controller';
 import { MongoChatItem } from '@fastgpt/service/core/chat/chatItemSchema';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
-import { ChatRoleEnum, ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
+import { MongoChatItemResponse } from '@fastgpt/service/core/chat/chatItemResponseSchema';
+import {
+  ChatRoleEnum,
+  ChatSourceEnum,
+  ChatSourceTypeEnum
+} from '@fastgpt/global/core/chat/constants';
 import { getUser } from '@test/datas/users';
 import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
-import type { ChatItemSchema } from '@fastgpt/global/core/chat/type';
+import {
+  AIChatItemSchema,
+  UserChatItemSchema,
+  type ChatItemSchema
+} from '@fastgpt/global/core/chat/type';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 
 describe('getChatItems', () => {
   let testUser: Awaited<ReturnType<typeof getUser>>;
   let appId: string;
   let chatId: string;
+
+  const chatSource = () => ({
+    sourceType: ChatSourceTypeEnum.app,
+    sourceId: appId
+  });
 
   beforeEach(async () => {
     testUser = await getUser('test-user');
@@ -37,6 +52,7 @@ describe('getChatItems', () => {
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
         userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId,
         dataId: getNanoid(),
@@ -58,7 +74,7 @@ describe('getChatItems', () => {
   describe('Normal Pagination Mode', () => {
     it('should return empty array when chatId is not provided', async () => {
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId: undefined,
         offset: 0,
         limit: 10,
@@ -71,7 +87,7 @@ describe('getChatItems', () => {
 
     it('should return empty array when no chat items exist', async () => {
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 10,
@@ -86,7 +102,7 @@ describe('getChatItems', () => {
       await createChatItems(20);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 5,
@@ -99,11 +115,172 @@ describe('getChatItems', () => {
       expect(result.histories[0].value[0].text?.content).toContain('Message 1');
     });
 
+    it('should normalize legacy persisted plans to the current response shape', async () => {
+      await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: getNanoid(),
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            plan: {
+              planId: 'legacy-plan',
+              task: 'Legacy plan',
+              description: 'Legacy description',
+              background: 'Legacy background',
+              steps: [
+                {
+                  id: 'legacy-step',
+                  title: 'Legacy step',
+                  description: 'Legacy step description',
+                  status: 'in_progress',
+                  acceptanceCriteria: ['Legacy criterion']
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value'
+      });
+
+      expect(result.histories[0].value[0].plan).toEqual({
+        planId: 'legacy-plan',
+        name: 'Legacy plan',
+        description: 'Legacy description',
+        steps: [
+          {
+            id: 'legacy-step',
+            name: 'Legacy step',
+            description: 'Legacy step description',
+            status: 'in_progress'
+          }
+        ]
+      });
+    });
+
+    it('should omit a malformed persisted plan without blocking chat history', async () => {
+      await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: getNanoid(),
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            plan: {
+              planId: 'malformed-plan',
+              name: 'Malformed plan',
+              steps: []
+            },
+            text: {
+              content: 'Visible answer'
+            }
+          }
+        ]
+      });
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value'
+      });
+
+      expect(result.histories[0].value[0].plan).toBeUndefined();
+      expect(result.histories[0].value[0].text?.content).toBe('Visible answer');
+    });
+
+    it('should migrate legacy planId ask records and answers to askId', async () => {
+      await MongoChatItem.create([
+        {
+          teamId: testUser.teamId,
+          tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          dataId: getNanoid(),
+          obj: ChatRoleEnum.AI,
+          value: [
+            {
+              agentAsk: {
+                id: 'call_ask',
+                functionName: 'ask_agent',
+                params: '{}',
+                planId: 'legacy-plan'
+              }
+            },
+            {
+              interactive: {
+                type: 'agentPlanAskQuery',
+                planId: 'legacy-plan',
+                entryNodeIds: ['agent_node'],
+                memoryEdges: [],
+                nodeOutputs: [],
+                params: {
+                  content: 'Which option?',
+                  options: ['A', 'B', 'C']
+                }
+              }
+            }
+          ]
+        },
+        {
+          teamId: testUser.teamId,
+          tmbId: testUser.tmbId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          dataId: getNanoid(),
+          obj: ChatRoleEnum.Human,
+          value: [
+            {
+              planId: 'legacy-plan',
+              text: { content: 'A' }
+            }
+          ]
+        }
+      ]);
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value'
+      });
+      const aiValue = result.histories[0].value;
+      const humanValue = result.histories[1].value[0];
+
+      expect(aiValue[0].agentAsk).toMatchObject({ askId: 'legacy-plan' });
+      expect(aiValue[0].agentAsk).not.toHaveProperty('planId');
+      expect(aiValue[1].interactive).toMatchObject({ askId: 'legacy-plan' });
+      expect(aiValue[1].interactive).not.toHaveProperty('planId');
+      expect(humanValue).toMatchObject({ askId: 'legacy-plan' });
+      expect(humanValue).not.toHaveProperty('planId');
+      expect(() => AIChatItemSchema.parse(result.histories[0])).not.toThrow();
+      expect(() => UserChatItemSchema.parse(result.histories[1])).not.toThrow();
+    });
+
     it('should handle pagination offset correctly', async () => {
       await createChatItems(20);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 5,
         limit: 5,
@@ -122,7 +299,7 @@ describe('getChatItems', () => {
       await createChatItems(5);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 10,
@@ -137,7 +314,7 @@ describe('getChatItems', () => {
       await createChatItems(5);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 5,
@@ -158,7 +335,7 @@ describe('getChatItems', () => {
       await createChatItems(3);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 3,
@@ -174,10 +351,11 @@ describe('getChatItems', () => {
 
     it('should include custom fields when specified', async () => {
       // Create AI items to support customFeedbacks
-      const aiItem = await MongoChatItem.create({
+      await MongoChatItem.create({
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
         userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId,
         dataId: getNanoid(),
@@ -187,7 +365,7 @@ describe('getChatItems', () => {
       });
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 3,
@@ -208,7 +386,7 @@ describe('getChatItems', () => {
       await createChatItems(1);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 10,
@@ -223,7 +401,7 @@ describe('getChatItems', () => {
       await createChatItems(5);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 10,
         limit: 5,
@@ -238,7 +416,7 @@ describe('getChatItems', () => {
       await createChatItems(5);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 0,
@@ -260,6 +438,7 @@ describe('getChatItems', () => {
       await MongoChatItem.create({
         teamId: testUser.teamId,
         tmbId: testUser.tmbId,
+        sourceType: ChatSourceTypeEnum.app,
         appId,
         chatId: otherChatId,
         dataId: getNanoid(),
@@ -268,7 +447,7 @@ describe('getChatItems', () => {
       });
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 10,
@@ -286,7 +465,7 @@ describe('getChatItems', () => {
       const items = await createChatItems(10);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         limit: 10,
@@ -307,7 +486,7 @@ describe('getChatItems', () => {
       const targetItem = items[4]; // Middle item
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: targetItem.dataId,
         limit: 5,
@@ -326,7 +505,7 @@ describe('getChatItems', () => {
       const firstItem = items[0];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: firstItem.dataId,
         limit: 5,
@@ -344,7 +523,7 @@ describe('getChatItems', () => {
       const lastItem = items[9];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: lastItem.dataId,
         limit: 5,
@@ -362,7 +541,7 @@ describe('getChatItems', () => {
       const middleItem = items[10];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: middleItem.dataId,
         limit: 5,
@@ -379,7 +558,7 @@ describe('getChatItems', () => {
 
       await expect(
         getChatItems({
-          appId,
+          ...chatSource(),
           chatId,
           initialId: 'non-existent-id',
           limit: 5,
@@ -393,7 +572,7 @@ describe('getChatItems', () => {
       const middleItem = items[5];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: middleItem.dataId,
         limit: 3,
@@ -411,7 +590,7 @@ describe('getChatItems', () => {
       const middleItem = items[7];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: middleItem.dataId,
         limit: 7,
@@ -429,7 +608,7 @@ describe('getChatItems', () => {
       const middleItem = items[7];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         initialId: middleItem.dataId,
         limit: 6,
@@ -446,7 +625,7 @@ describe('getChatItems', () => {
       const items = await createChatItems(20);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         limit: 5,
         field: 'obj value'
@@ -466,7 +645,7 @@ describe('getChatItems', () => {
       const targetItem = items[5];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: targetItem.dataId,
         limit: 3,
@@ -486,7 +665,7 @@ describe('getChatItems', () => {
       const targetItem = items[15];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: targetItem.dataId,
         limit: 5,
@@ -504,7 +683,7 @@ describe('getChatItems', () => {
       const earlyItem = items[2];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: earlyItem.dataId,
         limit: 5,
@@ -523,7 +702,7 @@ describe('getChatItems', () => {
 
       await expect(
         getChatItems({
-          appId,
+          ...chatSource(),
           chatId,
           prevId: 'non-existent-id',
           limit: 5,
@@ -537,7 +716,7 @@ describe('getChatItems', () => {
       const firstItem = items[0];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: firstItem.dataId,
         limit: 5,
@@ -555,7 +734,7 @@ describe('getChatItems', () => {
       const targetItem = items[7];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: targetItem.dataId,
         limit: 4,
@@ -576,7 +755,7 @@ describe('getChatItems', () => {
       const targetItem = items[4];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         nextId: targetItem.dataId,
         limit: 3,
@@ -596,7 +775,7 @@ describe('getChatItems', () => {
       const targetItem = items[5];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         nextId: targetItem.dataId,
         limit: 5,
@@ -614,7 +793,7 @@ describe('getChatItems', () => {
       const lateItem = items[7];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         nextId: lateItem.dataId,
         limit: 5,
@@ -633,7 +812,7 @@ describe('getChatItems', () => {
 
       await expect(
         getChatItems({
-          appId,
+          ...chatSource(),
           chatId,
           nextId: 'non-existent-id',
           limit: 5,
@@ -647,7 +826,7 @@ describe('getChatItems', () => {
       const lastItem = items[9];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         nextId: lastItem.dataId,
         limit: 5,
@@ -665,7 +844,7 @@ describe('getChatItems', () => {
       const targetItem = items[2];
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         nextId: targetItem.dataId,
         limit: 4,
@@ -685,7 +864,7 @@ describe('getChatItems', () => {
       const items = await createChatItems(10);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         offset: 0,
         initialId: items[5].dataId,
@@ -702,7 +881,7 @@ describe('getChatItems', () => {
       const items = await createChatItems(10);
 
       const result = await getChatItems({
-        appId,
+        ...chatSource(),
         chatId,
         prevId: items[5].dataId,
         nextId: items[7].dataId,
@@ -716,12 +895,318 @@ describe('getChatItems', () => {
       expect(result.histories.every((h) => h.dataId !== items[5].dataId)).toBe(true);
     });
   });
+
+  describe('Node Response Detail', () => {
+    it('composes v2 flat chat item responses into childrenResponses', async () => {
+      const aiItem = await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: 'ai-data-id',
+        obj: ChatRoleEnum.AI,
+        value: []
+      });
+
+      await MongoChatItemResponse.create([
+        {
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          chatItemDataId: aiItem.dataId,
+          data: {
+            id: 'root-response',
+            nodeId: 'root-node',
+            moduleName: 'Agent',
+            moduleType: FlowNodeTypeEnum.agent,
+            childTotalPoints: 2,
+            childResponseCount: 1
+          }
+        },
+        {
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          chatItemDataId: aiItem.dataId,
+          data: {
+            id: 'child-response',
+            parentId: 'root-response',
+            nodeId: 'child-node',
+            moduleName: 'Dataset',
+            moduleType: FlowNodeTypeEnum.datasetSearchNode,
+            totalPoints: 2
+          }
+        }
+      ]);
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value',
+        nodeResponseMode: 'full'
+      });
+
+      expect(result.histories).toHaveLength(1);
+      expect(result.histories[0].responseData?.[0]).toMatchObject({
+        id: 'root-response',
+        childResponseCount: 1
+      });
+      expect(result.histories[0].responseData?.[0].childTotalPoints).toBeUndefined();
+      expect(result.histories[0].responseData?.[0].childrenResponses?.[0]).toMatchObject({
+        id: 'child-response',
+        parentId: 'root-response',
+        moduleType: FlowNodeTypeEnum.datasetSearchNode
+      });
+    });
+
+    it('reads persisted rows even when chat item still has legacy inline responseData', async () => {
+      await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: 'fallback-ai-data-id',
+        obj: ChatRoleEnum.AI,
+        value: [],
+        responseData: [
+          {
+            id: 'fallback-root',
+            nodeId: 'fallback-root',
+            moduleName: 'Fallback',
+            moduleType: FlowNodeTypeEnum.chatNode
+          }
+        ]
+      });
+
+      await MongoChatItemResponse.create({
+        teamId: testUser.teamId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        chatItemDataId: 'fallback-ai-data-id',
+        data: {
+          id: 'persisted-root',
+          nodeId: 'persisted-root',
+          moduleName: 'Persisted',
+          moduleType: FlowNodeTypeEnum.agent
+        }
+      });
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value',
+        nodeResponseMode: 'full'
+      });
+
+      expect(result.histories[0].responseData?.map((item) => item.id)).toEqual(['persisted-root']);
+    });
+
+    it('does not use empty legacy chat item responseData as a fallback', async () => {
+      await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: 'empty-inline-ai-data-id',
+        obj: ChatRoleEnum.AI,
+        value: [],
+        responseData: []
+      });
+
+      await MongoChatItemResponse.create({
+        teamId: testUser.teamId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        chatItemDataId: 'empty-inline-ai-data-id',
+        data: {
+          id: 'persisted-root',
+          nodeId: 'persisted-root',
+          moduleName: 'Persisted',
+          moduleType: FlowNodeTypeEnum.agent
+        }
+      });
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value',
+        nodeResponseMode: 'full'
+      });
+
+      expect(result.histories[0].responseData?.map((item) => item.id)).toEqual(['persisted-root']);
+    });
+
+    it('loads lightweight preview response rows without composing responseData tree', async () => {
+      const citedQuoteId = '0123456789abcdef01234567';
+      const uncitedQuoteId = 'fedcba9876543210fedcba98';
+      const aiDataId = 'preview-ai-data-id';
+
+      await MongoChatItem.create({
+        teamId: testUser.teamId,
+        tmbId: testUser.tmbId,
+        userId: testUser.userId,
+        sourceType: ChatSourceTypeEnum.app,
+        appId,
+        chatId,
+        dataId: aiDataId,
+        obj: ChatRoleEnum.AI,
+        value: [
+          {
+            type: 'text',
+            text: {
+              content: `Answer with cite [${citedQuoteId}](CITE)`
+            }
+          }
+        ],
+        responseData: [
+          {
+            id: 'legacy-root',
+            moduleName: 'Legacy',
+            moduleType: FlowNodeTypeEnum.chatNode,
+            errorText: 'legacy error'
+          }
+        ]
+      });
+
+      await MongoChatItemResponse.create([
+        {
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          chatItemDataId: aiDataId,
+          data: {
+            id: 'dataset-response',
+            moduleName: 'Dataset',
+            moduleType: FlowNodeTypeEnum.datasetSearchNode,
+            quoteList: [
+              {
+                id: citedQuoteId,
+                datasetId: 'dataset-1',
+                collectionId: 'collection-1',
+                sourceId: 'source-1',
+                sourceName: 'source.md',
+                chunkIndex: 0,
+                score: 0.9
+              },
+              {
+                id: uncitedQuoteId,
+                datasetId: 'dataset-1',
+                collectionId: 'collection-1',
+                sourceId: 'source-2',
+                sourceName: 'unused.md',
+                chunkIndex: 1,
+                score: 0.5
+              }
+            ]
+          }
+        },
+        {
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          chatItemDataId: aiDataId,
+          data: {
+            id: 'tool-response',
+            moduleName: 'Tool',
+            moduleType: FlowNodeTypeEnum.tool,
+            toolRes: {
+              citeLinks: [
+                {
+                  name: 'Tool Ref',
+                  url: 'https://example.com/ref'
+                },
+                {
+                  name: 'Tool Ref',
+                  url: 'https://example.com/ref'
+                }
+              ]
+            },
+            errorText: 'tool failed'
+          }
+        },
+        {
+          teamId: testUser.teamId,
+          sourceType: ChatSourceTypeEnum.app,
+          appId,
+          chatId,
+          chatItemDataId: aiDataId,
+          data: {
+            id: 'large-response',
+            moduleName: 'LLM',
+            moduleType: FlowNodeTypeEnum.chatNode,
+            historyPreview: 'large preview should not be projected',
+            toolRes: {
+              result: 'large result should not be projected'
+            }
+          }
+        }
+      ]);
+
+      const result = await getChatItems({
+        ...chatSource(),
+        chatId,
+        offset: 0,
+        limit: 10,
+        field: 'obj value responseData',
+        nodeResponseMode: 'preview'
+      });
+
+      const item = result.histories[0];
+      expect(item.responseData?.map((response) => response.id)).toEqual([
+        'dataset-response',
+        'tool-response',
+        'large-response'
+      ]);
+      expect(item.responseData?.[0].quoteList?.map((quote) => quote.id)).toEqual([
+        citedQuoteId,
+        uncitedQuoteId
+      ]);
+      expect(item.responseData?.[1].toolRes).toEqual({
+        citeLinks: [
+          {
+            name: 'Tool Ref',
+            url: 'https://example.com/ref'
+          },
+          {
+            name: 'Tool Ref',
+            url: 'https://example.com/ref'
+          }
+        ]
+      });
+      expect(item.responseData?.[1].errorText).toBe('tool failed');
+      expect(item.responseData?.[2].historyPreview).toBeUndefined();
+      expect(item.responseData?.[2].toolRes?.result).toBeUndefined();
+    });
+  });
 });
 
 describe('updateChatFeedbackCount', () => {
   let testUser: Awaited<ReturnType<typeof getUser>>;
   let appId: string;
   let chatId: string;
+
+  const chatSource = () => ({
+    sourceType: ChatSourceTypeEnum.app,
+    sourceId: appId
+  });
 
   beforeEach(async () => {
     testUser = await getUser('test-user-feedback-count');
@@ -742,6 +1227,7 @@ describe('updateChatFeedbackCount', () => {
       chatId,
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       source: ChatSourceEnum.online
     });
@@ -760,6 +1246,7 @@ describe('updateChatFeedbackCount', () => {
       teamId: testUser.teamId,
       tmbId: testUser.tmbId,
       userId: testUser.userId,
+      sourceType: ChatSourceTypeEnum.app,
       appId,
       chatId,
       dataId: getNanoid(),
@@ -774,7 +1261,7 @@ describe('updateChatFeedbackCount', () => {
     await createChatItemWithFeedback({}, ChatRoleEnum.AI);
     await createChatItemWithFeedback({}, ChatRoleEnum.AI);
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBeUndefined();
@@ -788,7 +1275,7 @@ describe('updateChatFeedbackCount', () => {
       userGoodFeedback: 'Great response!'
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -800,7 +1287,7 @@ describe('updateChatFeedbackCount', () => {
       userBadFeedback: 'Incorrect answer'
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBeUndefined();
@@ -815,7 +1302,7 @@ describe('updateChatFeedbackCount', () => {
       userBadFeedback: 'Incorrect answer'
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -828,7 +1315,7 @@ describe('updateChatFeedbackCount', () => {
       isFeedbackRead: false
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -841,7 +1328,7 @@ describe('updateChatFeedbackCount', () => {
       isFeedbackRead: true
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -854,7 +1341,7 @@ describe('updateChatFeedbackCount', () => {
       isFeedbackRead: false
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasBadFeedback).toBe(true);
@@ -867,7 +1354,7 @@ describe('updateChatFeedbackCount', () => {
       isFeedbackRead: true
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasBadFeedback).toBe(true);
@@ -896,7 +1383,7 @@ describe('updateChatFeedbackCount', () => {
       isFeedbackRead: true
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -917,7 +1404,7 @@ describe('updateChatFeedbackCount', () => {
     // AI message without feedback
     await createChatItemWithFeedback({}, ChatRoleEnum.AI);
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBeUndefined();
@@ -936,7 +1423,7 @@ describe('updateChatFeedbackCount', () => {
       userGoodFeedback: 'Great response 3!'
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -949,7 +1436,7 @@ describe('updateChatFeedbackCount', () => {
       userGoodFeedback: 'Great response!'
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     let chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -957,7 +1444,7 @@ describe('updateChatFeedbackCount', () => {
     // Remove feedback
     await MongoChatItem.updateOne({ _id: item._id }, { $unset: { userGoodFeedback: '' } });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBeUndefined();
@@ -967,7 +1454,7 @@ describe('updateChatFeedbackCount', () => {
     // Create only human messages
     await createChatItemWithFeedback({}, ChatRoleEnum.Human);
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBeUndefined();
@@ -983,7 +1470,7 @@ describe('updateChatFeedbackCount', () => {
       // isFeedbackRead is undefined
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -1007,7 +1494,7 @@ describe('updateChatFeedbackCount', () => {
       });
     }
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -1022,7 +1509,7 @@ describe('updateChatFeedbackCount', () => {
     });
 
     // Test that it works with session parameter (session will be undefined in this test)
-    await updateChatFeedbackCount({ appId, chatId, session: undefined });
+    await updateChatFeedbackCount({ ...chatSource(), chatId, session: undefined });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     expect(chat?.hasGoodFeedback).toBe(true);
@@ -1034,7 +1521,7 @@ describe('updateChatFeedbackCount', () => {
       userGoodFeedback: ''
     });
 
-    await updateChatFeedbackCount({ appId, chatId });
+    await updateChatFeedbackCount({ ...chatSource(), chatId });
 
     const chat = await MongoChat.findOne({ appId, chatId }).lean();
     // Empty string is still truthy in MongoDB's $ifNull check, so it counts as feedback

@@ -14,7 +14,6 @@ import {
   type CreateDatasetWithFilesResponse
 } from '@fastgpt/global/openapi/core/dataset/api';
 import {
-  OwnerRoleVal,
   PerResourceTypeEnum,
   WritePermissionVal
 } from '@fastgpt/global/support/permission/constant';
@@ -22,20 +21,22 @@ import { TeamDatasetCreatePermissionVal } from '@fastgpt/global/support/permissi
 import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
 import {
-  getDefaultEmbeddingModel,
-  getDefaultLLMModel,
-  getDefaultVLMModel,
-  getEmbeddingModel
+  getDefaultEmbeddingModelData,
+  getDefaultLLMModelData,
+  getDefaultVLMModelData,
+  getOptionalEmbeddingModelData,
+  getOptionalLLMModelData,
+  getOptionalVlmModelData
 } from '@fastgpt/service/core/ai/model';
 import { MongoDataset } from '@fastgpt/service/core/dataset/schema';
 import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
 import { checkTeamDatasetLimit } from '@fastgpt/service/support/permission/teamLimit';
 import { authUserPer } from '@fastgpt/service/support/permission/user/auth';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
-import { MongoResourcePermission } from '@fastgpt/service/support/permission/schema';
+import { createResourceDefaultCollaborators } from '@fastgpt/service/support/permission/controller';
 import { getS3AvatarSource } from '@fastgpt/service/common/s3/sources/avatar';
 import { createCollectionAndInsertData } from '@fastgpt/service/core/dataset/collection/controller';
 import { S3PrivateBucket } from '@fastgpt/service/common/s3/buckets/private';
@@ -47,14 +48,13 @@ async function handler(req: ApiRequestProps): Promise<CreateDatasetWithFilesResp
     req,
     bodySchema: CreateDatasetWithFilesBodySchema
   }).body;
-  const {
-    parentId,
-    name,
-    avatar,
-    vectorModel = getDefaultEmbeddingModel()?.model,
-    agentModel = getDefaultLLMModel()?.model,
-    vlmModel = getDefaultVLMModel()?.model
-  } = datasetParams;
+  const { parentId, name, avatar, vectorModelId, agentModelId, vlmModelId } = datasetParams;
+
+  const vectorModelData =
+    getOptionalEmbeddingModelData({ modelId: vectorModelId }) ?? getDefaultEmbeddingModelData();
+  const agentModelData =
+    getOptionalLLMModelData({ modelId: agentModelId }) ?? getDefaultLLMModelData();
+  const vlmModelData = getOptionalVlmModelData({ modelId: vlmModelId }) ?? getDefaultVLMModelData();
 
   const { teamId, tmbId, userId } = parentId
     ? await authDataset({
@@ -84,9 +84,9 @@ async function handler(req: ApiRequestProps): Promise<CreateDatasetWithFilesResp
             name,
             teamId,
             tmbId,
-            vectorModel,
-            agentModel,
-            vlmModel,
+            vectorModelId: vectorModelData.modelId,
+            agentModelId: agentModelData.modelId,
+            ...(vlmModelData?.modelId && { vlmModelId: vlmModelData.modelId }),
             avatar,
             intro: '',
             type: DatasetTypeEnum.dataset
@@ -96,12 +96,11 @@ async function handler(req: ApiRequestProps): Promise<CreateDatasetWithFilesResp
       );
 
       // 2. Create permission
-      await MongoResourcePermission.insertOne({
-        teamId,
+      await createResourceDefaultCollaborators({
+        resource: dataset,
+        resourceType: PerResourceTypeEnum.dataset,
         tmbId,
-        resourceId: dataset._id,
-        permission: OwnerRoleVal,
-        resourceType: PerResourceTypeEnum.dataset
+        session
       });
 
       // 3. Refresh avatar
@@ -154,7 +153,9 @@ async function handler(req: ApiRequestProps): Promise<CreateDatasetWithFilesResp
         datasetId: dataset._id,
         name: dataset.name,
         avatar: dataset.avatar,
-        vectorModel: getEmbeddingModel(dataset.vectorModel)
+        vectorModel: {
+          model: vectorModelData.model
+        }
       };
     });
 

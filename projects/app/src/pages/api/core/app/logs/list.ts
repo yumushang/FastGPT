@@ -1,4 +1,3 @@
-import type { NextApiResponse } from 'next';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
 import { Types } from '@fastgpt/service/common/mongo';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
@@ -14,7 +13,7 @@ import { replaceRegChars } from '@fastgpt/global/common/string/tools';
 import { getLocationFromIp } from '@fastgpt/service/common/geo';
 import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
 import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { AppVersionCollectionName } from '@fastgpt/service/core/app/version/schema';
 import {
@@ -22,11 +21,15 @@ import {
   GetAppChatLogsResponseSchema,
   type getAppChatLogsResponseType
 } from '@fastgpt/global/openapi/core/app/log/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { isUnselectedLogUserFilter } from '@fastgpt/global/core/app/logs/utils';
 
-async function handler(
-  req: ApiRequestProps,
-  _res: NextApiResponse
-): Promise<getAppChatLogsResponseType> {
+const appChatSourceMatch = {
+  $or: [{ sourceType: ChatSourceTypeEnum.app }, { sourceType: { $exists: false } }]
+};
+
+async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType> {
   const {
     appId,
     dateStart,
@@ -38,7 +41,10 @@ async function handler(
     feedbackType,
     unreadOnly,
     errorFilter
-  } = GetAppChatLogsBodySchema.parse(req.body);
+  } = parseApiInput({
+    req,
+    bodySchema: GetAppChatLogsBodySchema
+  }).body;
 
   const { pageSize = 20, offset } = parsePaginationRequest(req);
 
@@ -50,12 +56,18 @@ async function handler(
   await authApp({
     req,
     authToken: true,
+    authApiKey: true,
     appId,
     per: AppReadChatLogPerVal
   });
 
+  if (isUnselectedLogUserFilter(tmbIds, outLinkUids)) {
+    return GetAppChatLogsResponseSchema.parse({ list: [], total: 0 });
+  }
+
   const where = {
     appId: new Types.ObjectId(appId),
+    $and: [appChatSourceMatch],
     // Feedback type filtering (BEFORE pagination for performance)
     ...(feedbackType === 'has_feedback' &&
       !unreadOnly && {
@@ -132,7 +144,16 @@ async function handler(
               {
                 $match: {
                   $expr: {
-                    $and: [{ $eq: ['$appId', '$$appId'] }, { $eq: ['$chatId', '$$chatId'] }]
+                    $and: [
+                      { $eq: ['$appId', '$$appId'] },
+                      { $eq: ['$chatId', '$$chatId'] },
+                      {
+                        $or: [
+                          { $eq: ['$sourceType', ChatSourceTypeEnum.app] },
+                          { $eq: [{ $type: '$sourceType' }, 'missing'] }
+                        ]
+                      }
+                    ]
                   }
                 }
               },
@@ -192,7 +213,16 @@ async function handler(
               {
                 $match: {
                   $expr: {
-                    $and: [{ $eq: ['$appId', '$$appId'] }, { $eq: ['$chatId', '$$chatId'] }]
+                    $and: [
+                      { $eq: ['$appId', '$$appId'] },
+                      { $eq: ['$chatId', '$$chatId'] },
+                      {
+                        $or: [
+                          { $eq: ['$sourceType', ChatSourceTypeEnum.app] },
+                          { $eq: [{ $type: '$sourceType' }, 'missing'] }
+                        ]
+                      }
+                    ]
                   }
                 }
               },

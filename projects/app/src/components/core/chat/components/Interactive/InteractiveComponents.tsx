@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Button, Flex, FormControl, FormErrorMessage } from '@chakra-ui/react';
+import { Box, Flex, FormControl, FormErrorMessage } from '@chakra-ui/react';
 import { Controller, useForm, type UseFormHandleSubmit } from 'react-hook-form';
 import Markdown from '@/components/Markdown';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
@@ -88,16 +88,22 @@ export const FormInputComponent = React.memo(function FormInputComponent({
   SubmitButton: (e: {
     onSubmit: UseFormHandleSubmit<Record<string, any>>;
     isFileUploading: boolean;
+    hasFileError: boolean;
   }) => React.JSX.Element;
 }) {
   const { t } = useTranslation();
 
-  const { handleSubmit, control, watch } = useForm({
+  const { handleSubmit, control, watch, reset } = useForm({
     defaultValues
   });
 
   const runtimeFileUploading = useContextSelector(WorkflowRuntimeContext, (v) => v.fileUploading);
   const formValues = watch();
+  const [fileErrorKeys, setFileErrorKeys] = React.useState<Set<string>>(() => new Set());
+
+  React.useEffect(() => {
+    reset(defaultValues);
+  }, [defaultValues, reset]);
 
   const isFileUploading = React.useMemo(() => {
     if (runtimeFileUploading) return true;
@@ -112,6 +118,20 @@ export const FormInputComponent = React.memo(function FormInputComponent({
       return false;
     });
   }, [inputForm, formValues, runtimeFileUploading]);
+
+  const updateFileError = React.useCallback((key: string, hasError: boolean) => {
+    setFileErrorKeys((currentKeys) => {
+      if (currentKeys.has(key) === hasError) return currentKeys;
+
+      const nextKeys = new Set(currentKeys);
+      if (hasError) {
+        nextKeys.add(key);
+      } else {
+        nextKeys.delete(key);
+      }
+      return nextKeys;
+    });
+  }, []);
 
   return (
     <Box>
@@ -147,10 +167,23 @@ export const FormInputComponent = React.memo(function FormInputComponent({
               render={({ field: { onChange, value }, fieldState: { error } }) => {
                 return (
                   <FormControl isInvalid={!!error}>
-                    <Flex alignItems={'center'} mb={1}>
-                      {input.required && <Box color={'red.500'}>*</Box>}
-                      <FormLabel>{input.label}</FormLabel>
-                      {input.description && <QuestionTip ml={1} label={input.description} />}
+                    <Flex alignItems={'flex-start'} mb={1} minW={0}>
+                      {input.required && (
+                        <Box color={'red.500'} flexShrink={0}>
+                          *
+                        </Box>
+                      )}
+                      <FormLabel
+                        minW={0}
+                        flexShrink={1}
+                        whiteSpace={'pre-wrap'}
+                        wordBreak={'break-word'}
+                      >
+                        {input.label}
+                      </FormLabel>
+                      {input.description && (
+                        <QuestionTip flexShrink={0} ml={1} mt={'2px'} label={input.description} />
+                      )}
                     </Flex>
                     <InputRender
                       {...input}
@@ -160,6 +193,7 @@ export const FormInputComponent = React.memo(function FormInputComponent({
                       isDisabled={submitted}
                       isInvalid={!!error}
                       isRichText={false}
+                      onFileErrorChange={(hasError) => updateFileError(input.key, hasError)}
                     />
                     {error && error.message && <FormErrorMessage>{error.message}</FormErrorMessage>}
                   </FormControl>
@@ -172,7 +206,11 @@ export const FormInputComponent = React.memo(function FormInputComponent({
 
       {!submitted && (
         <Flex justifyContent={'flex-end'} mt={4}>
-          <SubmitButton onSubmit={handleSubmit} isFileUploading={isFileUploading} />
+          <SubmitButton
+            onSubmit={handleSubmit}
+            isFileUploading={isFileUploading}
+            hasFileError={fileErrorKeys.size > 0}
+          />
         </Flex>
       )}
     </Box>

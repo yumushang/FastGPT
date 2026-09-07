@@ -1,12 +1,17 @@
-import { ModalBody, Flex, Box, VStack, Button } from '@chakra-ui/react';
-import MyModal from '@fastgpt/web/components/common/MyModal';
-import MyIcon from '@fastgpt/web/components/common/Icon';
+import { Box, Button, Flex, VStack } from '@chakra-ui/react';
+import HighlightModal from '@fastgpt/web/components/v2/common/MyModal/HighlightModal';
 import { getDocPath } from '@/web/common/system/doc';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
 
-const ProModal = (props: { isOpen?: boolean; onClose?: () => void }) => {
+type ProModalProps = {
+  isOpen?: boolean;
+  onClose?: () => void;
+  forceShow?: boolean;
+};
+
+const ProModal = (props: ProModalProps) => {
   const { t } = useTranslation();
   const { feConfigs } = useSystemStore();
 
@@ -14,92 +19,62 @@ const ProModal = (props: { isOpen?: boolean; onClose?: () => void }) => {
 
   const openModal = props?.isOpen ?? isOpen;
   const onClose = props?.onClose ?? (() => setIsOpen(false));
+  const { forceShow = false } = props;
 
-  return feConfigs?.isPlus ? null : (
-    <MyModal
+  const onPrimaryClick = () => {
+    window.open(getDocPath('/guide/version/commercial'), '_blank');
+  };
+
+  return feConfigs?.isPlus && !forceShow ? null : (
+    <HighlightModal
       isOpen={openModal}
       onClose={onClose}
-      showCloseButton={false}
-      w={'400px'}
-      minH={'392px'}
-    >
-      <ModalBody
-        userSelect={'none'}
-        py={8}
-        _before={{
-          content: '""',
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          w: '100%',
-          h: '100%',
-          bgImage: 'url(/imgs/proModalBg.png)',
-          bgSize: 'cover',
-          bgPosition: 'center',
-          bgRepeat: 'no-repeat',
-          opacity: 0.48,
-          zIndex: -10
-        }}
-        display={'flex'}
-        justifyContent={'center'}
-      >
-        <VStack gap={4} w={'300px'} px={1}>
-          <MyIcon name={'star'} w={8} />
-          <Box
-            color={'myGray.900'}
-            fontSize="20px"
-            fontWeight={'medium'}
-            lineHeight="26px"
-            letterSpacing="0.15px"
-          >
-            {t('app:pro_modal_title')}
-          </Box>
-          <Box
-            color={'myGray.900'}
-            fontSize="18px"
-            fontWeight={'medium'}
-            lineHeight="26px"
-            letterSpacing="0.15px"
-          >
-            {t('app:pro_modal_subtitle')}
-          </Box>
-          <Flex
-            flexDirection={'column'}
-            gap={'10px'}
+      title={t('common:pro_modal_title')}
+      footer={
+        <Flex gap={3} flexDirection={'column'} w={'full'}>
+          <Button
             w={'full'}
-            color={'myGray.900'}
-            fontSize={'14px'}
+            h={'48px'}
+            borderRadius={'10px'}
+            onClick={onPrimaryClick}
+            fontSize={'16px'}
+            fontWeight={'medium'}
           >
-            <Box>{t('app:pro_modal_feature_1')}</Box>
-            <Box>{t('app:pro_modal_feature_2')}</Box>
-            <Box>{t('app:pro_modal_feature_3')}</Box>
-            <Box>
-              <MyIcon name={'common/ellipsis'} w={'18px'} />
-            </Box>
-          </Flex>
-          <Flex gap={'3'} flexDirection={'column'} w={'full'}>
-            <Button
-              w={'full'}
-              onClick={() => {
-                window.open(getDocPath('/guide/version/commercial'), '_blank');
-              }}
-              fontSize={'14px'}
-            >
-              {t('app:pro_modal_unlock_button')}
-            </Button>
-          </Flex>
-          <Flex
-            rounded={'md'}
-            fontSize={'12px'}
-            color={'myGray.600'}
-            cursor={'pointer'}
+            {t('common:pro_modal_unlock_button')}
+          </Button>
+          <Button
+            w={'full'}
+            h={'48px'}
+            borderRadius={'10px'}
+            variant={'whiteBase'}
+            fontSize={'16px'}
+            fontWeight={'medium'}
+            borderColor={'#E4E7ED'}
+            boxShadow={'0 2px 5px rgba(15, 23, 42, 0.06)'}
             onClick={onClose}
           >
-            {t('app:pro_modal_later_button')}
-          </Flex>
-        </VStack>
-      </ModalBody>
-    </MyModal>
+            {t('common:pro_modal_later_button')}
+          </Button>
+        </Flex>
+      }
+    >
+      <VStack
+        w={'full'}
+        color={'myGray.900'}
+        fontSize={'18px'}
+        alignItems={'center'}
+        gap={0}
+        mt={7}
+      >
+        <Box lineHeight={'26px'}>{t('common:pro_modal_subtitle')}</Box>
+        <Box lineHeight={'26px'}>{t('common:pro_modal_feature_1')}</Box>
+        <Box lineHeight={'26px'}>{t('common:pro_modal_feature_2')}</Box>
+        <Box lineHeight={'26px'}>{t('common:pro_modal_feature_3')}</Box>
+        <Box color={'myGray.500'} letterSpacing={'2px'} lineHeight={'26px'}>
+          ......
+        </Box>
+      </VStack>
+    </HighlightModal>
   );
 };
 

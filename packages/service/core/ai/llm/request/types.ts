@@ -11,7 +11,7 @@ import type {
   StreamResponseType,
   UnStreamResponseType
 } from '@fastgpt/global/core/ai/llm/type';
-import type { LLMModelItemType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
 import type { AIApiRequestMeta } from '../../config';
 import type { ToolCallEventType } from '../toolCall/type';
@@ -36,7 +36,7 @@ export type LLMRequestBodyType<T> = Omit<
   T,
   'model' | 'stop' | 'response_format' | 'messages' | 'tools'
 > & {
-  model: string | LLMModelItemType;
+  model: LLMSystemModelDataType;
   stop?: string;
   response_format?: {
     type?: string;
@@ -49,6 +49,9 @@ export type LLMRequestBodyType<T> = Omit<
   retainDatasetCite?: boolean;
   toolCallMode?: 'toolChoice' | 'prompt';
   useVision?: boolean;
+  useAudio?: boolean;
+  useVideo?: boolean;
+  extractFiles?: boolean;
   requestOrigin?: string;
 };
 
@@ -61,8 +64,14 @@ export type CreateLLMResponseProps<
   // 上层中断时返回 true。底层会 abort stream 并用 finish_reason=close 表达正常关闭。
   isAborted?: () => boolean | undefined | null;
   custonHeaders?: Record<string, string>;
+  // 单次底层模型请求超时时间。辅助类 LLM 请求可传较短值，避免阻塞主链路。
+  timeout?: number;
   // finish_reason=length 时最多连续请求的次数，避免模型一直返回 length 造成死循环。
   maxContinuations?: number;
+  // 是否保存 LLM 请求响应详情。内部辅助调用可关闭，避免污染用户可见的请求记录。
+  saveLLMResponseRecord?: boolean;
+  // 请求详情会通过 requestId 暴露给前端查询，必须绑定团队后才能落库。
+  teamId: string;
 } & ResponseEvents;
 
 export type LLMResponse = {
@@ -80,6 +89,7 @@ export type LLMResponse = {
     // 只给上层计费判断使用，不保存到 LLM request detail。
     usedUserOpenAIKey: boolean;
   };
+  rawUsage?: LLMAccumulatedUsage;
 
   // 原始请求 messages 与最终 assistantMessage，供上层继续拼完整对话上下文。
   requestMessages: ChatCompletionMessageParam[];
@@ -109,7 +119,7 @@ export type LLMAccumulatedUsage = {
 };
 
 export type CreateChatCompletionProps = {
-  modelData: LLMModelItemType;
+  modelData: LLMSystemModelDataType;
   body: ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming;
   userKey?: OpenaiAccountType;
   timeout?: number;

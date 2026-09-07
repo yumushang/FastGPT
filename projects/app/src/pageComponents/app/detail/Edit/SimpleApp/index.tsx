@@ -2,12 +2,10 @@ import React, { useState } from 'react';
 import Header from '../FormComponent/Header';
 import { useContextSelector } from 'use-context-selector';
 import { AppContext, TabEnum } from '../../context';
-import dynamic from 'next/dynamic';
 import { Box, Flex } from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
 import { useSimpleAppSnapshots } from '../FormComponent/useSnapshots';
 import { useDebounceEffect, useMount } from 'ahooks';
-import { v1Workflow2V2 } from '@/web/core/workflow/adapt';
 import { defaultAppSelectFileConfig } from '@fastgpt/global/core/app/constants';
 import { form2AppWorkflow, appWorkflow2Form } from './utils';
 import PublishChannel from '../../Publish';
@@ -23,13 +21,6 @@ const SimpleEdit = () => {
   );
 
   const [appForm, setAppForm] = useState(() => {
-    if (appDetail.version !== 'v2') {
-      return appWorkflow2Form({
-        nodes: v1Workflow2V2((appDetail.modules || []) as any)?.nodes,
-        chatConfig: appDetail.chatConfig
-      });
-    }
-
     if (past.length === 0) {
       return appWorkflow2Form({
         nodes: appDetail.modules,
@@ -70,7 +61,14 @@ const SimpleEdit = () => {
   );
 
   return (
-    <Flex h={'100%'} flexDirection={'column'} px={[3, 0]} pr={[3, 3]}>
+    <Flex
+      h={'100%'}
+      minH={0}
+      flexDirection={'column'}
+      pr={[3, 3]}
+      borderLeft={currentTab === TabEnum.publish ? '1px solid' : undefined}
+      borderColor={'myGray.200'}
+    >
       <Header
         appForm={appForm}
         forbiddenSaveSnapshot={forbiddenSaveSnapshot}
@@ -84,7 +82,16 @@ const SimpleEdit = () => {
       {currentTab === TabEnum.appEdit ? (
         <Edit appForm={appForm} setAppForm={setAppForm} setPast={setPast} />
       ) : (
-        <Box flex={'1 0 0'} h={0} mt={[4, 0]} mb={[2, 4]} bg={'white'} borderRadius={'lg'}>
+        <Box
+          flex={'1 0 0'}
+          h={0}
+          minH={0}
+          overflowY={'auto'}
+          overflowX={'hidden'}
+          mt={[4, 0]}
+          mb={[2, 4]}
+          bg={'white'}
+        >
           {currentTab === TabEnum.publish && <PublishChannel />}
           {currentTab === TabEnum.logs && <Logs />}
         </Box>

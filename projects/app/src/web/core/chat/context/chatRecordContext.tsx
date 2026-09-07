@@ -7,13 +7,20 @@ import { getChatRecords } from '../record/api';
 import { ChatStatusEnum } from '@fastgpt/global/core/chat/constants';
 import { type BoxProps } from '@chakra-ui/react';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
-import type { GetPaginationRecordsBodyType } from '@fastgpt/global/openapi/core/chat/record/api';
 import type { GetRecordsV2ResponseType } from '@fastgpt/global/openapi/core/chat/record/api';
+import { hasChatAuthTargetInput, type ChatAuthTargetInput } from '../utils';
+import { useMemoizedFn } from 'ahooks';
+
+type ChatRecordProviderParams = ChatAuthTargetInput & {
+  chatId?: string;
+  pageSize?: number | string;
+} & Record<string, unknown>;
 
 type ChatRecordContextType = {
   isLoadingRecords: boolean;
   chatRecords: ChatSiteItemType[];
   setChatRecords: React.Dispatch<React.SetStateAction<ChatSiteItemType[]>>;
+  refreshChatRecords: () => Promise<ChatSiteItemType[]>;
   isChatRecordsLoaded: boolean;
   totalRecordsCount: number;
   ScrollData: ({
@@ -29,18 +36,18 @@ type ChatRecordContextType = {
 export const ChatRecordContext = createContext<ChatRecordContextType>({
   isLoadingRecords: false,
   chatRecords: [],
-  setChatRecords: function (value: React.SetStateAction<ChatSiteItemType[]>): void {
+  setChatRecords: function (_value: React.SetStateAction<ChatSiteItemType[]>): void {
     throw new Error('Function not implemented.');
   },
+  refreshChatRecords: async () => [],
   isChatRecordsLoaded: false,
 
-  ScrollData: function ({
-    children,
-    ...props
-  }: {
-    children: React.ReactNode;
-    ScrollContainerRef?: React.RefObject<HTMLDivElement>;
-  } & BoxProps): React.JSX.Element {
+  ScrollData: function (
+    _props: {
+      children: React.ReactNode;
+      ScrollContainerRef?: React.RefObject<HTMLDivElement>;
+    } & BoxProps
+  ): React.JSX.Element {
     throw new Error('Function not implemented.');
   },
   totalRecordsCount: 0,
@@ -57,10 +64,10 @@ const ChatRecordContextProvider = ({
   fetchFn
 }: {
   children: ReactNode;
-  params: GetPaginationRecordsBodyType;
+  params: ChatRecordProviderParams;
   feedbackRecordId?: string;
   fetchFn?: (
-    data: LinkedPaginationProps<GetPaginationRecordsBodyType>
+    data: LinkedPaginationProps<ChatRecordProviderParams>
   ) => Promise<GetRecordsV2ResponseType>;
 }) => {
   const [isChatRecordsLoaded, setIsChatRecordsLoaded] = useState(false);
@@ -73,12 +80,13 @@ const ChatRecordContextProvider = ({
     setDataList: setChatRecords,
     ScrollData,
     isLoading,
-    itemRefs
+    itemRefs,
+    loadInitData
   } = useLinkedScroll(
     async (
-      data: LinkedPaginationProps<GetPaginationRecordsBodyType>
+      data: LinkedPaginationProps<ChatRecordProviderParams>
     ): Promise<LinkedListResponse<ChatSiteItemType>> => {
-      if (!data.appId) {
+      if (!fetchFn && !hasChatAuthTargetInput(data)) {
         return {
           list: [],
           hasMorePrev: false,
@@ -112,17 +120,32 @@ const ChatRecordContextProvider = ({
     }
   );
 
+  /** 重新加载最新记录窗口，并同步 useLinkedScroll 内部的分页锚点。 */
+  const refreshChatRecords = useMemoizedFn(async () => {
+    const response = await loadInitData({ refresh: true, scrollWhenFinish: false });
+    return response?.list ?? [];
+  });
+
   const contextValue = useMemoEnhance(() => {
     return {
       isLoadingRecords: isLoading,
       chatRecords,
       setChatRecords,
+      refreshChatRecords,
       ScrollData,
       isChatRecordsLoaded,
       totalRecordsCount,
       itemRefs
     };
-  }, [isLoading, chatRecords, setChatRecords, totalRecordsCount, ScrollData, isChatRecordsLoaded]);
+  }, [
+    isLoading,
+    chatRecords,
+    setChatRecords,
+    refreshChatRecords,
+    totalRecordsCount,
+    ScrollData,
+    isChatRecordsLoaded
+  ]);
   return <ChatRecordContext.Provider value={contextValue}>{children}</ChatRecordContext.Provider>;
 };
 

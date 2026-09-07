@@ -5,7 +5,8 @@ import { BoolSchema, IntSchema, UrlSchema } from '@fastgpt/global/common/zod';
 export const appEnv = createEnv({
   server: {
     DEFAULT_ROOT_PSW: z.string().default('123456'),
-    CONFIG_JSON_PATH: z.string().optional(),
+    SSE_MCP_SERVER_PROXY_ENDPOINT: UrlSchema.optional(),
+
     SYSTEM_NAME: z.string().default('AI'),
     SYSTEM_DESCRIPTION: z.string().default(''),
     SYSTEM_FAVICON: z.string().default(''),
@@ -15,15 +16,22 @@ export const appEnv = createEnv({
     SHOW_COUPON: BoolSchema.default(false),
     SHOW_DISCOUNT_COUPON: BoolSchema.default(false),
     HIDE_CHAT_COPYRIGHT_SETTING: BoolSchema.default(false),
+    WECOM_LOGIN_AUTO_REDIRECT: BoolSchema.default(false),
     AGENT_SANDBOX_FREE_TIP: BoolSchema.default(false),
+    OPENAPI_KEY_MAX_COUNT: IntSchema.min(1).default(100),
 
-    MARKETPLACE_URL: UrlSchema.default('https://marketplace.fastgpt.cn'),
+    MARKETPLACE_URL: UrlSchema.default('https://v2.marketplace.fastgpt.cn'),
     PASSWORD_EXPIRED_MONTH: IntSchema.optional()
   },
   emptyStringAsUndefined: true,
   runtimeEnv: process.env,
   onValidationError(issues) {
-    const paths = issues.map((issue) => issue.path).join(', ');
-    throw new Error(`Invalid app environment variables. Please check: ${paths}\n`);
+    const details = issues
+      .map((issue) => {
+        const path = issue.path?.join('.') || '<root>';
+        return `${path}: ${issue.message}`;
+      })
+      .join('\n');
+    throw new Error(`Invalid app environment variables:\n${details}\n`);
   }
 });

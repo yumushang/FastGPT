@@ -11,11 +11,6 @@
       "cache": false,
       "persistent": true
     },
-    "dev:pro": {
-      "with": ["@fastgpt/admin#dev"],
-      "cache": false,
-      "persistent": true
-    },
     "build": {
       "dependsOn": ["^build"],
       "outputs": [".next/**", "dist/**", "worker/**"]
@@ -24,6 +19,7 @@
       "outputs": []
     },
     "test": {
+      "passThroughEnv": ["CI", "FASTGPT_TEST_MONGODB_URI", "FASTGPT_TEST_MAX_WORKERS"],
       "outputs": ["coverage/**", "test-results.json"]
     },
     "test:integration": {

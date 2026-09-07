@@ -1,15 +1,16 @@
 import type { OpenAPIPath } from '../../../type';
-import { TagsMap } from '../../../tag';
+import { DevApiTagsMap } from '../../../tag';
+import { SystemOpenApiTagMap } from '../../../tag';
 import {
   DeleteCollectionBodySchema,
   DeleteCollectionQuerySchema,
-  ExportCollectionBodySchema,
+  ExportCollectionBodyRawSchema,
   GetCollectionDetailQuerySchema,
   GetCollectionPathsQuerySchema,
   GetCollectionTrainingDetailQuerySchema,
   GetCollectionTrainingDetailResponseSchema,
   ListCollectionV2BodySchema,
-  ReadCollectionSourceBodySchema,
+  ReadCollectionSourceBodyRawSchema,
   ScrollCollectionsBodySchema,
   SyncCollectionBodySchema,
   UpdateDatasetCollectionBodySchema
@@ -19,10 +20,10 @@ import { DatasetCollectionCreatePath } from './createPath';
 export const DatasetCollectionPath: OpenAPIPath = {
   ...DatasetCollectionCreatePath,
   '/core/dataset/collection/delete': {
-    delete: {
+    post: {
       summary: '删除集合',
       description: '删除一个或多个集合及其子集合，支持通过 query.id 或 body.collectionIds 指定',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection, SystemOpenApiTagMap.datasetCollection],
       requestParams: {
         query: DeleteCollectionQuerySchema
       },
@@ -44,7 +45,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     get: {
       summary: '获取集合详情',
       description: '获取集合详细信息，包括索引数量、错误数量、文件信息等',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection, SystemOpenApiTagMap.datasetCollection],
       requestParams: {
         query: GetCollectionDetailQuerySchema
       },
@@ -59,7 +60,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     post: {
       summary: '获取集合列表（分页）',
       description: '获取数据集集合列表，支持分页、搜索、标签过滤',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection, SystemOpenApiTagMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
@@ -77,8 +78,9 @@ export const DatasetCollectionPath: OpenAPIPath = {
   '/core/dataset/collection/scrollList': {
     post: {
       summary: '获取数据集集合列表（滚动分页）',
-      description: '获取数据集集合列表（滚动分页）',
-      tags: [TagsMap.datasetCollection],
+      description: '已废弃：获取数据集集合列表（滚动分页）。请改用 /core/dataset/collection/listV2',
+      deprecated: true,
+      tags: [DevApiTagsMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
@@ -97,7 +99,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     post: {
       summary: '更新数据集集合信息',
       description: '更新数据集集合信息，支持通过集合ID或数据集ID+外部文件ID定位集合',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection, SystemOpenApiTagMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
@@ -116,7 +118,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     get: {
       summary: '获取集合面包屑路径',
       description: '从指定集合向上递归获取父级路径链，用于面包屑导航',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection],
       requestParams: {
         query: GetCollectionPathsQuerySchema
       },
@@ -131,11 +133,11 @@ export const DatasetCollectionPath: OpenAPIPath = {
     post: {
       summary: '获取集合资源 URL',
       description: '获取集合原始文件的访问 URL，支持直接鉴权和对话中鉴权两种模式',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
-            schema: ReadCollectionSourceBodySchema
+            schema: ReadCollectionSourceBodyRawSchema
           }
         }
       },
@@ -150,7 +152,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     post: {
       summary: '同步集合',
       description: '重新拉取集合原始内容并更新数据，支持链接类型和 API 数据集类型',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
@@ -169,11 +171,11 @@ export const DatasetCollectionPath: OpenAPIPath = {
     post: {
       summary: '下载集合的所有数据块',
       description: '下载集合的所有数据块',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection],
       requestBody: {
         content: {
           'application/json': {
-            schema: ExportCollectionBodySchema
+            schema: ExportCollectionBodyRawSchema
           }
         }
       },
@@ -188,7 +190,7 @@ export const DatasetCollectionPath: OpenAPIPath = {
     get: {
       summary: '获取集合训练详情',
       description: '获取集合的训练状态，包括排队中、训练中、错误数量及已完成的数据量',
-      tags: [TagsMap.datasetCollection],
+      tags: [DevApiTagsMap.datasetCollection],
       requestParams: {
         query: GetCollectionTrainingDetailQuerySchema
       },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ChatSchema,
   ToolModuleResponseItemSchema,
   UserChatItemFileItemSchema,
   UserChatItemValueItemSchema,
@@ -12,7 +13,66 @@ import {
   ToolCiteLinksSchema,
   RuntimeUserPromptSchema
 } from '@fastgpt/global/core/chat/type';
-import { ChatRoleEnum, ChatFileTypeEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  ChatRoleEnum,
+  ChatFileTypeEnum,
+  ChatGenerateStatusEnum,
+  ChatSourceEnum
+} from '@fastgpt/global/core/chat/constants';
+
+describe('ChatSchema', () => {
+  const chatId = 'chat-1';
+  const objectId = '68ee0bd23d17260b7829b137';
+
+  it('should validate chat document and coerce date fields', () => {
+    const result = ChatSchema.safeParse({
+      _id: objectId,
+      chatId,
+      userId: objectId,
+      teamId: objectId,
+      tmbId: objectId,
+      appId: objectId,
+      createTime: '2026-05-24T00:00:00.000Z',
+      updateTime: new Date('2026-05-24T00:00:01.000Z'),
+      title: '历史记录',
+      customTitle: '',
+      top: false,
+      source: ChatSourceEnum.online,
+      variables: {},
+      errorCount: 0,
+      chatGenerateStatus: ChatGenerateStatusEnum.done,
+      hasBeenRead: false,
+      deleteTime: null
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.createTime).toBeInstanceOf(Date);
+      expect(result.data.deleteTime).toBeNull();
+    }
+  });
+
+  it('should reject invalid chat source', () => {
+    const result = ChatSchema.safeParse({
+      _id: objectId,
+      chatId,
+      userId: objectId,
+      teamId: objectId,
+      tmbId: objectId,
+      appId: objectId,
+      createTime: new Date(),
+      updateTime: new Date(),
+      title: '历史记录',
+      customTitle: '',
+      top: false,
+      source: 'invalid',
+      variables: {},
+      hasBeenRead: false
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
 
 describe('ToolModuleResponseItemSchema', () => {
   it('should validate valid tool response', () => {
@@ -245,6 +305,73 @@ describe('AIChatItemValueSchema', () => {
 
   it('should reject non-string context checkpoint value', () => {
     expect(ContextCheckpointValueSchema.safeParse({ content: 'bad' }).success).toBe(false);
+  });
+
+  it('should migrate legacy plan names and strip legacy fields', () => {
+    const result = AIChatItemValueSchema.parse({
+      plan: {
+        planId: 'legacy-plan',
+        task: 'Legacy plan',
+        description: 'Legacy description',
+        background: 'Legacy background',
+        steps: [
+          {
+            id: 'legacy-step',
+            title: 'Legacy step',
+            description: 'Legacy step description',
+            status: 'done',
+            acceptanceCriteria: ['Legacy criterion'],
+            outputSummary: 'Legacy output'
+          }
+        ]
+      }
+    });
+
+    expect(result.plan).toEqual({
+      planId: 'legacy-plan',
+      name: 'Legacy plan',
+      description: 'Legacy description',
+      steps: [
+        {
+          id: 'legacy-step',
+          name: 'Legacy step',
+          description: 'Legacy step description',
+          status: 'done'
+        }
+      ]
+    });
+  });
+
+  it('should prefer current plan names when legacy fields coexist', () => {
+    const result = AIChatItemValueSchema.parse({
+      plan: {
+        planId: 'current-plan',
+        name: 'Current plan',
+        task: 'Legacy plan',
+        description: null,
+        steps: [
+          {
+            id: 'current-step',
+            name: 'Current step',
+            title: 'Legacy step',
+            status: 'pending'
+          }
+        ]
+      }
+    });
+
+    expect(result.plan).toEqual({
+      planId: 'current-plan',
+      name: 'Current plan',
+      description: null,
+      steps: [
+        {
+          id: 'current-step',
+          name: 'Current step',
+          status: 'pending'
+        }
+      ]
+    });
   });
 
   it('should strip legacy stepId from AI chat value', () => {

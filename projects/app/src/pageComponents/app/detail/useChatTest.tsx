@@ -10,7 +10,6 @@ import { type StoreEdgeItemType } from '@fastgpt/global/core/workflow/type/edge'
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import dynamic from 'next/dynamic';
-import { Box } from '@chakra-ui/react';
 import { type AppChatConfigType } from '@fastgpt/global/core/app/type';
 import ChatBox from '@/components/core/chat/ChatContainer/ChatBox';
 import { useChatStore } from '@/web/core/chat/context/useChatStore';
@@ -19,6 +18,9 @@ import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { getInitChatInfo } from '@/web/core/chat/api';
 import { useTranslation } from 'next-i18next';
 import { ChatTypeEnum } from '@/components/core/chat/ChatContainer/ChatBox/constants';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { getAppChatSourceKey } from '@/web/core/chat/utils';
+import { Box, type BoxProps } from '@chakra-ui/react';
 
 const PluginRunBox = dynamic(() => import('@/components/core/chat/ChatContainer/PluginRunBox'));
 
@@ -26,12 +28,14 @@ export const useChatTest = ({
   nodes,
   edges,
   chatConfig = {},
-  isReady
+  isReady,
+  boxBodyProps
 }: {
   nodes: StoreNodeItemType[];
   edges: StoreEdgeItemType[];
   chatConfig: AppChatConfigType;
   isReady: boolean;
+  boxBodyProps?: BoxProps;
 }) => {
   const { t } = useTranslation();
   const { userInfo } = useUserStore();
@@ -77,6 +81,7 @@ export const useChatTest = ({
   const clearChatRecords = useContextSelector(ChatItemContext, (v) => v.clearChatRecords);
 
   const variableList = useMemo(() => chatConfig.variables, [chatConfig.variables]);
+  const appSourceKey = useMemo(() => getAppChatSourceKey(appId), [appId]);
 
   const pluginInputs = useMemo(() => {
     return nodes.find((node) => node.flowNodeType === FlowNodeTypeEnum.pluginInput)?.inputs || [];
@@ -84,15 +89,16 @@ export const useChatTest = ({
 
   /**
    * 同步测试对话的基础上下文。
-   * ChatBox 的刷新恢复依赖 chatBoxData.appId/chatId 与当前 props 完全一致，否则不会触发 enableAutoResume。
+   * ChatBox 的刷新恢复依赖 chatBoxData.sourceKey/chatId 与当前 props 完全一致，否则不会触发 enableAutoResume。
    */
   useEffect(() => {
     setChatBoxData((prev) => {
-      const isSameChat = prev.appId === appId && prev.chatId === chatId;
+      const isSameChat = prev.sourceKey === appSourceKey && prev.chatId === chatId;
 
       return {
         ...prev,
-        userAvatar: userInfo?.avatar,
+        userAvatar: userInfo?.avatar ?? undefined,
+        sourceKey: appSourceKey,
         appId,
         chatId,
         chatGenerateStatus: isSameChat ? prev.chatGenerateStatus : undefined,
@@ -111,6 +117,7 @@ export const useChatTest = ({
     appDetail.name,
     appDetail.type,
     appId,
+    appSourceKey,
     chatId,
     chatConfig,
     pluginInputs,
@@ -133,7 +140,8 @@ export const useChatTest = ({
        */
       setChatBoxData((prev) => ({
         ...prev,
-        appId: res.appId || appId,
+        appId,
+        sourceKey: getAppChatSourceKey(appId),
         chatId: res.chatId || chatId,
         title: res.title,
         chatGenerateStatus: res.chatGenerateStatus,
@@ -166,10 +174,19 @@ export const useChatTest = ({
 
   const CustomChatContainer = useMemoizedFn(() =>
     appDetail.type === AppTypeEnum.workflowTool ? (
-      <Box p={5} pb={16}>
+      <Box
+        p={5}
+        h={'100%'}
+        minH={0}
+        minW={0}
+        overflowY={'auto'}
+        display={'flex'}
+        flexDirection={'column'}
+      >
         <PluginRunBox
           appId={appId}
           chatId={chatId}
+          fileUploadMode="draft"
           onNewChat={restartChat}
           onStartChat={startChat}
         />
@@ -177,11 +194,19 @@ export const useChatTest = ({
     ) : (
       <ChatBox
         isReady={isReady}
-        appId={appId}
+        sourceTarget={{ sourceType: ChatSourceTypeEnum.app, sourceId: appId }}
         chatId={chatId}
-        showMarkIcon
+        boxBodyProps={boxBodyProps}
+        features={{
+          mark: true,
+          autoResume: true,
+          quickReplies: true,
+          inputGuide: true,
+          voice: true,
+          tts: true,
+          sandbox: true
+        }}
         chatType={ChatTypeEnum.test}
-        enableAutoResume
         onStartChat={startChat}
       />
     )

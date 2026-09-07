@@ -1,51 +1,43 @@
-import type { NextApiResponse } from 'next';
 import { NextAPI } from '@/service/middleware/entry';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
-import { MongoSandboxInstance } from '@fastgpt/service/core/ai/sandbox/schema';
+import { type ApiRequestProps } from '@fastgpt/next/type';
+import { authSandboxSession } from '@/service/core/sandbox/auth';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   SandboxCheckExistBodySchema,
+  SandboxCheckExistResponseSchema,
   type SandboxCheckExistResponse
 } from '@fastgpt/global/openapi/core/ai/sandbox/api';
+import { checkSandboxSessionExist } from '@fastgpt/service/core/ai/sandbox/interface/session';
+import { buildSandboxClientQueryFromChatSource } from '@fastgpt/service/core/ai/sandbox/interface/runtime';
+import { resolveSandboxSessionAvailability } from '@/service/core/sandbox/access';
 
-async function handler(
-  req: ApiRequestProps,
-  res: NextApiResponse<SandboxCheckExistResponse>
-): Promise<SandboxCheckExistResponse> {
-  if (!global.feConfigs?.show_agent_sandbox) {
-    return {
-      exists: false
-    };
-  }
-
-  // 解析请求体
-  const body = parseApiInput({ req, bodySchema: SandboxCheckExistBodySchema }).body;
-  const { appId, chatId, outLinkAuthData } = body;
-
-  // 统一鉴权
-  const { uid } = await authChatCrud({
+async function handler(req: ApiRequestProps): Promise<SandboxCheckExistResponse> {
+  const { sourceType, sourceId, chatId, outLinkAuthData } = parseApiInput({
     req,
-    authToken: true,
-    authApiKey: true,
-    appId,
+    bodySchema: SandboxCheckExistBodySchema
+  }).body;
+
+  const authResult = await authSandboxSession({
+    req,
+    sourceType,
+    sourceId,
     chatId,
-    ...outLinkAuthData
+    outLinkAuthData
+  });
+  const { uid, sourceType: resolvedSourceType, sourceId: resolvedSourceId } = authResult;
+  const availability = await resolveSandboxSessionAvailability(authResult);
+
+  const sandboxQuery = buildSandboxClientQueryFromChatSource({
+    sourceType: resolvedSourceType,
+    sourceId: resolvedSourceId,
+    userId: uid,
+    chatId
   });
 
-  // 检查沙盒是否存在
-  const sandboxInstance = await MongoSandboxInstance.findOne(
-    {
-      appId,
-      userId: uid,
-      chatId
-    },
-    '_id'
-  ).lean();
-
-  return {
-    exists: !!sandboxInstance
-  };
+  return SandboxCheckExistResponseSchema.parse({
+    exists: await checkSandboxSessionExist(sandboxQuery),
+    unavailableReason: availability.available ? undefined : availability.reason
+  });
 }
 
 export default NextAPI(handler);

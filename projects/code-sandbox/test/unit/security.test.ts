@@ -12,15 +12,16 @@
  */
 import { afterEach, describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { ProcessPool } from '../../src/pool/process-pool';
-import { PythonProcessPool } from '../../src/pool/python-process-pool';
+import { PythonIsolatedRunner } from '../../src/isolated/python-isolated-runner';
+import { CustomModuleProcessPool } from '../helpers/custom-process-pool';
 
 let jsPool: ProcessPool;
-let pyPool: PythonProcessPool;
+let pyPool: PythonIsolatedRunner;
 
 beforeAll(async () => {
   jsPool = new ProcessPool(1);
   await jsPool.init();
-  pyPool = new PythonProcessPool(1);
+  pyPool = new PythonIsolatedRunner(1);
   await pyPool.init();
 });
 
@@ -63,6 +64,37 @@ describe('模块拦截', () => {
         variables: {}
       });
       expect(result.success).toBe(false);
+    });
+
+    it('显式加入白名单后允许 Node 内置模块', async () => {
+      const pool = new CustomModuleProcessPool('JS', [
+        'fs',
+        'node:fs',
+        'fs/promises',
+        'child_process',
+        'http',
+        'url',
+        'lodash'
+      ]);
+      await pool.init();
+      try {
+        const payloads = [
+          `async function main() { const fs = require('fs'); return { ok: typeof fs.readFileSync === 'function' }; }`,
+          `async function main() { const fs = require('node:fs'); return { ok: typeof fs.readFileSync === 'function' }; }`,
+          `async function main() { const fs = require('fs/promises'); return { ok: typeof fs.readFile === 'function' }; }`,
+          `async function main() { const cp = require('child_process'); return { ok: typeof cp.execFile === 'function' }; }`,
+          `async function main() { const http = require('http'); return { ok: typeof http.request === 'function' }; }`,
+          `async function main() { const url = require('url'); const parsed = url.parse('https://example.com/a?b=1', true); return { ok: parsed.hostname === 'example.com' && parsed.query.b === '1' }; }`
+        ];
+
+        for (const code of payloads) {
+          const result = await pool.execute({ code, variables: {} });
+          expect(result.success).toBe(true);
+          expect(result.data?.codeReturn.ok).toBe(true);
+        }
+      } finally {
+        await pool.shutdown();
+      }
     });
 
     it('阻止 require https', async () => {
@@ -570,7 +602,7 @@ def main():
     });
 
     // --- exec/eval 逃逸 ---
-    it('exec 中导入危险模块被 __import__ hook 拦截', async () => {
+    it('exec 中导入危险模块在预检阶段被拒绝', async () => {
       const result = await runner.execute({
         code: `
 def main():
@@ -582,8 +614,8 @@ def main():
 `,
         variables: {}
       });
-      expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.escaped).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/exec|not allowed/i);
     });
 
     it('exec 字符串拼接绕过预检（运行时拦截兜底）', async () => {
@@ -615,11 +647,11 @@ def main():
 `,
         variables: {}
       });
-      expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.escaped).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/eval|not allowed/i);
     });
 
-    it('compile + exec 导入危险模块被拦截', async () => {
+    it('compile + exec 导入危险模块在预检阶段被拒绝', async () => {
       const result = await runner.execute({
         code: `
 def main():
@@ -632,8 +664,8 @@ def main():
 `,
         variables: {}
       });
-      expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.escaped).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/compile|exec|not allowed/i);
     });
 
     // --- 内部变量隔离 ---
@@ -685,7 +717,7 @@ def main():
       expect(result.data?.codeReturn.escaped).toBe(false);
     });
 
-    it('globals() 不泄露内部变量', async () => {
+    it('globals() 调用被拒绝，避免泄露内部变量', async () => {
       const result = await runner.execute({
         code: `def main(v):
     g = globals()
@@ -693,8 +725,8 @@ def main():
     return {"has_original_import": has_orig}`,
         variables: {}
       });
-      expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.has_original_import).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/globals|not allowed/i);
     });
 
     // --- __subclasses__ / type ---
@@ -870,18 +902,19 @@ describe('网络请求安全', () => {
 
     it('httpRequest GET 公网地址正常', async () => {
       const result = await runner.execute({
-        code: `async function main() { const res = await SystemHelper.httpRequest('https://1.1.1.1/cdn-cgi/trace'); return { status: res.status, hasData: res.data.length > 0 }; }`,
+        code: `async function main() { const res = await SystemHelper.httpRequest('http://1.1.1.1/'); return { status: res.status, hasData: res.data.length > 0 }; }`,
         variables: {}
       });
       expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.status).toBe(200);
+      expect(result.data?.codeReturn.status).toBeGreaterThanOrEqual(200);
+      expect(result.data?.codeReturn.status).toBeLessThan(400);
       expect(result.data?.codeReturn.hasData).toBe(true);
     });
 
     it('httpRequest POST 带 body', async () => {
       const result = await runner.execute({
         code: `async function main() {
-          const res = await SystemHelper.httpRequest('https://1.1.1.1/cdn-cgi/trace', { method: 'POST', body: { key: 'value' } });
+          const res = await SystemHelper.httpRequest('http://1.1.1.1/', { method: 'POST', body: { key: 'value' } });
           return { hasStatus: typeof res.status === 'number' };
         }`,
         variables: {}
@@ -892,11 +925,12 @@ describe('网络请求安全', () => {
 
     it('全局函数 httpRequest 可用', async () => {
       const result = await runner.execute({
-        code: `async function main() { const res = await httpRequest('https://1.1.1.1/cdn-cgi/trace'); return { status: res.status }; }`,
+        code: `async function main() { const res = await httpRequest('http://1.1.1.1/'); return { status: res.status }; }`,
         variables: {}
       });
       expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.status).toBe(200);
+      expect(result.data?.codeReturn.status).toBeGreaterThanOrEqual(200);
+      expect(result.data?.codeReturn.status).toBeLessThan(400);
     });
   });
 
@@ -937,17 +971,18 @@ describe('网络请求安全', () => {
 
     it('http_request GET 公网地址正常', async () => {
       const result = await runner.execute({
-        code: `def main():\n    res = system_helper.http_request('https://1.1.1.1/cdn-cgi/trace')\n    return {'status': res['status'], 'hasData': len(res['data']) > 0}`,
+        code: `def main():\n    res = system_helper.http_request('http://1.1.1.1/')\n    return {'status': res['status'], 'hasData': len(res['data']) > 0}`,
         variables: {}
       });
       expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.status).toBe(200);
+      expect(result.data?.codeReturn.status).toBeGreaterThanOrEqual(200);
+      expect(result.data?.codeReturn.status).toBeLessThan(400);
       expect(result.data?.codeReturn.hasData).toBe(true);
     });
 
     it('http_request POST 带 body', async () => {
       const result = await runner.execute({
-        code: `import json\ndef main():\n    res = system_helper.http_request('https://1.1.1.1/cdn-cgi/trace', method='POST', body={'key': 'value'})\n    return {'hasStatus': type(res['status']) == int}`,
+        code: `import json\ndef main():\n    res = system_helper.http_request('http://1.1.1.1/', method='POST', body={'key': 'value'})\n    return {'hasStatus': type(res['status']) == int}`,
         variables: {}
       });
       expect(result.success).toBe(true);
@@ -956,11 +991,12 @@ describe('网络请求安全', () => {
 
     it('全局函数 http_request 可用', async () => {
       const result = await runner.execute({
-        code: `def main():\n    res = http_request('https://1.1.1.1/cdn-cgi/trace')\n    return {'status': res['status']}`,
+        code: `def main():\n    res = http_request('http://1.1.1.1/')\n    return {'status': res['status']}`,
         variables: {}
       });
       expect(result.success).toBe(true);
-      expect(result.data?.codeReturn.status).toBe(200);
+      expect(result.data?.codeReturn.status).toBeGreaterThanOrEqual(200);
+      expect(result.data?.codeReturn.status).toBeLessThan(400);
     });
   });
 });
@@ -1245,19 +1281,26 @@ describe('沙盒环境加固，禁止用户代码篡改沙盒环境', () => {
   describe('Python', () => {
     const runner = { execute: (args: any) => pyPool.execute(args) };
 
-    it('builtins.__import__ 覆盖被静默忽略', async () => {
+    it('builtins.__import__ 覆盖被拒绝', async () => {
       const result = await runner.execute({
         code: `import builtins
 def main():
-    builtins.__import__ = lambda *a, **kw: None
+    changed = False
+    try:
+        builtins.__import__ = lambda *a, **kw: None
+        changed = True
+    except Exception:
+        pass
     try:
         import os
-        return {'escaped': True}
+        escaped = True
     except (ImportError, Exception):
-        return {'escaped': False}`,
+        escaped = False
+    return {'changed': changed, 'escaped': escaped}`,
         variables: {}
       });
       expect(result.success).toBe(true);
+      expect(result.data?.codeReturn.changed).toBe(false);
       expect(result.data?.codeReturn.escaped).toBe(false);
     });
 
@@ -1531,8 +1574,8 @@ describe('worker 状态隔离', () => {
     });
   });
 
-  describe('Python Worker 状态隔离', () => {
-    let pool: PythonProcessPool;
+  describe('Python isolated runner 状态隔离', () => {
+    let pool: PythonIsolatedRunner;
 
     afterEach(async () => {
       try {
@@ -1541,7 +1584,7 @@ describe('worker 状态隔离', () => {
     });
 
     it('上一次执行设置的全局变量，下一次读不到', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       // 第一次：尝试写入全局
@@ -1560,7 +1603,7 @@ describe('worker 状态隔离', () => {
     });
 
     it('上一次修改的模块状态不影响下一次（模块快照恢复）', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       // 第一次：给 json 模块添加自定义属性
@@ -1581,7 +1624,7 @@ describe('worker 状态隔离', () => {
     });
 
     it('上一次的 print 输出不泄露到下一次', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       await pool.execute({
@@ -1599,7 +1642,7 @@ describe('worker 状态隔离', () => {
     });
 
     it('上一次传入的 variables 不泄露到下一次', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       await pool.execute({
@@ -1685,7 +1728,7 @@ describe('环境变量隔离', () => {
   });
 
   describe('Python 环境变量隔离', () => {
-    let pool: PythonProcessPool;
+    let pool: PythonIsolatedRunner;
 
     afterEach(async () => {
       try {
@@ -1694,7 +1737,7 @@ describe('环境变量隔离', () => {
     });
 
     it('无法通过 os 模块读取环境变量', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1706,7 +1749,7 @@ describe('环境变量隔离', () => {
     });
 
     it('无法通过 subprocess 执行 env 命令', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1718,7 +1761,7 @@ describe('环境变量隔离', () => {
     });
 
     it('无法通过 open 读取 /etc/passwd', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1810,7 +1853,7 @@ describe('进程干扰', () => {
   });
 
   describe('Python 进程干扰防护', () => {
-    let pool: PythonProcessPool;
+    let pool: PythonIsolatedRunner;
 
     afterEach(async () => {
       try {
@@ -1819,7 +1862,7 @@ describe('进程干扰', () => {
     });
 
     it('无法 import subprocess', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1831,7 +1874,7 @@ describe('进程干扰', () => {
     });
 
     it('无法 import multiprocessing', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1843,7 +1886,7 @@ describe('进程干扰', () => {
     });
 
     it('无法 import signal 发送信号', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({
@@ -1855,7 +1898,7 @@ describe('进程干扰', () => {
     });
 
     it('无法 import threading 创建线程', async () => {
-      pool = new PythonProcessPool(1);
+      pool = new PythonIsolatedRunner(1);
       await pool.init();
 
       const result = await pool.execute({

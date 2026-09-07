@@ -20,7 +20,7 @@ import { formatTimeToChatTime } from '@fastgpt/global/common/string/time';
 import { defaultOutLinkForm } from '@/web/core/app/constants';
 import type { WecomAppType, OutLinkEditType } from '@fastgpt/global/support/outLink/type';
 import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
-import { Trans, useTranslation } from 'next-i18next';
+import { Trans } from 'next-i18next';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import dayjs from 'dayjs';
 import dynamic from 'next/dynamic';
@@ -29,12 +29,20 @@ import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { getDocPath } from '@/web/common/system/doc';
 import { listCustomDomain } from '@/web/support/customDomain/api';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 
 const WecomEditModal = dynamic(() => import('./WecomEditModal'));
 const ShowShareLinkModal = dynamic(() => import('../components/showShareLinkModal'));
 
-const Wecom = ({ appId }: { appId: string }) => {
-  const { t } = useTranslation();
+const Wecom = ({
+  appId,
+  onRefreshOutLinkCounts
+}: {
+  appId: string;
+  onRefreshOutLinkCounts: () => Promise<unknown>;
+}) => {
+  const { t } = useSafeTranslation();
   const { Loading, setIsLoading } = useLoading();
   const { feConfigs } = useSystemStore();
   const [editWecomData, setEditWecomData] = useState<OutLinkEditType<WecomAppType>>();
@@ -67,10 +75,10 @@ const Wecom = ({ appId }: { appId: string }) => {
   });
 
   return (
-    <Box position={'relative'} pt={3} px={5} minH={'50vh'}>
+    <Box position={'relative'} p={6} minH={'50vh'}>
       <Flex justifyContent={'space-between'} flexDirection="row">
         <Flex alignItems={'center'}>
-          <Box fontWeight={'bold'} fontSize={['md', 'lg']}>
+          <Box color={'myGray.900'} fontWeight={'medium'} fontSize={'lg'}>
             {t('publish:wecom.title')}
           </Box>
           {feConfigs?.docUrl && (
@@ -126,14 +134,9 @@ const Wecom = ({ appId }: { appId: string }) => {
             <Tr>
               <Th>{t('common:Name')} </Th>
               <Th> {t('common:support.outlink.Usage points')} </Th>
-              {feConfigs?.isPlus && (
-                <>
-                  <Th>{t('common:core.app.share.Ip limit title')} </Th>
-                  <Th> {t('common:expired_time')} </Th>
-                </>
-              )}
+              {feConfigs?.isPlus && <Th>{t('common:expired_time')} </Th>}
               <Th>{t('common:last_use_time')} </Th>
-              <Th> </Th>
+              <Th>{t('common:Action')} </Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -151,19 +154,14 @@ const Wecom = ({ appId }: { appId: string }) => {
                     : ''}
                 </Td>
                 {feConfigs?.isPlus && (
-                  <>
-                    <Td>{item?.limit?.QPM || '-'} </Td>
-                    <Td>
-                      {item?.limit?.expiredTime
-                        ? dayjs(item.limit?.expiredTime).format('YYYY/MM/DD\nHH:mm')
-                        : '-'}
-                    </Td>
-                  </>
+                  <Td>
+                    {item.limit?.expiredTime
+                      ? dayjs(item.limit.expiredTime).format('YYYY/MM/DD\nHH:mm')
+                      : '-'}
+                  </Td>
                 )}
                 <Td>
-                  {item.lastTime
-                    ? t(formatTimeToChatTime(item.lastTime) as any).replace('#', ':')
-                    : t('common:un_used')}
+                  {item.lastTime ? t(formatTimeToChatTime(item.lastTime)) : t('common:un_used')}
                 </Td>
                 <Td display={'flex'} alignItems={'center'}>
                   <Button
@@ -214,7 +212,10 @@ const Wecom = ({ appId }: { appId: string }) => {
                               setIsLoading(true);
                               try {
                                 await delShareChatById(item._id);
-                                refetchShareChatList();
+                                void Promise.all([
+                                  refetchShareChatList(),
+                                  onRefreshOutLinkCounts()
+                                ]);
                               } catch (error) {
                                 console.log(error);
                               }
@@ -236,7 +237,7 @@ const Wecom = ({ appId }: { appId: string }) => {
           appId={appId}
           defaultData={editWecomData}
           onCreate={async (shareId: string) => {
-            const newList = await refetchShareChatList();
+            const [newList] = await Promise.all([refetchShareChatList(), onRefreshOutLinkCounts()]);
             const newItem = newList.find((item) => item.shareId === shareId);
             return newItem?._id;
           }}
@@ -252,7 +253,7 @@ const Wecom = ({ appId }: { appId: string }) => {
             : {
                 text: (
                   <Trans
-                    i18nKey="app:publish_channel.wecom.empty"
+                    i18nKey={i18nT('app:publish_channel.wecom.empty')}
                     components={{
                       a: (
                         <Link

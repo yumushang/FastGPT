@@ -1,14 +1,14 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   getHandleId,
-  checkInputIsReference,
-  getGuideModule,
-  splitGuideModule,
+  getSelectedInputRenderType,
+  nodeInputIsReference,
   getAppChatConfig,
   getOrInitModuleInputValue,
   getModuleInputUiField,
   pluginData2FlowNodeIO,
   appData2FlowNodeIO,
+  projectExternalVariableInput,
   toolData2FlowNodeIO,
   toolSetData2FlowNodeIO,
   formatEditorVariablePickerIcon,
@@ -17,7 +17,8 @@ import {
   isValidArrayReferenceValue,
   getElseIFLabel,
   clientGetWorkflowToolRunUserQuery,
-  removeUnauthModels
+  formatModels,
+  addModelNamesToWorkflow
 } from '@fastgpt/global/core/workflow/utils';
 import {
   FlowNodeInputTypeEnum,
@@ -39,9 +40,14 @@ import {
   defaultQGConfig
 } from '@fastgpt/global/core/app/constants';
 import { IfElseResultEnum } from '@fastgpt/global/core/workflow/template/system/ifElse/constant';
+import {
+  getIfElseBranchHandleKey,
+  initNewIfElseList
+} from '@fastgpt/global/core/workflow/template/system/ifElse/utils';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import { ChatFileTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
 describe('getHandleId', () => {
   it('should return correct handle id for source type', () => {
@@ -65,24 +71,156 @@ describe('getHandleId', () => {
   });
 });
 
-describe('checkInputIsReference', () => {
-  it('should return true when renderTypeList first item is reference', () => {
+describe('projectExternalVariableInput', () => {
+  it.each([
+    [WorkflowIOValueTypeEnum.string, FlowNodeInputTypeEnum.input, true],
+    [WorkflowIOValueTypeEnum.number, FlowNodeInputTypeEnum.numberInput, true],
+    [WorkflowIOValueTypeEnum.boolean, FlowNodeInputTypeEnum.switch, true],
+    [WorkflowIOValueTypeEnum.arrayString, FlowNodeInputTypeEnum.JSONEditor, true],
+    [WorkflowIOValueTypeEnum.arrayNumber, FlowNodeInputTypeEnum.JSONEditor, true],
+    [WorkflowIOValueTypeEnum.arrayBoolean, FlowNodeInputTypeEnum.JSONEditor, true],
+    [WorkflowIOValueTypeEnum.object, FlowNodeInputTypeEnum.JSONEditor, false],
+    [WorkflowIOValueTypeEnum.arrayObject, FlowNodeInputTypeEnum.JSONEditor, false],
+    [WorkflowIOValueTypeEnum.arrayAny, FlowNodeInputTypeEnum.JSONEditor, false],
+    [WorkflowIOValueTypeEnum.any, FlowNodeInputTypeEnum.JSONEditor, false]
+  ])(
+    'should project %s external variables to a reference and manual input',
+    (valueType, type, canAgentGenerated) => {
+      const result = projectExternalVariableInput({
+        key: 'externalVariable',
+        label: 'External variable',
+        valueType,
+        renderTypeList: [FlowNodeInputTypeEnum.customVariable],
+        selectedType: FlowNodeInputTypeEnum.customVariable,
+        defaultValue: 'default-value'
+      });
+
+      expect(result).toMatchObject({
+        canAgentGenerated,
+        ...(canAgentGenerated ? { defaultToAgentGenerated: true } : {}),
+        renderTypeList: [
+          ...(canAgentGenerated ? [FlowNodeInputTypeEnum.agentGenerated] : []),
+          FlowNodeInputTypeEnum.reference,
+          type
+        ],
+        selectedType: canAgentGenerated
+          ? FlowNodeInputTypeEnum.agentGenerated
+          : FlowNodeInputTypeEnum.reference,
+        defaultValue: 'default-value'
+      });
+    }
+  );
+
+  it('should leave regular inputs unchanged', () => {
     const input: FlowNodeInputItemType = {
-      key: 'test',
-      label: 'Test',
-      renderTypeList: [FlowNodeInputTypeEnum.reference]
+      key: 'query',
+      label: 'Query',
+      renderTypeList: [FlowNodeInputTypeEnum.input, FlowNodeInputTypeEnum.reference]
     };
-    expect(checkInputIsReference(input)).toBe(true);
+
+    expect(projectExternalVariableInput(input)).toBe(input);
   });
 
-  it('should return true when selectedTypeIndex points to reference', () => {
+  it('should allow AI generation for primitive external variables', () => {
+    const result = projectExternalVariableInput({
+      key: 'externalVariable',
+      label: 'External variable',
+      valueType: WorkflowIOValueTypeEnum.string,
+      renderTypeList: [FlowNodeInputTypeEnum.agentGenerated, FlowNodeInputTypeEnum.customVariable],
+      selectedType: FlowNodeInputTypeEnum.agentGenerated
+    });
+
+    expect(result).toMatchObject({
+      canAgentGenerated: true,
+      renderTypeList: [
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.reference,
+        FlowNodeInputTypeEnum.input
+      ],
+      selectedType: FlowNodeInputTypeEnum.agentGenerated
+    });
+  });
+
+  it('should select AI generation by default without changing its existing position', () => {
+    const result = projectExternalVariableInput({
+      key: 'externalVariable',
+      label: 'External variable',
+      valueType: WorkflowIOValueTypeEnum.string,
+      renderTypeList: [FlowNodeInputTypeEnum.customVariable, FlowNodeInputTypeEnum.agentGenerated],
+      selectedType: FlowNodeInputTypeEnum.customVariable
+    });
+
+    expect(result.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.reference,
+      FlowNodeInputTypeEnum.input,
+      FlowNodeInputTypeEnum.agentGenerated
+    ]);
+    expect(result.selectedType).toBe(FlowNodeInputTypeEnum.agentGenerated);
+  });
+
+  it.each([FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.input])(
+    'should preserve an explicit %s selection when projecting an external variable',
+    (selectedType) => {
+      const result = projectExternalVariableInput({
+        key: 'externalVariable',
+        label: 'External variable',
+        valueType: WorkflowIOValueTypeEnum.string,
+        renderTypeList: [
+          FlowNodeInputTypeEnum.customVariable,
+          FlowNodeInputTypeEnum.reference,
+          FlowNodeInputTypeEnum.input
+        ],
+        selectedType
+      });
+
+      expect(result.renderTypeList).toEqual([
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.reference,
+        FlowNodeInputTypeEnum.input
+      ]);
+      expect(result.selectedType).toBe(selectedType);
+    }
+  );
+
+  it('should default a projected external variable without a saved selection to AI generation', () => {
+    const result = projectExternalVariableInput({
+      key: 'externalVariable',
+      label: 'External variable',
+      valueType: WorkflowIOValueTypeEnum.string,
+      renderTypeList: [FlowNodeInputTypeEnum.customVariable]
+    });
+
+    expect(result.selectedType).toBe(FlowNodeInputTypeEnum.agentGenerated);
+  });
+
+  it('should keep complex external variables manual-only', () => {
+    const result = projectExternalVariableInput({
+      key: 'externalVariable',
+      label: 'External variable',
+      valueType: WorkflowIOValueTypeEnum.object,
+      renderTypeList: [FlowNodeInputTypeEnum.customVariable],
+      selectedType: FlowNodeInputTypeEnum.customVariable
+    });
+
+    expect(result).toMatchObject({
+      canAgentGenerated: false,
+      renderTypeList: [FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.JSONEditor],
+      selectedType: FlowNodeInputTypeEnum.reference
+    });
+  });
+});
+
+describe('nodeInputIsReference', () => {
+  it('should use the canonical selectedType', () => {
     const input: FlowNodeInputItemType = {
       key: 'test',
       label: 'Test',
       renderTypeList: [FlowNodeInputTypeEnum.input, FlowNodeInputTypeEnum.reference],
-      selectedTypeIndex: 1
+      selectedType: FlowNodeInputTypeEnum.reference
     };
-    expect(checkInputIsReference(input)).toBe(true);
+
+    expect(getSelectedInputRenderType(input)).toBe(FlowNodeInputTypeEnum.reference);
+    expect(nodeInputIsReference(input)).toBe(true);
   });
 
   it('should return false when renderTypeList first item is not reference', () => {
@@ -91,17 +229,17 @@ describe('checkInputIsReference', () => {
       label: 'Test',
       renderTypeList: [FlowNodeInputTypeEnum.input]
     };
-    expect(checkInputIsReference(input)).toBe(false);
+    expect(nodeInputIsReference(input)).toBe(false);
   });
 
-  it('should return false when selectedTypeIndex is 0 and first item is not reference', () => {
+  it('should return false when the current selected type is not a reference', () => {
     const input: FlowNodeInputItemType = {
       key: 'test',
       label: 'Test',
       renderTypeList: [FlowNodeInputTypeEnum.input, FlowNodeInputTypeEnum.reference],
-      selectedTypeIndex: 0
+      selectedType: FlowNodeInputTypeEnum.input
     };
-    expect(checkInputIsReference(input)).toBe(false);
+    expect(nodeInputIsReference(input)).toBe(false);
   });
 
   it('should return false when renderTypeList is undefined', () => {
@@ -109,205 +247,26 @@ describe('checkInputIsReference', () => {
       key: 'test',
       label: 'Test'
     } as FlowNodeInputItemType;
-    expect(checkInputIsReference(input)).toBe(false);
+    expect(nodeInputIsReference(input)).toBe(false);
   });
 
-  it('should use index 0 when selectedTypeIndex is undefined', () => {
+  it('should default to the first current render type when selectedType is absent', () => {
     const input: FlowNodeInputItemType = {
       key: 'test',
       label: 'Test',
       renderTypeList: [FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.input]
     };
-    expect(checkInputIsReference(input)).toBe(true);
-  });
-});
-
-describe('getGuideModule', () => {
-  it('should find systemConfig node', () => {
-    const nodes: StoreNodeItemType[] = [
-      {
-        nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.systemConfig,
-        name: 'System Config',
-        inputs: [],
-        outputs: []
-      },
-      {
-        nodeId: 'node2',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat',
-        inputs: [],
-        outputs: []
-      }
-    ];
-    const result = getGuideModule(nodes);
-    expect(result?.nodeId).toBe('node1');
+    expect(nodeInputIsReference(input)).toBe(true);
   });
 
-  it('should return undefined when no systemConfig node exists', () => {
-    const nodes: StoreNodeItemType[] = [
-      {
-        nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat',
-        inputs: [],
-        outputs: []
-      }
-    ];
-    const result = getGuideModule(nodes);
-    expect(result).toBeUndefined();
-  });
-
-  it('should handle empty nodes array', () => {
-    const result = getGuideModule([]);
-    expect(result).toBeUndefined();
-  });
-
-  it('should find node with v1 flowType (adapt v1)', () => {
-    const nodes = [
-      {
-        nodeId: 'node1',
-        flowType: FlowNodeTypeEnum.systemConfig,
-        flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'System Config',
-        inputs: [],
-        outputs: []
-      }
-    ] as any;
-    const result = getGuideModule(nodes);
-    expect(result?.nodeId).toBe('node1');
-  });
-});
-
-describe('splitGuideModule', () => {
-  it('should return default values when guideModules is undefined', () => {
-    const result = splitGuideModule(undefined);
-    expect(result.welcomeText).toBe('');
-    expect(result.variables).toEqual([]);
-    expect(result.questionGuide).toEqual(defaultQGConfig);
-    expect(result.ttsConfig).toEqual(defaultTTSConfig);
-    expect(result.whisperConfig).toEqual(defaultWhisperConfig);
-    expect(result.scheduledTriggerConfig).toBeUndefined();
-    expect(result.chatInputGuide).toEqual(defaultChatInputGuideConfig);
-    expect(result.instruction).toBe('');
-    expect(result.autoExecute).toEqual(defaultAutoExecuteConfig);
-  });
-
-  it('should extract welcomeText from inputs', () => {
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.welcomeText,
-          label: 'Welcome',
-          value: 'Hello World',
-          renderTypeList: [FlowNodeInputTypeEnum.input]
-        }
-      ],
-      outputs: []
+  it('should treat settingDatasetQuotePrompt as reference', () => {
+    const input: FlowNodeInputItemType = {
+      key: NodeInputKeyEnum.aiChatDatasetQuote,
+      label: 'Dataset quote',
+      renderTypeList: [FlowNodeInputTypeEnum.settingDatasetQuotePrompt],
+      valueType: WorkflowIOValueTypeEnum.datasetQuote
     };
-    const result = splitGuideModule(guideModule);
-    expect(result.welcomeText).toBe('Hello World');
-  });
-
-  it('should extract variables from inputs', () => {
-    const variables = [{ key: 'var1', label: 'Variable 1', type: VariableInputEnum.input }];
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.variables,
-          label: 'Variables',
-          value: variables,
-          renderTypeList: [FlowNodeInputTypeEnum.hidden]
-        }
-      ],
-      outputs: []
-    };
-    const result = splitGuideModule(guideModule);
-    expect(result.variables).toEqual(variables);
-  });
-
-  it('should adapt old boolean questionGuide format', () => {
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.questionGuide,
-          label: 'Question Guide',
-          value: true,
-          renderTypeList: [FlowNodeInputTypeEnum.switch]
-        }
-      ],
-      outputs: []
-    };
-    const result = splitGuideModule(guideModule);
-    expect(result.questionGuide.open).toBe(true);
-  });
-
-  it('should use new questionGuide object format', () => {
-    const questionGuideConfig = { open: true, model: 'gpt-4', customPrompt: 'test' };
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.questionGuide,
-          label: 'Question Guide',
-          value: questionGuideConfig,
-          renderTypeList: [FlowNodeInputTypeEnum.hidden]
-        }
-      ],
-      outputs: []
-    };
-    const result = splitGuideModule(guideModule);
-    expect(result.questionGuide).toEqual(questionGuideConfig);
-  });
-
-  it('should extract ttsConfig from inputs', () => {
-    const ttsConfig = { type: 'edge' as const };
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.tts,
-          label: 'TTS',
-          value: ttsConfig,
-          renderTypeList: [FlowNodeInputTypeEnum.hidden]
-        }
-      ],
-      outputs: []
-    };
-    const result = splitGuideModule(guideModule);
-    expect(result.ttsConfig).toEqual(ttsConfig);
-  });
-
-  it('should extract instruction from inputs', () => {
-    const guideModule: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.instruction,
-          label: 'Instruction',
-          value: 'Test instruction',
-          renderTypeList: [FlowNodeInputTypeEnum.textarea]
-        }
-      ],
-      outputs: []
-    };
-    const result = splitGuideModule(guideModule);
-    expect(result.instruction).toBe('Test instruction');
+    expect(nodeInputIsReference(input)).toBe(true);
   });
 });
 
@@ -326,7 +285,9 @@ describe('getAppChatConfig', () => {
     };
     const result = getAppChatConfig({ chatConfig, isPublicFetch: false });
     expect(result.welcomeText).toBe('Custom Welcome');
-    expect(result.variables).toEqual(chatConfig.variables);
+    expect(result.variables).toEqual([
+      { ...chatConfig.variables[0], valueType: WorkflowIOValueTypeEnum.string }
+    ]);
   });
 
   it('should prioritize storeVariables over chatConfig variables', () => {
@@ -341,7 +302,18 @@ describe('getAppChatConfig', () => {
       storeVariables,
       isPublicFetch: false
     });
-    expect(result.variables).toEqual(storeVariables);
+    expect(result.variables).toEqual([
+      { ...storeVariables[0], valueType: WorkflowIOValueTypeEnum.string }
+    ]);
+  });
+
+  it('rejects malformed stored variables before returning chat config', () => {
+    expect(() =>
+      getAppChatConfig({
+        storeVariables: [{ key: 'broken' }] as any,
+        isPublicFetch: false
+      })
+    ).toThrow();
   });
 
   it('should prioritize storeWelcomeText over chatConfig welcomeText', () => {
@@ -355,44 +327,28 @@ describe('getAppChatConfig', () => {
   });
 
   it('should include scheduledTriggerConfig when isPublicFetch is true', () => {
-    const systemConfigNode: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.scheduleTrigger,
-          label: 'Schedule',
-          value: { cronString: '0 0 * * *', timezone: 'UTC' },
-          renderTypeList: [FlowNodeInputTypeEnum.hidden]
-        }
-      ],
-      outputs: []
-    };
     const result = getAppChatConfig({
-      systemConfigNode,
+      chatConfig: {
+        scheduledTriggerConfig: {
+          cronString: '0 0 * * *',
+          timezone: 'UTC',
+          defaultPrompt: 'Run'
+        }
+      },
       isPublicFetch: true
     });
     expect(result.scheduledTriggerConfig).toBeDefined();
   });
 
   it('should exclude scheduledTriggerConfig when isPublicFetch is false', () => {
-    const systemConfigNode: StoreNodeItemType = {
-      nodeId: 'guide',
-      flowNodeType: FlowNodeTypeEnum.systemConfig,
-      name: 'Guide',
-      inputs: [
-        {
-          key: NodeInputKeyEnum.scheduleTrigger,
-          label: 'Schedule',
-          value: { cronString: '0 0 * * *', timezone: 'UTC' },
-          renderTypeList: [FlowNodeInputTypeEnum.hidden]
-        }
-      ],
-      outputs: []
-    };
     const result = getAppChatConfig({
-      systemConfigNode,
+      chatConfig: {
+        scheduledTriggerConfig: {
+          cronString: '0 0 * * *',
+          timezone: 'UTC',
+          defaultPrompt: 'Run'
+        }
+      },
       isPublicFetch: false
     });
     expect(result.scheduledTriggerConfig).toBeUndefined();
@@ -575,7 +531,7 @@ describe('pluginData2FlowNodeIO', () => {
     expect(result.outputs[0].type).toBe(FlowNodeOutputTypeEnum.static);
   });
 
-  it('should convert customVariable renderType to reference and input', () => {
+  it('should convert customVariable renderType and default to AI generation', () => {
     const nodes: StoreNodeItemType[] = [
       {
         nodeId: 'pluginInput1',
@@ -586,7 +542,8 @@ describe('pluginData2FlowNodeIO', () => {
             key: 'customVar',
             label: 'Custom Variable',
             valueType: WorkflowIOValueTypeEnum.string,
-            renderTypeList: [FlowNodeInputTypeEnum.customVariable]
+            renderTypeList: [FlowNodeInputTypeEnum.customVariable],
+            selectedType: FlowNodeInputTypeEnum.customVariable
           }
         ],
         outputs: []
@@ -595,9 +552,11 @@ describe('pluginData2FlowNodeIO', () => {
     const result = pluginData2FlowNodeIO({ nodes });
     const customVarInput = result.inputs.find((i) => i.key === 'customVar');
     expect(customVarInput?.renderTypeList).toEqual([
+      FlowNodeInputTypeEnum.agentGenerated,
       FlowNodeInputTypeEnum.reference,
       FlowNodeInputTypeEnum.input
     ]);
+    expect(customVarInput?.selectedType).toBe(FlowNodeInputTypeEnum.agentGenerated);
   });
 
   it('should set canEdit to false for all inputs', () => {
@@ -624,6 +583,98 @@ describe('pluginData2FlowNodeIO', () => {
 });
 
 describe('appData2FlowNodeIO', () => {
+  it('should recommend Agent generation for the workflow user question', () => {
+    const result = appData2FlowNodeIO({});
+
+    expect(
+      result.inputs.find((input) => input.key === NodeInputKeyEnum.userChatInput)
+    ).toMatchObject({
+      required: true,
+      defaultToAgentGenerated: true
+    });
+  });
+
+  it('should keep forbid stream as a manual-only switch', () => {
+    const result = appData2FlowNodeIO({});
+
+    expect(
+      result.inputs.find((input) => input.key === NodeInputKeyEnum.forbidStream)
+    ).toMatchObject({
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      canAgentGenerated: false,
+      value: false
+    });
+  });
+
+  it('should preserve workflow variable descriptions without adding a tool default mode', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'query',
+            label: 'Query',
+            type: VariableInputEnum.input,
+            description: 'Search query'
+          }
+        ]
+      }
+    });
+
+    const input = result.inputs.find((input) => input.key === 'query');
+    expect(input).toMatchObject({ description: 'Search query' });
+    expect(input).not.toHaveProperty('defaultToAgentGenerated');
+  });
+
+  it('should retain internal variable defaults while keeping the input hidden', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'internalToken',
+            label: 'Internal token',
+            type: VariableInputEnum.internal,
+            valueType: WorkflowIOValueTypeEnum.string,
+            description: 'Internal only',
+            defaultValue: 'default-token'
+          }
+        ]
+      }
+    });
+
+    expect(result.inputs.find((input) => input.key === 'internalToken')).toMatchObject({
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      defaultValue: 'default-token',
+      value: 'default-token'
+    });
+  });
+
+  it('should project external variables to configurable parent workflow inputs', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'externalToken',
+            label: 'External token',
+            type: VariableInputEnum.custom,
+            valueType: WorkflowIOValueTypeEnum.string,
+            description: 'Provided by the external variable provider',
+            defaultValue: 'fallback-token'
+          }
+        ]
+      }
+    });
+
+    expect(result.inputs.find((input) => input.key === 'externalToken')).toMatchObject({
+      renderTypeList: [
+        FlowNodeInputTypeEnum.agentGenerated,
+        FlowNodeInputTypeEnum.reference,
+        FlowNodeInputTypeEnum.input
+      ],
+      defaultValue: 'fallback-token',
+      value: 'fallback-token'
+    });
+  });
+
   it('should return basic inputs and outputs when no chatConfig', () => {
     const result = appData2FlowNodeIO({});
     expect(result.inputs.length).toBeGreaterThan(0);
@@ -642,7 +693,11 @@ describe('appData2FlowNodeIO', () => {
       }
     });
     const fileLinkInput = result.inputs.find((i) => i.key === NodeInputKeyEnum.fileUrlList);
-    expect(fileLinkInput).toBeDefined();
+    expect(fileLinkInput).toMatchObject({
+      renderTypeList: [FlowNodeInputTypeEnum.reference, FlowNodeInputTypeEnum.JSONEditor],
+      defaultToAgentGenerated: true
+    });
+    expect(fileLinkInput).not.toHaveProperty('selectedType');
   });
 
   it('should include file link input when fileSelectConfig allows image selection', () => {
@@ -757,6 +812,43 @@ describe('appData2FlowNodeIO', () => {
     expect(fileVar?.renderTypeList).toEqual([
       FlowNodeInputTypeEnum.fileSelect,
       FlowNodeInputTypeEnum.reference
+    ]);
+  });
+
+  it('should not carry stale select options into text variables', () => {
+    const result = appData2FlowNodeIO({
+      chatConfig: {
+        variables: [
+          {
+            key: 'textVar',
+            label: 'Text',
+            type: VariableInputEnum.input,
+            description: '',
+            valueType: WorkflowIOValueTypeEnum.string,
+            list: [{ label: 'A', value: 'a' }]
+          },
+          {
+            key: 'textareaVar',
+            label: 'Textarea',
+            type: VariableInputEnum.textarea,
+            description: '',
+            list: [{ label: 'B', value: 'b' }]
+          },
+          {
+            key: 'selectVar',
+            label: 'Select',
+            type: VariableInputEnum.select,
+            description: '',
+            list: [{ label: 'C', value: 'c' }]
+          }
+        ]
+      }
+    });
+
+    expect(result.inputs.find((input) => input.key === 'textVar')?.list).toBeUndefined();
+    expect(result.inputs.find((input) => input.key === 'textareaVar')?.list).toBeUndefined();
+    expect(result.inputs.find((input) => input.key === 'selectVar')?.list).toEqual([
+      { label: 'c', value: 'c' }
     ]);
   });
 
@@ -949,6 +1041,30 @@ describe('toolData2FlowNodeIO', () => {
 });
 
 describe('toolSetData2FlowNodeIO', () => {
+  it.each(['mcpToolSet', 'httpToolSet'] as const)(
+    'uses the App id for an empty legacy %s id and preserves explicit ids',
+    (key) => {
+      const node = {
+        nodeId: 'set',
+        name: 'Legacy',
+        flowNodeType: FlowNodeTypeEnum.toolSet,
+        inputs: [],
+        outputs: [],
+        toolConfig: { [key]: { toolId: '', url: 'https://example.com', toolList: [] } }
+      };
+      const original = structuredClone(node);
+      const preview = toolSetData2FlowNodeIO({ nodes: [node] as any, toolSetId: 'actual-app-id' });
+      expect(preview.toolConfig?.[key]).toEqual({ toolId: 'actual-app-id', toolList: [] });
+      expect(node).toEqual(original);
+      node.toolConfig[key].toolId = 'explicit-app-id';
+      expect(
+        toolSetData2FlowNodeIO({ nodes: [node] as any, toolSetId: 'actual-app-id' }).toolConfig?.[
+          key
+        ]
+      ).toEqual({ toolId: 'explicit-app-id', toolList: [] });
+    }
+  );
+
   it('should return empty arrays when no toolSet node exists', () => {
     const nodes: StoreNodeItemType[] = [
       {
@@ -959,7 +1075,7 @@ describe('toolSetData2FlowNodeIO', () => {
         outputs: []
       }
     ];
-    const result = toolSetData2FlowNodeIO({ nodes });
+    const result = toolSetData2FlowNodeIO({ nodes, toolSetId: 'test' });
     expect(result.inputs).toEqual([]);
     expect(result.outputs).toEqual([]);
     expect(result.toolConfig).toBeUndefined();
@@ -985,7 +1101,7 @@ describe('toolSetData2FlowNodeIO', () => {
         toolConfig: { mcpToolSet: { toolId: 'test', url: 'http://test', toolList: [] } }
       }
     ];
-    const result = toolSetData2FlowNodeIO({ nodes });
+    const result = toolSetData2FlowNodeIO({ nodes, toolSetId: 'test' });
     expect(result.inputs).toEqual(toolSetInputs);
     expect(result.showSourceHandle).toBe(false);
     expect(result.showTargetHandle).toBe(false);
@@ -1133,6 +1249,21 @@ describe('getElseIFLabel', () => {
   });
 });
 
+describe('ifElse branch helpers', () => {
+  it('should initialize new branches with random branch ids', () => {
+    const result = initNewIfElseList([{ condition: 'AND', list: [] }]);
+
+    expect(result[0].branchId).toMatch(/^[a-z][a-zA-Z0-9]{15}$/);
+    expect(result[0].branchId).not.toBe(IfElseResultEnum.IF);
+  });
+
+  it('should return the canonical branch id', () => {
+    expect(getIfElseBranchHandleKey({ branchId: 'stableId1', condition: 'AND', list: [] }, 1)).toBe(
+      'stableId1'
+    );
+  });
+});
+
 describe('clientGetWorkflowToolRunUserQuery', () => {
   it('should return user chat item with dataId', () => {
     const pluginInputs: FlowNodeInputItemType[] = [
@@ -1205,6 +1336,27 @@ describe('clientGetWorkflowToolRunUserQuery', () => {
     expect(result.obj).toBe('Human');
   });
 
+  it('should not serialize hidden plugin inputs', () => {
+    const result = clientGetWorkflowToolRunUserQuery({
+      pluginInputs: [
+        {
+          key: 'internal',
+          defaultValue: 'internal default',
+          renderTypeList: [FlowNodeInputTypeEnum.hidden]
+        },
+        {
+          key: 'query',
+          defaultValue: 'default query',
+          renderTypeList: [FlowNodeInputTypeEnum.input]
+        }
+      ],
+      variables: { internal: 'external value', query: 'hello' }
+    });
+
+    expect(JSON.stringify(result.value)).not.toContain('internal');
+    expect(JSON.stringify(result.value)).toContain('query');
+  });
+
   it('should handle files parameter', () => {
     const pluginInputs: FlowNodeInputItemType[] = [];
     const files = [{ type: ChatFileTypeEnum.image, url: 'http://example.com/image.png' }];
@@ -1219,110 +1371,315 @@ describe('clientGetWorkflowToolRunUserQuery', () => {
   });
 });
 
-describe('removeUnauthModels', () => {
-  it('should return modules unchanged when modules is undefined', async () => {
-    const result = await removeUnauthModels({ modules: undefined as any });
+describe('formatModels', () => {
+  const models = [
+    { model: 'gpt-4', modelId: '68ad85a7463006c963799a05', type: ModelTypeEnum.llm },
+    { model: 'rerank-v1', modelId: '68ad85a7463006c963799a06', type: ModelTypeEnum.rerank },
+    { model: 'extension-v1', modelId: '68ad85a7463006c963799a07', type: ModelTypeEnum.llm },
+    { model: 'deep-search-v1', modelId: '68ad85a7463006c963799a08', type: ModelTypeEnum.llm },
+    { model: 'legacy-tts', modelId: 'existing-tts-id', type: ModelTypeEnum.tts }
+  ];
+  const defaultModelIds = {
+    [ModelTypeEnum.llm]: models[2].modelId,
+    [ModelTypeEnum.rerank]: models[1].modelId,
+    [ModelTypeEnum.tts]: models[4].modelId
+  };
+
+  it('returns undefined nodes unchanged', () => {
+    const result = formatModels({ nodes: undefined, models, modelReferencePolicy: 'fallback' });
     expect(result).toBeUndefined();
   });
 
-  it('should not modify model value when it is in allowedModels', async () => {
-    const modules = [
+  it('converts legacy chat config models and removes deprecated fields', () => {
+    const chatConfig = {
+      questionGuide: { open: true, model: 'gpt-4' },
+      ttsConfig: {
+        type: 'model' as const,
+        modelId: 'existing-tts-id',
+        model: 'legacy-tts',
+        voice: 'alloy'
+      }
+    };
+
+    formatModels({ nodes: [], chatConfig, models, modelReferencePolicy: 'fallback' });
+
+    expect(chatConfig.questionGuide).toEqual({
+      open: true,
+      modelId: '68ad85a7463006c963799a05'
+    });
+    expect(chatConfig.ttsConfig).toEqual({
+      type: 'model',
+      modelId: 'existing-tts-id',
+      voice: 'alloy'
+    });
+  });
+
+  it('uses an empty fallback when no same-type model is available for create flows', () => {
+    const chatConfig = {
+      questionGuide: { open: true, model: 'temporarily-unavailable-model' }
+    };
+
+    formatModels({ nodes: [], chatConfig, models: [], modelReferencePolicy: 'fallback' });
+
+    expect(chatConfig.questionGuide).toEqual({
+      open: true,
+      modelId: ''
+    });
+  });
+
+  it('falls back to the system default model when an optional chat feature is disabled', () => {
+    const chatConfig = {
+      questionGuide: { open: false, modelId: 'disabled-llm' },
+      ttsConfig: {
+        type: 'web' as const,
+        model: 'disabled-tts'
+      }
+    };
+
+    expect(() =>
+      formatModels({
+        nodes: [],
+        chatConfig,
+        models,
+        defaultModelIds,
+        modelReferencePolicy: 'validate'
+      })
+    ).not.toThrow();
+
+    expect(chatConfig.questionGuide).toEqual({ open: false, modelId: models[2].modelId });
+    expect(chatConfig.ttsConfig).toEqual({
+      type: 'web',
+      modelId: models[4].modelId
+    });
+  });
+
+  it('does not synthesize optional chat model fields when no model was configured', () => {
+    const chatConfig = {
+      questionGuide: { open: false },
+      ttsConfig: { type: 'web' as const, voice: 'alloy' }
+    };
+
+    formatModels({ nodes: [], chatConfig, models, modelReferencePolicy: 'validate' });
+
+    expect(chatConfig.questionGuide).not.toHaveProperty('modelId');
+    expect(chatConfig.ttsConfig).not.toHaveProperty('modelId');
+  });
+
+  it('throws for an unresolved chat model when its feature is enabled', () => {
+    const chatConfig = {
+      questionGuide: { open: true, modelId: 'disabled-llm' }
+    };
+
+    expect(() =>
+      formatModels({ nodes: [], chatConfig, models, modelReferencePolicy: 'validate' })
+    ).toThrow('disabled-llm 模型已停用');
+  });
+
+  it('replaces every static legacy workflow model key and value with modelId', () => {
+    const nodes = [
       {
         nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
+        flowNodeType: FlowNodeTypeEnum.datasetSearchNode,
         name: 'Chat',
         inputs: [
           {
-            key: 'model',
+            key: NodeInputKeyEnum.aiModel,
             label: 'Model',
             value: 'gpt-4',
-            selectedTypeIndex: 0,
+            selectedType: FlowNodeInputTypeEnum.selectLLMModel,
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchRerankModel,
+            label: 'Rerank model',
+            value: 'rerank-v1',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchExtensionModel,
+            label: 'Extension model',
+            value: 'extension-v1',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetDeepSearchModel,
+            label: 'Deep search model',
+            value: 'deep-search-v1',
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
         outputs: []
       }
     ];
-    const allowedModels = new Set(['gpt-4', 'gpt-3.5-turbo']);
 
-    const result = await removeUnauthModels({ modules, allowedModels });
-    expect(result?.[0].inputs[0].value).toBe('gpt-4');
+    const result = formatModels({ nodes, models, modelReferencePolicy: 'fallback' });
+
+    expect(result?.[0].inputs).toHaveLength(4);
+    expect(result?.[0].inputs.map((input) => input.key)).not.toEqual(
+      expect.arrayContaining([
+        NodeInputKeyEnum.aiModel,
+        NodeInputKeyEnum.datasetSearchRerankModel,
+        NodeInputKeyEnum.datasetSearchExtensionModel,
+        NodeInputKeyEnum.datasetDeepSearchModel
+      ])
+    );
+    expect(result?.[0].inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: NodeInputKeyEnum.aiModelId,
+          value: models[0].modelId
+        }),
+        expect.objectContaining({
+          key: NodeInputKeyEnum.datasetSearchRerankModelId,
+          value: models[1].modelId
+        }),
+        expect.objectContaining({
+          key: NodeInputKeyEnum.datasetSearchExtensionModelId,
+          value: models[2].modelId
+        }),
+        expect.objectContaining({
+          key: NodeInputKeyEnum.datasetDeepSearchModelId,
+          value: models[3].modelId
+        })
+      ])
+    );
   });
 
-  it('should set model value to undefined when not in allowedModels', async () => {
-    const modules = [
+  it('falls back an unresolved static legacy model to the system default model', () => {
+    const nodes = [
       {
         nodeId: 'node1',
         flowNodeType: FlowNodeTypeEnum.chatNode,
         name: 'Chat',
         inputs: [
           {
-            key: 'model',
+            key: NodeInputKeyEnum.aiModel,
             label: 'Model',
             value: 'unauthorized-model',
-            selectedTypeIndex: 0,
+            selectedType: FlowNodeInputTypeEnum.selectLLMModel,
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
         outputs: []
       }
     ];
-    const allowedModels = new Set(['gpt-4']);
 
-    const result = await removeUnauthModels({ modules, allowedModels });
-    expect(result?.[0].inputs[0].value).toBeUndefined();
+    expect(() =>
+      formatModels({ nodes, models, defaultModelIds, modelReferencePolicy: 'fallback' })
+    ).not.toThrow();
+    expect(nodes[0].inputs[0].key).toBe(NodeInputKeyEnum.aiModelId);
+    expect(nodes[0].inputs[0].value).toBe(models[2].modelId);
+    expect(nodes[0].inputs).toHaveLength(1);
   });
 
-  it('should skip reference type inputs (selectedTypeIndex !== 0)', async () => {
-    const modules = [
+  it('keeps valid modelId inputs and falls back for disabled optional model inputs', () => {
+    const nodes = [
       {
         nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
+        flowNodeType: FlowNodeTypeEnum.agent,
         name: 'Chat',
         inputs: [
           {
-            key: 'model',
+            key: NodeInputKeyEnum.aiModelId,
+            label: 'Model',
+            value: models[0].modelId,
+            selectedType: FlowNodeInputTypeEnum.selectLLMModel,
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchExtensionModelId,
+            label: 'Extension model ID',
+            value: '68ad85a7463006c963799aff',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchExtensionModel,
+            label: 'Extension model',
+            value: 'extension-v1',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    const result = formatModels({
+      nodes,
+      models,
+      defaultModelIds,
+      modelReferencePolicy: 'fallback'
+    });
+
+    expect(result?.[0].inputs[0].value).toBe(models[0].modelId);
+    expect(result?.[0].inputs[1].value).toBe(models[2].modelId);
+    expect(result?.[0].inputs).toHaveLength(2);
+    expect(result?.[0].inputs.some((input) => input.key === NodeInputKeyEnum.aiModel)).toBe(false);
+    expect(
+      result?.[0].inputs.some((input) => input.key === NodeInputKeyEnum.datasetSearchExtensionModel)
+    ).toBe(false);
+  });
+
+  it('renames reference model keys without changing their values', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModel,
             label: 'Model',
             value: 'unauthorized-model',
-            selectedTypeIndex: 1,
+            selectedType: FlowNodeInputTypeEnum.reference,
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel, FlowNodeInputTypeEnum.reference]
-          }
-        ],
-        outputs: []
-      }
-    ];
-    const allowedModels = new Set(['gpt-4']);
-
-    const result = await removeUnauthModels({ modules, allowedModels });
-    expect(result?.[0].inputs[0].value).toBe('unauthorized-model');
-  });
-
-  it('should skip array value inputs (reference type)', async () => {
-    const modules = [
-      {
-        nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat',
-        inputs: [
+          },
           {
-            key: 'model',
-            label: 'Model',
+            key: NodeInputKeyEnum.datasetSearchRerankModel,
+            label: 'Rerank model',
             value: ['nodeId', 'outputKey'],
-            selectedTypeIndex: 0,
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
         outputs: []
       }
     ];
-    const allowedModels = new Set(['gpt-4']);
-
-    const result = await removeUnauthModels({ modules, allowedModels });
-    expect(result?.[0].inputs[0].value).toEqual(['nodeId', 'outputKey']);
+    const result = formatModels({ nodes, models, modelReferencePolicy: 'fallback' });
+    expect(result?.[0].inputs[0].key).toBe(NodeInputKeyEnum.aiModelId);
+    expect(result?.[0].inputs[0].value).toBe('unauthorized-model');
+    expect(result?.[0].inputs[1].key).toBe(NodeInputKeyEnum.datasetSearchRerankModelId);
+    expect(result?.[0].inputs[1].value).toEqual(['nodeId', 'outputKey']);
+    expect(result?.[0].inputs).toHaveLength(2);
   });
 
-  it('should handle modules with no model inputs', async () => {
-    const modules = [
+  it('moves dynamic legacy model expressions to the canonical modelId key', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: '{{selectedModel}}',
+            valueType: WorkflowIOValueTypeEnum.string
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    formatModels({ nodes, models, modelReferencePolicy: 'fallback' });
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({
+        key: NodeInputKeyEnum.aiModelId,
+        value: '{{selectedModel}}'
+      })
+    ]);
+  });
+
+  it('leaves nodes without model inputs unchanged', () => {
+    const nodes = [
       {
         nodeId: 'node1',
         flowNodeType: FlowNodeTypeEnum.chatNode,
@@ -1338,24 +1695,46 @@ describe('removeUnauthModels', () => {
         outputs: []
       }
     ];
-    const allowedModels = new Set(['gpt-4']);
-
-    const result = await removeUnauthModels({ modules, allowedModels });
+    const result = formatModels({ nodes, models, modelReferencePolicy: 'fallback' });
     expect(result?.[0].inputs[0].value).toBe('some value');
   });
 
-  it('should use empty Set as default for allowedModels', async () => {
-    const modules = [
+  it('does not rewrite an external tool input that happens to be named model', () => {
+    const nodes = [
       {
-        nodeId: 'node1',
-        flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat',
+        nodeId: 'external-tool',
+        flowNodeType: FlowNodeTypeEnum.tool,
+        name: 'External tool',
         inputs: [
           {
-            key: 'model',
-            label: 'Model',
-            value: 'any-model',
-            selectedTypeIndex: 0,
+            key: NodeInputKeyEnum.aiModel,
+            label: 'Business model parameter',
+            value: 'gpt-4',
+            renderTypeList: [FlowNodeInputTypeEnum.select]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    formatModels({ nodes, models, modelReferencePolicy: 'fallback' });
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({ key: NodeInputKeyEnum.aiModel, value: 'gpt-4' })
+    ]);
+  });
+
+  it('clears an unresolved rerank model without falling back across model types', () => {
+    const nodes = [
+      {
+        nodeId: 'dataset-search',
+        flowNodeType: FlowNodeTypeEnum.datasetSearchNode,
+        name: 'Dataset search',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.datasetSearchRerankModel,
+            label: 'Rerank model',
+            value: 'missing-rerank',
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
@@ -1363,22 +1742,133 @@ describe('removeUnauthModels', () => {
       }
     ];
 
-    const result = await removeUnauthModels({ modules });
-    expect(result?.[0].inputs[0].value).toBeUndefined();
+    formatModels({
+      nodes,
+      models: models.filter((model) => model.type === ModelTypeEnum.llm),
+      modelReferencePolicy: 'fallback'
+    });
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({
+        key: NodeInputKeyEnum.datasetSearchRerankModelId,
+        value: ''
+      })
+    ]);
   });
 
-  it('should handle multiple modules with multiple model inputs', async () => {
-    const modules = [
+  it('throws one aggregated error for unresolved models on publish', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Agent',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: 'disabled-model-id',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchRerankModel,
+            value: 'disabled-rerank',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetSearchUsingReRank,
+            value: true,
+            renderTypeList: [FlowNodeInputTypeEnum.hidden]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    expect(() => formatModels({ nodes, models, modelReferencePolicy: 'validate' })).toThrow(
+      'disabled-model-id、disabled-rerank 模型已停用'
+    );
+  });
+
+  it('does not repair an invalid modelId from a valid legacy model when falling back', () => {
+    const nodes = [
       {
         nodeId: 'node1',
         flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat 1',
+        name: 'Chat',
         inputs: [
           {
-            key: 'model',
-            label: 'Model',
+            key: NodeInputKeyEnum.aiModelId,
+            value: 'invalid-id',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.aiModel,
             value: 'gpt-4',
-            selectedTypeIndex: 0,
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    formatModels({ nodes, models, defaultModelIds, modelReferencePolicy: 'fallback' });
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({ key: NodeInputKeyEnum.aiModelId, value: models[2].modelId })
+    ]);
+  });
+
+  it('repairs an imported modelId by model name and removes the legacy field', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: 'model-id-from-another-environment',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: 'gpt-4',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      }
+    ];
+    const chatConfig = {
+      questionGuide: {
+        open: true,
+        modelId: 'question-guide-id-from-another-environment',
+        model: 'gpt-4'
+      }
+    };
+
+    formatModels({ nodes, chatConfig, models, modelReferencePolicy: 'import' });
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({ key: NodeInputKeyEnum.aiModelId, value: models[0].modelId })
+    ]);
+    expect(chatConfig.questionGuide).toEqual({ open: true, modelId: models[0].modelId });
+  });
+
+  it('clears unresolved imported model values while preserving canonical inputs', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: 'invalid-id',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: 'invalid-model',
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
@@ -1387,23 +1877,306 @@ describe('removeUnauthModels', () => {
       {
         nodeId: 'node2',
         flowNodeType: FlowNodeTypeEnum.chatNode,
-        name: 'Chat 2',
+        name: 'Chat',
         inputs: [
           {
-            key: 'model',
-            label: 'Model',
-            value: 'unauthorized',
-            selectedTypeIndex: 0,
+            key: NodeInputKeyEnum.aiModel,
+            value: 'invalid-legacy-model',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      },
+      {
+        nodeId: 'agent',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Agent',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.datasetParams,
+            value: {
+              usingReRank: true,
+              rerankModelId: 'invalid-rerank-id',
+              rerankModel: 'invalid-rerank-model',
+              datasetSearchUsingExtensionQuery: true,
+              datasetSearchExtensionModelId: 'invalid-extension-id',
+              datasetSearchExtensionModel: 'invalid-extension-model'
+            },
+            renderTypeList: [FlowNodeInputTypeEnum.hidden]
+          }
+        ],
+        outputs: []
+      }
+    ];
+    const chatConfig = {
+      questionGuide: {
+        open: true,
+        modelId: 'invalid-question-guide-id',
+        model: 'invalid-question-guide-model'
+      },
+      ttsConfig: {
+        type: 'model' as const,
+        modelId: 'invalid-tts-id',
+        model: 'invalid-tts-model',
+        voice: 'alloy'
+      }
+    };
+
+    formatModels({ nodes, chatConfig, models, modelReferencePolicy: 'import' });
+
+    expect(nodes[0].inputs).toHaveLength(1);
+    expect(nodes[0].inputs[0]).toMatchObject({ key: NodeInputKeyEnum.aiModelId });
+    expect(nodes[0].inputs[0]).toHaveProperty('value', undefined);
+    expect(nodes[1].inputs).toHaveLength(1);
+    expect(nodes[1].inputs[0]).toMatchObject({ key: NodeInputKeyEnum.aiModelId });
+    expect(nodes[1].inputs[0]).toHaveProperty('value', undefined);
+
+    const datasetParams = nodes[2].inputs[0].value as Record<string, unknown>;
+    expect(datasetParams).toHaveProperty('rerankModelId', undefined);
+    expect(datasetParams).not.toHaveProperty('rerankModel');
+    expect(datasetParams).toHaveProperty('datasetSearchExtensionModelId', undefined);
+    expect(datasetParams).not.toHaveProperty('datasetSearchExtensionModel');
+
+    expect(chatConfig.questionGuide).toHaveProperty('modelId', undefined);
+    expect(chatConfig.questionGuide).not.toHaveProperty('model');
+    expect(chatConfig.ttsConfig).toHaveProperty('modelId', undefined);
+    expect(chatConfig.ttsConfig).not.toHaveProperty('model');
+  });
+
+  it('preserves unresolved draft values while removing legacy fields', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: 'invalid-id',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: 'gpt-4',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      },
+      {
+        nodeId: 'node2',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: 'unresolved-legacy-model',
             renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
           }
         ],
         outputs: []
       }
     ];
-    const allowedModels = new Set(['gpt-4']);
+    const chatConfig = {
+      questionGuide: { open: true, modelId: 'invalid-question-guide', model: 'gpt-4' }
+    };
 
-    const result = await removeUnauthModels({ modules, allowedModels });
-    expect(result?.[0].inputs[0].value).toBe('gpt-4');
-    expect(result?.[1].inputs[0].value).toBeUndefined();
+    expect(() =>
+      formatModels({ nodes, chatConfig, models, modelReferencePolicy: 'preserve' })
+    ).not.toThrow();
+
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({ key: NodeInputKeyEnum.aiModelId, value: 'invalid-id' })
+    ]);
+    expect(nodes[1].inputs).toEqual([
+      expect.objectContaining({
+        key: NodeInputKeyEnum.aiModelId,
+        value: 'unresolved-legacy-model'
+      })
+    ]);
+    expect(chatConfig.questionGuide).toEqual({
+      open: true,
+      modelId: 'invalid-question-guide'
+    });
+  });
+
+  it('falls back to the first active same-type model when the configured default is invalid', () => {
+    const chatConfig = {
+      questionGuide: { open: false, modelId: 'disabled-llm' }
+    };
+
+    formatModels({
+      nodes: [],
+      chatConfig,
+      models,
+      defaultModelIds: { [ModelTypeEnum.llm]: 'invalid-default-id' },
+      modelReferencePolicy: 'validate'
+    });
+
+    expect(chatConfig.questionGuide).toEqual({ open: false, modelId: models[0].modelId });
+  });
+
+  it('does not validate a canonical reference modelId and removes the legacy input', () => {
+    const nodes = [
+      {
+        nodeId: 'node1',
+        flowNodeType: FlowNodeTypeEnum.chatNode,
+        name: 'Chat',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: ['source-node', 'model-id'],
+            selectedType: FlowNodeInputTypeEnum.reference,
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel, FlowNodeInputTypeEnum.reference]
+          },
+          {
+            key: NodeInputKeyEnum.aiModel,
+            value: 'disabled-model',
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    expect(() => formatModels({ nodes, models, modelReferencePolicy: 'validate' })).not.toThrow();
+    expect(nodes[0].inputs).toEqual([
+      expect.objectContaining({
+        key: NodeInputKeyEnum.aiModelId,
+        value: ['source-node', 'model-id']
+      })
+    ]);
+  });
+
+  it('normalizes nested agent dataset model fields and applies feature gates', () => {
+    const nodes = [
+      {
+        nodeId: 'agent',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Agent',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.datasetParams,
+            value: {
+              usingReRank: false,
+              rerankModel: 'disabled-rerank',
+              datasetSearchUsingExtensionQuery: true,
+              datasetSearchExtensionModel: 'extension-v1'
+            },
+            renderTypeList: [FlowNodeInputTypeEnum.hidden]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    formatModels({ nodes, models, defaultModelIds, modelReferencePolicy: 'validate' });
+
+    expect(nodes[0].inputs[0].value).toEqual({
+      usingReRank: false,
+      rerankModelId: models[1].modelId,
+      datasetSearchUsingExtensionQuery: true,
+      datasetSearchExtensionModelId: models[2].modelId
+    });
+  });
+
+  it('moves nested agent dataset model references to modelId fields without validation', () => {
+    const nodes = [
+      {
+        nodeId: 'agent',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Agent',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.datasetParams,
+            value: {
+              usingReRank: true,
+              rerankModel: ['source-node', 'rerank-model-id'],
+              datasetSearchUsingExtensionQuery: true,
+              datasetSearchExtensionModelId: '{{extensionModelId}}',
+              datasetSearchExtensionModel: 'legacy-extension-model'
+            },
+            renderTypeList: [FlowNodeInputTypeEnum.hidden]
+          }
+        ],
+        outputs: []
+      }
+    ];
+
+    expect(() => formatModels({ nodes, models, modelReferencePolicy: 'validate' })).not.toThrow();
+    expect(nodes[0].inputs[0].value).toEqual({
+      usingReRank: true,
+      rerankModelId: ['source-node', 'rerank-model-id'],
+      datasetSearchUsingExtensionQuery: true,
+      datasetSearchExtensionModelId: '{{extensionModelId}}'
+    });
+  });
+
+  it('adds portable model names for export while retaining modelIds', () => {
+    const nodes = [
+      {
+        nodeId: 'agent',
+        flowNodeType: FlowNodeTypeEnum.agent,
+        name: 'Agent',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: models[0].modelId,
+            renderTypeList: [FlowNodeInputTypeEnum.selectLLMModel]
+          },
+          {
+            key: NodeInputKeyEnum.datasetParams,
+            value: {
+              usingReRank: true,
+              rerankModelId: models[1].modelId
+            },
+            renderTypeList: [FlowNodeInputTypeEnum.hidden]
+          }
+        ],
+        outputs: []
+      },
+      {
+        nodeId: 'external-tool',
+        flowNodeType: FlowNodeTypeEnum.tool,
+        name: 'External tool',
+        inputs: [
+          {
+            key: NodeInputKeyEnum.aiModelId,
+            value: models[0].modelId,
+            renderTypeList: [FlowNodeInputTypeEnum.input]
+          }
+        ],
+        outputs: []
+      }
+    ];
+    const chatConfig = {
+      questionGuide: { open: true, modelId: models[0].modelId },
+      ttsConfig: { type: 'model' as const, modelId: models[4].modelId }
+    };
+
+    addModelNamesToWorkflow({ nodes, chatConfig, models });
+
+    expect(nodes[0].inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: NodeInputKeyEnum.aiModelId, value: models[0].modelId }),
+        expect.objectContaining({ key: NodeInputKeyEnum.aiModel, value: models[0].model })
+      ])
+    );
+    expect(nodes[0].inputs[1].value).toEqual({
+      usingReRank: true,
+      rerankModelId: models[1].modelId,
+      rerankModel: models[1].model
+    });
+    expect(nodes[1].inputs).toHaveLength(1);
+    expect(chatConfig.questionGuide).toEqual({
+      open: true,
+      modelId: models[0].modelId,
+      model: models[0].model
+    });
+    expect(chatConfig.ttsConfig).toEqual({
+      type: 'model',
+      modelId: models[4].modelId,
+      model: models[4].model
+    });
   });
 });

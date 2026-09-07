@@ -4,14 +4,12 @@ import DashboardContainer from '@/pageComponents/dashboard/Container';
 import { Box, Button, Flex, Grid, HStack } from '@chakra-ui/react';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
-import {
-  type AppTemplateSchemaType,
-  type TemplateTypeSchemaType
-} from '@fastgpt/global/core/app/type';
+import { type TemplateTypeSchemaType } from '@fastgpt/global/core/app/type';
 import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
+import type { AppTemplateListItemType } from '@fastgpt/global/openapi/core/app/template/api';
 import { form2AppWorkflow } from '@/pageComponents/app/detail/Edit/SimpleApp/utils';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
@@ -22,12 +20,21 @@ import Avatar from '@fastgpt/web/components/common/Avatar';
 
 import dynamic from 'next/dynamic';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
-import MySelect from '@fastgpt/web/components/common/MySelect';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
+import { usePersistedFilters } from '@fastgpt/web/hooks/usePersistedFilters';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { appTypeTagMap } from '@/pageComponents/dashboard/constant';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import { getAppDetailRoute, isWorkflowAppType } from '@/web/core/app/utils';
+import { useUserStore } from '@/web/support/user/useUserStore';
+import { buildFilterStorageKey } from '@/web/common/filter/storageKey';
+import TemplateCategoryFilter from '@/pageComponents/dashboard/agent/filters/TemplateCategoryFilter';
+import {
+  AppListFiltersStoreSchema,
+  defaultAppListFiltersStore,
+  type TemplateMarketFilterType
+} from '@/pageComponents/dashboard/agent/filters/utils';
 const UseGuideModal = dynamic(() => import('@/components/common/Modal/UseGuideModal'), {
   ssr: false
 });
@@ -37,7 +44,7 @@ const TemplateMarket = ({
   templateTags,
   MenuIcon
 }: {
-  templateList: AppTemplateSchemaType[];
+  templateList: AppTemplateListItemType[];
   templateTags: TemplateTypeSchemaType[];
   MenuIcon: JSX.Element;
 }) => {
@@ -46,27 +53,43 @@ const TemplateMarket = ({
   const { isPc } = useSystem();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const {
-    parentId,
-    type,
-    appType = 'all'
-  } = router.query as { parentId?: ParentIdType; type?: string; appType?: AppTypeEnum | 'all' };
+  const { parentId } = router.query as { parentId?: ParentIdType };
   const [searchKey, setSearchKey] = useState('');
+  const { userInfo } = useUserStore();
+  const teamId = userInfo?.team.teamId;
+  const filterKey = teamId ? buildFilterStorageKey({ teamId }) : '';
+  const [filterStore, setFilterStore] = usePersistedFilters({
+    key: filterKey,
+    schema: AppListFiltersStoreSchema,
+    defaultValue: defaultAppListFiltersStore
+  });
+  const categoryFilter = filterStore.templateMarket;
+  const setCategoryFilter = useCallback(
+    (next: TemplateMarketFilterType) => {
+      setFilterStore((prev) => ({ ...prev, templateMarket: next }));
+    },
+    [setFilterStore]
+  );
+
+  const selectableTags = useMemo(
+    () => templateTags.filter((tag) => templateList.some((item) => item.tags.includes(tag.typeId))),
+    [templateList, templateTags]
+  );
 
   const tagsWithTemplates = useMemo(() => {
-    return templateTags
-      .map((tag) => {
-        const templates = templateList.filter((template) => template.tags.includes(tag.typeId));
-        return {
-          ...tag,
-          templates
-        };
-      })
-      .filter((item) => item.templates.length > 0);
-  }, [templateList, templateTags]);
+    const groups = selectableTags.map((tag) => ({
+      ...tag,
+      templates: templateList.filter((template) => template.tags.includes(tag.typeId))
+    }));
+    // 移动端不展示分类筛选，也不能继续按持久化 tagIds 把列表筛空。
+    if (!isPc || categoryFilter.mode !== 'selected') return groups;
+    if (categoryFilter.tagIds.length === 0) return [];
+    const selected = new Set(categoryFilter.tagIds);
+    return groups.filter((item) => selected.has(item.typeId));
+  }, [categoryFilter, isPc, selectableTags, templateList]);
 
   const { runAsync: onUseTemplate, loading: isCreating } = useRequest(
-    async (template: AppTemplateSchemaType) => {
+    async (template: AppTemplateListItemType) => {
       const templateDetail = await getTemplateMarketItemDetail(template.templateId);
 
       if (template.type === AppTypeEnum.simple) {
@@ -78,27 +101,33 @@ const TemplateMarket = ({
         templateDetail.workflow = completeWorkflow;
       }
 
-      return postCreateApp({
+      const appType = template.type as AppTypeEnum;
+      const appId = await postCreateApp({
         parentId,
         avatar: template.avatar,
         name: template.name,
-        type: template.type as AppTypeEnum,
+        type: appType,
         modules: templateDetail.workflow.nodes || [],
         edges: templateDetail.workflow.edges || [],
         chatConfig: templateDetail.workflow.chatConfig,
         templateId: templateDetail.templateId
-      }).then((res) => {
-        webPushTrack.useAppTemplate({
-          id: res,
-          name: template.name
-        });
-
-        return res;
       });
+
+      webPushTrack.useAppTemplate({
+        id: appId,
+        name: template.name
+      });
+
+      return { appId, appType };
     },
     {
-      onSuccess(id: string) {
-        router.push(`/app/detail?appId=${id}`);
+      onSuccess({ appId, appType }) {
+        router.push(
+          getAppDetailRoute({
+            appId,
+            openSystemConfig: isWorkflowAppType(appType)
+          })
+        );
       },
       successToast: t('common:create_success'),
       errorToast: t('common:create_failed')
@@ -106,7 +135,7 @@ const TemplateMarket = ({
   );
 
   const TemplateCard = useCallback(
-    ({ item }: { item: AppTemplateSchemaType }) => {
+    ({ item }: { item: AppTemplateListItemType }) => {
       const { t } = useTranslation();
       const icon = appTypeTagMap[item.type as keyof typeof appTypeTagMap]?.icon;
 
@@ -236,72 +265,57 @@ const TemplateMarket = ({
     [onUseTemplate]
   );
 
-  // Scroll to the selected template type
-  useEffect(() => {
-    if (type) {
-      const typeElement = document.getElementById(type as string);
-      if (typeElement) {
-        typeElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const searchedTemplates = useMemo(() => {
+    return templateList.filter((template) => {
+      if (isPc && categoryFilter.mode === 'selected') {
+        if (categoryFilter.tagIds.length === 0) return false;
+        if (!template.tags.some((tag) => categoryFilter.tagIds.includes(tag))) return false;
       }
-    }
-  }, [type]);
+      return `${template.name}${template.intro}`.includes(searchKey);
+    });
+  }, [categoryFilter, isPc, searchKey, templateList]);
 
   return (
     <MyBox ref={containerRef} h={'100%'} isLoading={isCreating}>
       <Flex flexDirection={'column'} h={'100%'} py={6}>
         <Flex alignItems={'center'} px={6} mb={5}>
           {isPc ? (
-            <Box fontSize={'lg'} color={'myGray.900'} fontWeight={'medium'}>
+            <Box fontSize={'lg'} color={'myGray.900'} fontWeight={'medium'} flexShrink={0}>
               {t('app:template_market')}
             </Box>
           ) : (
             MenuIcon
           )}
           <Box flex={1} />
-          <Box mr={2}>
+          {isPc && (
+            <Flex alignItems={'center'} gap={3} flexShrink={0}>
+              <TemplateCategoryFilter
+                tags={selectableTags}
+                value={categoryFilter}
+                onChange={setCategoryFilter}
+              />
+              <SearchInput
+                h={9}
+                w={240}
+                bg={'white'}
+                placeholder={t('app:templateMarket.Search_template')}
+                value={searchKey}
+                onChange={(e) => setSearchKey(e.target.value)}
+              />
+            </Flex>
+          )}
+        </Flex>
+        {!isPc && (
+          <Box px={6} mb={5}>
             <SearchInput
               h={9}
-              w={240}
               bg={'white'}
               placeholder={t('app:templateMarket.Search_template')}
               value={searchKey}
               onChange={(e) => setSearchKey(e.target.value)}
             />
           </Box>
-          <MySelect
-            h={9}
-            w={124}
-            bg={'white'}
-            value={appType}
-            list={[
-              {
-                value: 'all',
-                label: t('app:type.All')
-              },
-              {
-                value: AppTypeEnum.workflow,
-                label: t('app:type.Workflow bot')
-              },
-              {
-                value: AppTypeEnum.simple,
-                label: t('app:type.Chat_Agent')
-              },
-              {
-                value: AppTypeEnum.workflowTool,
-                label: t('app:toolType_workflow')
-              }
-            ]}
-            onChange={(e) => {
-              router.push({
-                query: {
-                  ...router.query,
-                  type: '',
-                  appType: e
-                }
-              });
-            }}
-          />
-        </Flex>
+        )}
 
         <Box flex={'1 0 0'} px={6} overflow={'auto'}>
           {searchKey ? (
@@ -310,11 +324,7 @@ const TemplateMarket = ({
                 {t('common:xx_search_result', { key: searchKey })}
               </Box>
               {(() => {
-                const templates = templateList.filter((template) =>
-                  `${template.name}${template.intro}`.includes(searchKey)
-                );
-
-                if (templates.length > 0) {
+                if (searchedTemplates.length > 0) {
                   return (
                     <Grid
                       gridTemplateColumns={[
@@ -328,7 +338,7 @@ const TemplateMarket = ({
                       alignItems={'stretch'}
                       pb={5}
                     >
-                      {templates.map((item) => (
+                      {searchedTemplates.map((item) => (
                         <TemplateCard key={item.templateId} item={item} />
                       ))}
                     </Grid>
@@ -340,36 +350,40 @@ const TemplateMarket = ({
             </>
           ) : (
             <Flex flexDirection={'column'} gap={5}>
-              {tagsWithTemplates.map((item) => {
-                return (
-                  <Box key={item.typeId}>
-                    <Box
-                      id={item.typeId}
-                      color={'myGray.900'}
-                      mb={4}
-                      fontWeight={'medium'}
-                      fontSize={'14px'}
-                    >
-                      {t(item.typeName as any)}
+              {tagsWithTemplates.length === 0 ? (
+                <EmptyTip text={t('app:template_market_empty_data')} />
+              ) : (
+                tagsWithTemplates.map((item) => {
+                  return (
+                    <Box key={item.typeId}>
+                      <Box
+                        id={item.typeId}
+                        color={'myGray.900'}
+                        mb={4}
+                        fontWeight={'medium'}
+                        fontSize={'14px'}
+                      >
+                        {t(item.typeName as any)}
+                      </Box>
+                      <Grid
+                        gridTemplateColumns={[
+                          '1fr',
+                          'repeat(2,1fr)',
+                          'repeat(3,1fr)',
+                          'repeat(3,1fr)',
+                          'repeat(4,1fr)',
+                          'repeat(5,1fr)'
+                        ]}
+                        gridGap={4}
+                      >
+                        {item.templates.map((item) => (
+                          <TemplateCard key={item.templateId} item={item} />
+                        ))}
+                      </Grid>
                     </Box>
-                    <Grid
-                      gridTemplateColumns={[
-                        '1fr',
-                        'repeat(2,1fr)',
-                        'repeat(3,1fr)',
-                        'repeat(3,1fr)',
-                        'repeat(4,1fr)',
-                        'repeat(5,1fr)'
-                      ]}
-                      gridGap={4}
-                    >
-                      {item.templates.map((item) => (
-                        <TemplateCard key={item.templateId} item={item} />
-                      ))}
-                    </Grid>
-                  </Box>
-                );
-              })}
+                  );
+                })
+              )}
             </Flex>
           )}
         </Box>
@@ -378,7 +392,7 @@ const TemplateMarket = ({
   );
 };
 
-const TemplateMarketContainer = ({ children }: { children: React.ReactNode }) => {
+const TemplateMarketContainer = () => {
   return (
     <DashboardContainer>
       {({ templateTags, templateList, MenuIcon }) => (

@@ -1,9 +1,10 @@
 import type { OpenAPIPath } from '../../../type';
-import { TagsMap } from '../../../tag';
+import { DevApiTagsMap } from '../../../tag';
+import { CreateAppResponseSchema } from '../common/api';
 import {
   CreateHttpToolsBodySchema,
-  CreateHttpToolsResponseSchema,
   UpdateHttpToolsBodySchema,
+  UpdateHttpToolsResponseSchema,
   GetApiSchemaByUrlBodySchema,
   GetApiSchemaByUrlResponseSchema,
   RunHttpToolBodySchema,
@@ -15,7 +16,7 @@ export const HttpToolsPath: OpenAPIPath = {
     post: {
       summary: '创建 HTTP 工具集',
       description: '创建 HTTP 工具集应用',
-      tags: [TagsMap.httpTools],
+      tags: [DevApiTagsMap.httpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -28,7 +29,7 @@ export const HttpToolsPath: OpenAPIPath = {
           description: '成功创建 HTTP 工具集',
           content: {
             'application/json': {
-              schema: CreateHttpToolsResponseSchema
+              schema: CreateAppResponseSchema
             }
           }
         }
@@ -36,10 +37,10 @@ export const HttpToolsPath: OpenAPIPath = {
     }
   },
   '/core/app/httpTools/update': {
-    post: {
+    put: {
       summary: '更新 HTTP 工具集',
       description: '更新 HTTP 工具集配置',
-      tags: [TagsMap.httpTools],
+      tags: [DevApiTagsMap.httpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -49,7 +50,12 @@ export const HttpToolsPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '成功更新 HTTP 工具集'
+          description: '成功更新 HTTP 工具集',
+          content: {
+            'application/json': {
+              schema: UpdateHttpToolsResponseSchema
+            }
+          }
         }
       }
     }
@@ -58,7 +64,7 @@ export const HttpToolsPath: OpenAPIPath = {
     post: {
       summary: '通过 URL 解析 OpenAPI Schema',
       description: '根据远程 OpenAPI Schema URL 解析并返回结构化的 Schema 对象',
-      tags: [TagsMap.httpTools],
+      tags: [DevApiTagsMap.httpTools],
       requestBody: {
         content: {
           'application/json': {
@@ -82,7 +88,7 @@ export const HttpToolsPath: OpenAPIPath = {
     post: {
       summary: '运行 HTTP 工具',
       description: '运行 HTTP 工具并返回调用结果',
-      tags: [TagsMap.httpTools],
+      tags: [DevApiTagsMap.httpTools],
       requestBody: {
         content: {
           'application/json': {

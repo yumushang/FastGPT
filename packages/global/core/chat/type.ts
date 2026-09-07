@@ -1,30 +1,34 @@
-import { SearchDataResponseItemSchema } from '../dataset/type';
+import { SearchDataResponseQuoteListItemSchema } from '../dataset/type';
 import {
   ChatFileTypeEnum,
   ChatGenerateStatusEnum,
   ChatRoleEnum,
-  type ChatSourceEnum
+  ChatSourceEnum,
+  ChatSourceTypeEnum
 } from './constants';
 import { FlowNodeTypeEnum } from '../workflow/node/constant';
 import { DispatchNodeResponseKeyEnum } from '../workflow/runtime/constants';
-import { AppSchemaTypeSchema, type AppSchemaType, type VariableItemType } from '../app/type';
+import { AppSchemaTypeSchema } from '../app/type';
+import { VariableItemTypeSchema } from '../app/variable/type';
 import { DispatchNodeResponseSchema } from '../workflow/runtime/type';
 import { WorkflowInteractiveResponseTypeSchema } from '../workflow/template/system/interactive/type';
-import type { FlowNodeInputItemType } from '../workflow/type/io';
+import { FlowNodeInputItemTypeSchema } from '../workflow/type/io';
 import z from 'zod';
 import {
   AgentLoopAskSchema,
   AgentLoopPlanUpdateSchema,
-  AgentLoopStopGateSchema,
-  AgentPlanSchema,
+  AgentPlanReadSchema,
   AgentPlanStatusSchema
 } from '../ai/agent/type';
+import { ObjectIdSchema } from '../../common/type/mongo';
 
 export const ChatHistoryItemResSchema = DispatchNodeResponseSchema.extend({
   nodeId: z.string(),
   id: z.string(),
+  parentId: z.string().optional(),
   moduleType: z.enum(FlowNodeTypeEnum),
-  moduleName: z.string()
+  moduleName: z.string(),
+  childResponseCount: z.number().optional()
 });
 export type ChatHistoryItemResType = z.infer<typeof ChatHistoryItemResSchema>;
 
@@ -55,26 +59,20 @@ export type SandboxStatusPhase =
   | 'extractingPackage' // extracting package in sandbox
   // Lazy-init phases
   | 'lazyInit' // LLM first calls sandbox tool, triggers container creation
+  // App runtime silent upgrade phase
+  | 'upgrading'
   // Terminal phases
   | 'ready' // sandbox is ready
   | 'failed'; // initialization failed
 // Note: 'expiredDetected' and 'restarting' are internal and filtered server-side
 
 export type SandboxStatusItemType = {
-  sandboxId: string; // sessionId or skillId (correlates events for same sandbox)
+  sandboxId: string; // FastGPT sandbox key; ready events use the persisted sandbox instance key
   phase: SandboxStatusPhase;
   isWarmStart?: boolean; // present on 'connecting' and 'ready'
   skillName?: string; // present on 'deployingSkills', 'downloadingPackage',
   // 'uploadingPackage', 'extractingPackage' in session-runtime
   message?: string; // optional human-readable message
-  // Present on 'ready' phase for edit-debug sandboxes
-  endpoint?: {
-    host: string;
-    port: number;
-    protocol: 'http' | 'https';
-    url: string;
-  };
-  providerSandboxId?: string; // present on 'ready' for edit-debug
 };
 
 /* Skill module response */
@@ -88,49 +86,59 @@ export const SkillModuleResponseItemSchema = z.object({
 export type SkillModuleResponseItemType = z.infer<typeof SkillModuleResponseItemSchema>;
 
 /* --------- chat ---------- */
-export type ChatSchemaType = {
-  _id: string;
-  chatId: string;
-  userId: string;
-  teamId: string;
-  tmbId: string;
-  appId: string;
-  appVersionId?: string;
-  createTime: Date;
-  updateTime: Date;
-  title: string;
-  customTitle: string;
-  top: boolean;
-  source: `${ChatSourceEnum}`;
-  sourceName?: string;
+export const ChatSchema = z.object({
+  _id: ObjectIdSchema,
+  chatId: z.string(),
+  userId: ObjectIdSchema,
+  teamId: ObjectIdSchema,
+  tmbId: ObjectIdSchema,
+  sourceType: z.enum(ChatSourceTypeEnum).default(ChatSourceTypeEnum.app).meta({
+    description: '会话所属资源类型。旧数据可能缺失，业务查询层按 app 兼容。'
+  }),
+  appId: ObjectIdSchema.meta({
+    description: '历史物理字段名。业务语义为 sourceId，可能是 appId 或 skillId。'
+  }),
+  appVersionId: ObjectIdSchema.optional().meta({ description: 'appId 为 app 时候才有' }),
+  createTime: z.coerce.date(),
+  updateTime: z.coerce.date(),
+  title: z.string(),
+  customTitle: z.string().optional(),
+  top: z.boolean().default(false),
+  source: z.enum(ChatSourceEnum),
+  sourceName: z.string().optional(),
 
-  shareId?: string;
-  outLinkUid?: string;
+  shareId: z.string().optional(),
+  outLinkUid: z.string().optional(),
 
-  variableList?: VariableItemType[];
-  welcomeText?: string;
-  variables: Record<string, any>;
-  pluginInputs?: FlowNodeInputItemType[];
-  metadata?: Record<string, any>;
+  variableList: z.array(VariableItemTypeSchema).optional(),
+  welcomeText: z.string().optional(),
+  variables: z.record(z.string(), z.any()),
+  pluginInputs: z.array(FlowNodeInputItemTypeSchema).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 
   // Boolean flags for efficient filtering
-  hasGoodFeedback?: boolean;
-  hasBadFeedback?: boolean;
-  hasUnreadGoodFeedback?: boolean;
-  hasUnreadBadFeedback?: boolean;
+  hasGoodFeedback: z.boolean().optional(),
+  hasBadFeedback: z.boolean().optional(),
+  hasUnreadGoodFeedback: z.boolean().optional(),
+  hasUnreadBadFeedback: z.boolean().optional(),
   // Error count (redundant field for performance)
-  errorCount?: number;
+  errorCount: z.number().optional(),
 
   /** 旧数据可能无此字段；业务上按 done 处理 */
-  chatGenerateStatus?: ChatGenerateStatusEnum;
-  hasBeenRead: boolean;
+  chatGenerateStatus: z
+    .enum(ChatGenerateStatusEnum)
+    .default(ChatGenerateStatusEnum.done)
+    .meta({ description: '生成状态' }),
+  hasBeenRead: z.boolean().default(true),
 
-  deleteTime?: Date | null;
-};
+  deleteTime: z.coerce.date().nullish()
+});
+export type ChatSchemaType = z.infer<typeof ChatSchema>;
 
-export type ChatWithAppSchema = Omit<ChatSchemaType, 'appId'> & {
-  appId: AppSchemaType;
-};
+export const ChatWithAppSchema = ChatSchema.omit({ appId: true }).extend({
+  appId: AppSchemaTypeSchema
+});
+export type ChatWithAppSchema = z.infer<typeof ChatWithAppSchema>;
 
 /* --------- chat item ---------- */
 // User
@@ -155,7 +163,7 @@ export type ChatFileStoreValue =
     };
 
 export const UserChatItemValueItemSchema = z.object({
-  planId: z.string().nullish(),
+  askId: z.string().nullish(),
   text: z
     .object({
       content: z.string()
@@ -204,7 +212,7 @@ export type ContextCheckpointValueType = z.infer<typeof ContextCheckpointValueSc
 
 export const AIChatItemValueSchema = z.object({
   id: z.string().nullish(),
-  planId: z.string().nullish(),
+  askId: z.string().nullish(),
   text: z
     .object({
       content: z.string()
@@ -218,13 +226,13 @@ export const AIChatItemValueSchema = z.object({
   tools: z.array(ToolModuleResponseItemSchema).nullish(),
   skills: z.array(SkillModuleResponseItemSchema).nullish(),
   interactive: WorkflowInteractiveResponseTypeSchema.optional(),
-  plan: AgentPlanSchema.nullish(),
+  plan: AgentPlanReadSchema.nullish(),
   planStatus: AgentPlanStatusSchema.nullish(),
   agentPlanUpdate: AgentLoopPlanUpdateSchema.nullish(),
   agentAsk: AgentLoopAskSchema.nullish(),
-  agentStopGate: AgentLoopStopGateSchema.nullish(),
   contextCheckpoint: ContextCheckpointValueSchema.nullish(),
   tool: ToolModuleResponseItemSchema.nullish().meta({ deprecated: true }),
+  hideReason: z.boolean().optional(),
   hideInUI: z.boolean().optional()
 });
 
@@ -269,6 +277,7 @@ export const ChatItemDBSchema = ChatItemObjItemSchema.and(
     userId: z.string(),
     teamId: z.string(),
     tmbId: z.string(),
+    sourceType: z.enum(ChatSourceTypeEnum).default(ChatSourceTypeEnum.app),
     appId: z.string(),
     time: z.coerce.date(),
     deleteTime: z.coerce.date().nullish()
@@ -286,9 +295,11 @@ export type ErrorTextItemType = z.infer<typeof ErrorTextItemSchema>;
 /* --------- chat item response ---------- */
 export const ChatItemResponseSchema = z.object({
   teamId: z.string(),
+  sourceType: z.enum(ChatSourceTypeEnum).default(ChatSourceTypeEnum.app),
   appId: z.string(),
   chatId: z.string(),
   chatItemDataId: z.string(),
+  time: z.coerce.date().optional(),
   data: ChatHistoryItemResSchema
 });
 export type ChatItemResponseSchemaType = z.infer<typeof ChatItemResponseSchema>;
@@ -310,12 +321,23 @@ export const HistoryItemSchema = z.object({
 });
 export type HistoryItemType = z.infer<typeof HistoryItemSchema>;
 
-export const ChatHistoryItemSchema = HistoryItemSchema.extend({
-  appId: z.string(),
+const ChatHistoryItemExtraShape = {
   top: z.boolean().optional(),
   chatGenerateStatus: z.enum(ChatGenerateStatusEnum).optional(),
   hasBeenRead: z.boolean().optional()
-});
+};
+export const ChatHistoryItemSchema = z.union([
+  HistoryItemSchema.extend({
+    appId: z.string(),
+    skillId: z.undefined().optional(),
+    ...ChatHistoryItemExtraShape
+  }),
+  HistoryItemSchema.extend({
+    appId: z.undefined().optional(),
+    skillId: z.string(),
+    ...ChatHistoryItemExtraShape
+  })
+]);
 export type ChatHistoryItemType = z.infer<typeof ChatHistoryItemSchema>;
 
 /* ------- response data ------------ */
@@ -327,7 +349,7 @@ export type ToolCiteLinksType = z.infer<typeof ToolCiteLinksSchema>;
 
 export const ResponseTagItemSchema = z.object({
   useAgentSandbox: z.boolean().optional(),
-  totalQuoteList: z.array(SearchDataResponseItemSchema).optional(),
+  totalQuoteList: z.array(SearchDataResponseQuoteListItemSchema).optional(),
   toolCiteLinks: z.array(ToolCiteLinksSchema).optional(),
   errorText: ErrorTextItemSchema.optional(),
   llmModuleAccount: z.number().optional().meta({ deprecated: true }),

@@ -1,25 +1,54 @@
 import type { OpenAPIPath } from '../../type';
-import { TagsMap } from '../../tag';
+import { DevApiTagsMap } from '../../tag';
 import {
   GetLLMRequestRecordParamsSchema,
   LLMRequestRecordSchema,
-  ResumeStreamParamsSchema,
+  OptimizePromptBodySchema,
+  OptimizePromptResponseSchema,
+  ResumeStreamParamsRawSchema,
   StreamNoNeedToBeResumeSchema
 } from './api';
 import { SandboxPath } from './sandbox';
 import { AgentPath } from './agent';
 import { z } from 'zod';
 import { getErrorResponse } from '../../type';
+import { AIModelPath } from './model';
 
 export const AIPath: OpenAPIPath = {
   ...SandboxPath,
   ...AgentPath,
+  ...AIModelPath,
+
+  '/core/ai/optimizePrompt': {
+    post: {
+      summary: '优化 Prompt',
+      description: '根据优化要求调用指定模型，以 SSE 流式返回结构化的优化结果',
+      tags: [DevApiTagsMap.aiAuxiliary],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: OptimizePromptBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '返回 Prompt 优化结果事件流',
+          content: {
+            'text/event-stream': {
+              schema: OptimizePromptResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
 
   '/core/ai/record/getRecord': {
     get: {
       summary: '获取 LLM 请求追踪记录',
       description: '根据 requestId 查询 LLM 请求的详细信息,包括请求体和响应内容',
-      tags: [TagsMap.aiCommon],
+      tags: [DevApiTagsMap.aiCommon],
       requestParams: {
         query: GetLLMRequestRecordParamsSchema
       },
@@ -40,10 +69,10 @@ export const AIPath: OpenAPIPath = {
     get: {
       summary: '恢复流式响应',
       description:
-        '与 /v2/chat/completions 配套；GET query 传 appId / chatId / teamId。已完成对话可返回 JSON；若对话仍在生成中，则必须请求 SSE，否则返回 406。',
-      tags: [TagsMap.aiCommon],
+        '与 /v2/chat/completions 配套；GET query 传 appId、skillId 或 outLinkAuthData（三选一）以及 chatId。已完成对话可返回 JSON；若对话仍在生成中，则必须请求 SSE，否则返回 406。',
+      tags: [DevApiTagsMap.chatController],
       requestParams: {
-        query: ResumeStreamParamsSchema
+        query: ResumeStreamParamsRawSchema
       },
       responses: {
         200: {

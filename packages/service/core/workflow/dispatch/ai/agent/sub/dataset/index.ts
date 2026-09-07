@@ -1,7 +1,12 @@
 import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
 import type { SearchDataResponseItemType } from '@fastgpt/global/core/dataset/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { getEmbeddingModel, getLLMModel, getRerankModel } from '../../../../../../ai/model';
+import {
+  getEmbeddingModelData,
+  getLLMModelData,
+  getOptionalVlmModelData,
+  getRerankModelData
+} from '../../../../../../ai/model';
 import { createLLMResponse } from '../../../../../../ai/llm/request';
 import { countPromptTokens } from '../../../../../../../common/string/tiktoken/index';
 import { calculateCompressionThresholds } from '../../../../../../ai/llm/compress/constants';
@@ -22,16 +27,20 @@ import { parseJsonArgs } from '../../../../../../ai/utils';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
 import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import {
+  createImageCaptionChildNodeResponse,
   createChunkSelectionChildNodeResponse,
   createQueryExtensionChildNodeResponse
 } from '../../../../dataset/nodeResponse';
+import { filterDatasetsByTmbId } from '../../../../../../dataset/utils';
+import { normalizeDatasetSearchInput } from '../../../../dataset/utils';
+import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
 const logger = getLogger(LogCategories.MODULE.AI.AGENT);
 
 type DatasetSearchParams = {
   teamId: string;
   tmbId: string;
   args: string;
-  llmModel: string;
+  llmModel: LLMSystemModelDataType;
   userKey?: OpenaiAccountType;
   datasetParams?: AppFormEditFormType['dataset'];
 };
@@ -64,12 +73,14 @@ const selectRelevantChunksByLLM = async ({
   query,
   chunks,
   model,
-  userKey
+  userKey,
+  teamId
 }: {
   query: string;
   chunks: SearchDataResponseItemType[];
-  model: string;
+  model: LLMSystemModelDataType;
   userKey?: OpenaiAccountType;
+  teamId: string;
 }): Promise<
   | {
       ids: string[];
@@ -79,8 +90,7 @@ const selectRelevantChunksByLLM = async ({
     }
   | undefined
 > => {
-  const modelData = getLLMModel(model);
-  const threshold = calculateCompressionThresholds(modelData.maxContext).datasetSearchSelection;
+  const threshold = calculateCompressionThresholds(model.config.maxContext).datasetSearchSelection;
   const searchResponseText = chunks.map((item) => `${item.q}\n${item.a || ''}`).join('\n');
   const estimatedTokens = await countPromptTokens(searchResponseText);
 
@@ -119,10 +129,10 @@ ${chunkSummaries}
     const llmStartTime = Date.now();
     const response = await createLLMResponse({
       userKey,
+      teamId,
       body: {
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0,
         stream: false
       }
     });
@@ -135,7 +145,7 @@ ${chunkSummaries}
       .filter((id: string) => id && chunks.some((c) => c.id === id));
 
     // 计算 usage
-    const { totalPoints, modelName } = formatModelChars2Points({
+    const { totalPoints } = formatModelChars2Points({
       model,
       inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens
@@ -144,7 +154,7 @@ ${chunkSummaries}
     const usage: ChatNodeUsageType = {
       totalPoints: response.usage.usedUserOpenAIKey ? 0 : totalPoints,
       moduleName: i18nT('account_usage:dataset_chunk_selection'),
-      model: modelName,
+      modelId: model.modelId,
       inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens
     };
@@ -163,6 +173,7 @@ export const dispatchAgentDatasetSearch = async ({
   args,
   datasetParams,
   teamId,
+  tmbId,
   llmModel,
   userKey
 }: DatasetSearchParams): Promise<DispatchSubAppResponse> => {
@@ -179,28 +190,68 @@ export const dispatchAgentDatasetSearch = async ({
     };
   }
 
-  const query = toolParams.data.query;
+  const queries = toolParams.data.query;
+  const { textQueries, imageQueries } = normalizeDatasetSearchInput(queries);
+  if (textQueries.length === 0 && imageQueries.length === 0) {
+    return {
+      response: 'Query is empty'
+    };
+  }
+  const query = textQueries.join('\n');
 
   logger.debug('[Agent Dataset Search] Starting', {
-    query,
+    queries,
     datasetParams
   });
 
   try {
-    const datasetIds = await Promise.resolve(datasetParams.datasets.map((item) => item.datasetId));
+    const datasetIds = datasetParams.authTmbId
+      ? await filterDatasetsByTmbId({
+          datasetIds: datasetParams.datasets.map((item) => item.datasetId),
+          tmbId
+        })
+      : datasetParams.datasets.map((item) => item.datasetId);
+
+    if (datasetIds.length === 0) {
+      return {
+        response: 'No authorized dataset selected'
+      };
+    }
 
     // Get vector model
-    const vectorModel = getEmbeddingModel(
-      (await MongoDataset.findById(datasetIds[0], 'vectorModel').lean())?.vectorModel
-    );
+    const dataset = await MongoDataset.findById(
+      datasetIds[0],
+      'vectorModelId vectorModel vlmModelId vlmModel'
+    ).lean();
+    const vectorModel = getEmbeddingModelData({
+      modelId: dataset?.vectorModelId,
+      model: dataset?.vectorModel
+    });
+    const vlmModelData = getOptionalVlmModelData({
+      modelId: dataset?.vlmModelId,
+      model: dataset?.vlmModel
+    });
     // Get Rerank Model
-    const rerankModelData = getRerankModel(datasetParams.rerankModel);
+    const rerankModelData = datasetParams.usingReRank
+      ? getRerankModelData({
+          modelId: datasetParams.rerankModelId,
+          model: datasetParams.rerankModel
+        })
+      : undefined;
+    const extensionModelData = datasetParams.datasetSearchUsingExtensionQuery
+      ? getLLMModelData({
+          modelId: datasetParams.datasetSearchExtensionModelId,
+          model: datasetParams.datasetSearchExtensionModel
+        })
+      : undefined;
 
     const searchData: DefaultSearchDatasetDataProps = {
       histories: [],
       teamId,
-      textQueries: [query],
-      model: vectorModel.model,
+      textQueries,
+      imageQueries,
+      model: vectorModel,
+      vlmModel: vlmModelData,
       similarity: datasetParams.similarity ?? 0.4,
       limit: datasetParams.limit || 5000,
       datasetIds,
@@ -210,7 +261,7 @@ export const dispatchAgentDatasetSearch = async ({
       rerankModel: rerankModelData,
       rerankWeight: datasetParams.rerankWeight ?? 0.5,
       datasetSearchUsingExtensionQuery: datasetParams.datasetSearchUsingExtensionQuery ?? false,
-      datasetSearchExtensionModel: datasetParams.datasetSearchExtensionModel,
+      datasetSearchExtensionModel: extensionModelData,
       datasetSearchExtensionBg: datasetParams.datasetSearchExtensionBg,
       userKey
     };
@@ -220,7 +271,8 @@ export const dispatchAgentDatasetSearch = async ({
       reRankInputTokens,
       usingSimilarityFilter,
       usingReRank: searchUsingReRank,
-      queryExtensionResult
+      queryExtensionResult,
+      imageCaptionResult
     } = await defaultSearchDatasetData(searchData);
 
     // count bill results
@@ -232,78 +284,105 @@ export const dispatchAgentDatasetSearch = async ({
     {
       // 1. Query extension
       if (queryExtensionResult) {
-        const { totalPoints, modelName: llmModelName } = formatModelChars2Points({
-          model: queryExtensionResult.llmModel,
+        const { totalPoints } = formatModelChars2Points({
+          model: extensionModelData!,
           inputTokens: queryExtensionResult.inputTokens,
           outputTokens: queryExtensionResult.outputTokens
         });
         const queryExtensionUsage: ChatNodeUsageType = {
           totalPoints: queryExtensionResult.usedUserOpenAIKey ? 0 : totalPoints,
           moduleName: i18nT('common:core.module.template.Query extension'),
-          model: llmModelName,
+          modelId: extensionModelData!.modelId,
           inputTokens: queryExtensionResult.inputTokens,
           outputTokens: queryExtensionResult.outputTokens
         };
         usages.push(queryExtensionUsage);
         childrenResponses.push(
           createQueryExtensionChildNodeResponse({
-            requestId: queryExtensionResult.requestId,
+            requestIds: [queryExtensionResult.requestId],
             usage: queryExtensionUsage,
+            modelName: extensionModelData!.name,
             seconds: queryExtensionResult.seconds,
             query: queryExtensionResult.query
           })
         );
 
-        const { totalPoints: embeddingPoints, modelName: embeddingModelName } =
-          formatModelChars2Points({
-            model: queryExtensionResult.embeddingModel,
-            inputTokens: queryExtensionResult.embeddingTokens
-          });
+        const { totalPoints: embeddingPoints } = formatModelChars2Points({
+          model: vectorModel,
+          inputTokens: queryExtensionResult.embeddingTokens
+        });
         usages.push({
           totalPoints: embeddingPoints,
           moduleName: `${i18nT('account_usage:ai.query_extension_embedding')}`,
-          model: embeddingModelName,
+          modelId: vectorModel.modelId,
           inputTokens: queryExtensionResult.embeddingTokens,
           outputTokens: 0
         });
+      }
+
+      if (imageCaptionResult) {
+        const { totalPoints } = formatModelChars2Points({
+          model: vlmModelData!,
+          inputTokens: imageCaptionResult.inputTokens,
+          outputTokens: imageCaptionResult.outputTokens
+        });
+        const imageCaptionUsage: ChatNodeUsageType = {
+          totalPoints: imageCaptionResult.usedUserOpenAIKey ? 0 : totalPoints,
+          moduleName: i18nT('account_usage:image_parse'),
+          modelId: vlmModelData!.modelId,
+          inputTokens: imageCaptionResult.inputTokens,
+          outputTokens: imageCaptionResult.outputTokens
+        };
+        usages.push(imageCaptionUsage);
+        childrenResponses.push(
+          createImageCaptionChildNodeResponse({
+            requestIds: imageCaptionResult.requestIds,
+            usage: imageCaptionUsage,
+            modelName: vlmModelData!.name,
+            seconds: imageCaptionResult.seconds,
+            queries: imageCaptionResult.queries
+          })
+        );
       }
     }
 
     {
       // 2. Search vector
-      const { totalPoints: embeddingTotalPoints, modelName: embeddingModelName } =
-        formatModelChars2Points({
-          model: vectorModel.model,
-          inputTokens: embeddingTokens
-        });
+      const { totalPoints: embeddingTotalPoints } = formatModelChars2Points({
+        model: vectorModel,
+        inputTokens: embeddingTokens
+      });
       usages.push({
         totalPoints: embeddingTotalPoints,
         moduleName: i18nT('account_usage:dataset_search'),
-        model: embeddingModelName,
+        modelId: vectorModel.modelId,
         inputTokens: embeddingTokens
       });
       // 3. Rerank
       if (searchUsingReRank) {
-        const { totalPoints: reRankTotalPoints, modelName: reRankModelName } =
-          formatModelChars2Points({
-            model: rerankModelData?.model,
-            inputTokens: reRankInputTokens
-          });
+        const { totalPoints: reRankTotalPoints } = formatModelChars2Points({
+          model: rerankModelData!,
+          inputTokens: reRankInputTokens
+        });
         usages.push({
           totalPoints: reRankTotalPoints,
           moduleName: i18nT('account_usage:rerank'),
-          model: reRankModelName,
+          modelId: rerankModelData!.modelId,
           inputTokens: reRankInputTokens
         });
       }
     }
 
     // LLM Pick Chunks (compress search results if too long)
+    const selectionQuery = [query, ...(imageCaptionResult?.queries ?? [])]
+      .filter(Boolean)
+      .join('\n');
     const pickResults = await selectRelevantChunksByLLM({
-      query,
+      query: selectionQuery,
       chunks: searchRes,
       model: llmModel,
-      userKey
+      userKey,
+      teamId
     });
     if (pickResults) {
       if (pickResults.ids.length > 0) {
@@ -314,8 +393,9 @@ export const dispatchAgentDatasetSearch = async ({
         usages.push(pickResults.usage);
         childrenResponses.push(
           createChunkSelectionChildNodeResponse({
-            requestId: pickResults.requestId,
+            requestIds: [pickResults.requestId],
             usage: pickResults.usage,
+            modelName: llmModel.name,
             seconds: pickResults.seconds,
             selectedChunkIds: pickResults.ids
           })
@@ -327,7 +407,7 @@ export const dispatchAgentDatasetSearch = async ({
     const nodeResponse: DispatchSubAppResponse['nodeResponse'] = {
       moduleType: FlowNodeTypeEnum.datasetSearchNode,
       moduleName: i18nT('chat:dataset_search'),
-      query,
+      datasetQueries: [...textQueries, ...imageQueries],
       embeddingModel: vectorModel.name,
       embeddingTokens,
       similarity: usingSimilarityFilter ? searchData.similarity : undefined,
@@ -356,8 +436,10 @@ export const dispatchAgentDatasetSearch = async ({
     };
   } catch (error) {
     logger.error('[Agent Dataset Search] Failed', { error });
+    const response = `Failed to search dataset: ${getErrText(error)}`;
     return {
-      response: `Failed to search dataset: ${getErrText(error)}`
+      response,
+      errorMessage: response
     };
   }
 };

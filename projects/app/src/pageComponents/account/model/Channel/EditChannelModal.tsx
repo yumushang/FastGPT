@@ -19,15 +19,13 @@ import {
 import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import MySelect from '@fastgpt/web/components/common/MySelect';
-import { useTranslation } from 'next-i18next';
+import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { AddModelButton } from '../AddModelBox';
 import dynamic from 'next/dynamic';
-import { type SystemModelItemType } from '@fastgpt/service/core/ai/type';
-import type { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { getSystemModelList } from '@/web/core/ai/config';
+import { type SystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyAvatar from '@fastgpt/web/components/common/Avatar';
@@ -40,6 +38,7 @@ import CopyBox from '@fastgpt/web/components/common/String/CopyBox';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
 import { defaultProvider } from '@fastgpt/global/core/ai/provider';
+import { useAdminModelConfig } from '@/web/core/ai/model/useAdminModelConfig';
 
 const ModelEditModal = dynamic(() => import('../AddModelBox').then((mod) => mod.ModelEditModal));
 
@@ -57,8 +56,25 @@ const EditChannelModal = ({
   onClose: () => void;
   onSuccess: () => void;
 }) => {
-  const { t, i18n } = useTranslation();
-  const { defaultModels, aiproxyChannels, getModelProvider } = useSystemStore();
+  const { t, i18n } = useClientTranslation('config_model');
+  const {
+    aiproxyChannels,
+    defaultModelIds,
+    getModelProvider,
+    systemModelList,
+    runAsync: refreshSystemModelList,
+    loading: loadingModels
+  } = useAdminModelConfig();
+  const defaultModels = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(defaultModelIds).map(([key, modelId]) => [
+          key,
+          systemModelList.find((model) => model.modelId === modelId)
+        ])
+      ),
+    [defaultModelIds, systemModelList]
+  );
   const isEdit = defaultConfig.id !== 0;
 
   const { register, handleSubmit, watch, setValue } = useForm({
@@ -66,32 +82,27 @@ const EditChannelModal = ({
   });
 
   const providerType = watch('type');
-  const { data: providerList = [] } = useRequest(
+  const { data: channelProviderMetas = {}, loading: loadingChannelProviderMetas } = useRequest(
+    getChannelProviders,
+    { manual: false }
+  );
+  const providerList = useMemo(
     () =>
-      getChannelProviders().then((res) => {
-        return aiproxyChannels
-          .map((channel) => {
-            const mapData = res[channel.channelId];
+      aiproxyChannels.flatMap((channel) => {
+        const mapData = channelProviderMetas[channel.channelId];
+        if (!mapData) return [];
 
-            if (!mapData) {
-              return [];
-            }
-
-            return [
-              {
-                defaultBaseUrl: mapData.defaultBaseUrl,
-                keyHelp: mapData.keyHelp,
-                icon: channel.avatar,
-                label: parseI18nString(channel.name, i18n.language as localeType),
-                value: channel.channelId
-              }
-            ];
-          })
-          .flat();
+        return [
+          {
+            defaultBaseUrl: mapData.defaultBaseUrl,
+            keyHelp: mapData.keyHelp,
+            icon: channel.avatar,
+            label: parseI18nString(channel.name, i18n.language as localeType),
+            value: channel.channelId
+          }
+        ];
       }),
-    {
-      manual: false
-    }
+    [aiproxyChannels, channelProviderMetas, i18n.language]
   );
 
   const selectedProvider = useMemo(() => {
@@ -99,7 +110,7 @@ const EditChannelModal = ({
     return res;
   }, [providerList, providerType]);
 
-  const [editModelData, setEditModelData] = useState<SystemModelItemType>();
+  const [editModelData, setEditModelData] = useState<SystemModelDataType>();
   const onCreateModel = (type: ModelTypeEnum) => {
     const defaultModel = defaultModels[type];
 
@@ -113,19 +124,19 @@ const EditChannelModal = ({
 
       isCustom: true,
       isActive: true,
+      ...(type === ModelTypeEnum.llm
+        ? {
+            vision: false,
+            audio: false,
+            video: false
+          }
+        : {}),
       // @ts-ignore
       type
     });
   };
 
   const models = watch('models');
-  const {
-    data: systemModelList = [],
-    runAsync: refreshSystemModelList,
-    loading: loadingModels
-  } = useRequest(getSystemModelList, {
-    manual: false
-  });
   const modelList = useMemo(() => {
     return systemModelList.map((item) => {
       const provider = getModelProvider(item.provider, i18n.language);
@@ -144,7 +155,7 @@ const EditChannelModal = ({
   const { runAsync: onSubmit, loading: loadingCreate } = useRequest(
     (data: ChannelInfoType) => {
       if (data.models.length === 0) {
-        return Promise.reject(t('account_model:selected_model_empty'));
+        return Promise.reject(t('config_model:selected_model_empty'));
       }
       return isEdit ? putChannel(data) : postCreateChannel(data);
     },
@@ -158,14 +169,14 @@ const EditChannelModal = ({
     }
   );
 
-  const isLoading = loadingModels || loadingCreate;
+  const isLoading = loadingModels || loadingChannelProviderMetas || loadingCreate;
 
   return (
     <>
       <MyModal
         isLoading={isLoading}
         iconSrc={'modal/setting'}
-        title={t('account_model:edit_channel')}
+        title={t('config_model:edit_channel')}
         onClose={onClose}
         w={'100%'}
         maxW={['90vw', '800px']}
@@ -174,19 +185,19 @@ const EditChannelModal = ({
           {/* Chnnel name */}
           <Box>
             <FormLabel required {...LabelStyles}>
-              {t('account_model:channel_name')}
+              {t('config_model:channel_name')}
             </FormLabel>
             <Input mt={1} {...register('name', { required: true })} />
           </Box>
           {/* Provider */}
           <Box alignItems={'center'} mt={4}>
             <FormLabel required {...LabelStyles}>
-              {t('account_model:channel_type')}
+              {t('config_model:channel_type')}
             </FormLabel>
             <Box mt={1}>
               <MySelect
                 list={providerList}
-                placeholder={t('account_model:select_provider_placeholder')}
+                placeholder={t('config_model:select_provider_placeholder')}
                 value={providerType}
                 isSearch
                 onChange={(val) => {
@@ -199,12 +210,12 @@ const EditChannelModal = ({
           <Box mt={4}>
             <Flex alignItems={'center'}>
               <FormLabel required flex={'1 0 0'}>
-                {t('account_model:model')}({models.length})
+                {t('config_model:model')}({models.length})
               </FormLabel>
 
               <AddModelButton onCreate={onCreateModel} size={'sm'} variant={'outline'} />
               <Button ml={2} size={'sm'} variant={'outline'} onClick={() => setValue('models', [])}>
-                {t('account_model:clear_model')}
+                {t('config_model:clear_model')}
               </Button>
             </Flex>
             <Box mt={2}>
@@ -220,8 +231,8 @@ const EditChannelModal = ({
           {/* Mapping */}
           <Box mt={4}>
             <HStack>
-              <FormLabel>{t('account_model:mapping')}</FormLabel>
-              <QuestionTip label={t('account_model:mapping_tip')} />
+              <FormLabel>{t('config_model:mapping')}</FormLabel>
+              <QuestionTip label={t('config_model:mapping_tip')} />
             </HStack>
             <Box mt={2}>
               <JsonEditor
@@ -241,11 +252,11 @@ const EditChannelModal = ({
           {/* url and key */}
           <Box mt={4}>
             <Flex alignItems={'center'}>
-              <FormLabel>{t('account_model:base_url')}</FormLabel>
+              <FormLabel>{t('config_model:base_url')}</FormLabel>
               {selectedProvider && (
                 <Flex alignItems={'center'} fontSize={'xs'}>
                   <Box>{'('}</Box>
-                  <Box mr={1}>{t('account_model:default_url')}:</Box>
+                  <Box mr={1}>{t('config_model:default_url')}:</Box>
                   <CopyBox value={selectedProvider?.defaultBaseUrl || ''}>
                     {selectedProvider?.defaultBaseUrl || ''}
                   </CopyBox>
@@ -261,11 +272,11 @@ const EditChannelModal = ({
           </Box>
           <Box mt={4}>
             <Flex alignItems={'center'}>
-              <FormLabel>{t('account_model:api_key')}</FormLabel>
+              <FormLabel>{t('config_model:api_key')}</FormLabel>
               {selectedProvider?.keyHelp && (
                 <Flex alignItems={'center'} fontSize={'xs'}>
                   <Box>{'('}</Box>
-                  <Box mr={1}>{t('account_model:key_type')}</Box>
+                  <Box mr={1}>{t('config_model:key_type')}</Box>
                   <Box>{selectedProvider.keyHelp}</Box>
                   <Box>{')'}</Box>
                 </Flex>
@@ -324,7 +335,7 @@ const MultipleSelect = ({ value = [], list = [], onSelect }: SelectProps) => {
   const ref = useRef<HTMLDivElement>(null);
   const BoxRef = useRef<HTMLDivElement>(null);
 
-  const { t } = useTranslation();
+  const { t } = useClientTranslation('config_model');
   const { isOpen, onOpen, onClose } = useDisclosure();
   const { copyData } = useCopyData();
 
@@ -404,7 +415,7 @@ const MultipleSelect = ({ value = [], list = [], onSelect }: SelectProps) => {
           >
             {value.length === 0 ? (
               <Box flex={'1 0 0'} color={'myGray.500'} fontSize={'xs'}>
-                {t('account_model:select_model_placeholder')}
+                {t('config_model:select_model_placeholder')}
               </Box>
             ) : (
               <Flex flex={'1 0 0'} alignItems={'center'} gap={2} flexWrap={'wrap'}>
@@ -420,7 +431,7 @@ const MultipleSelect = ({ value = [], list = [], onSelect }: SelectProps) => {
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      copyData(item, t('account_model:copy_model_id_success'));
+                      copyData(item, t('config_model:copy_model_id_success'));
                     }}
                   >
                     <Box>{item}</Box>
@@ -448,7 +459,7 @@ const MultipleSelect = ({ value = [], list = [], onSelect }: SelectProps) => {
                     autoFocus
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder={t('account_model:search_model')}
+                    placeholder={t('config_model:search_model')}
                     onClick={(e) => {
                       e.stopPropagation();
                     }}

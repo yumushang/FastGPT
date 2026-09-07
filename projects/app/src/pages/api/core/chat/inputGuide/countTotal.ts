@@ -1,6 +1,6 @@
 import type { NextApiResponse } from 'next';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { MongoChatInputGuide } from '@fastgpt/service/core/chat/inputGuide/schema';
 import { authCert } from '@fastgpt/service/support/permission/auth/common';
 import {
@@ -8,6 +8,7 @@ import {
   CountChatInputGuideTotalResponseSchema,
   type CountChatInputGuideTotalResponseType
 } from '@fastgpt/global/openapi/core/chat/inputGuide/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 async function handler(
   req: ApiRequestProps,
@@ -15,7 +16,10 @@ async function handler(
 ): Promise<CountChatInputGuideTotalResponseType> {
   await authCert({ req, authToken: true });
 
-  const { appId } = CountChatInputGuideTotalQuerySchema.parse(req.query);
+  const { appId } = parseApiInput({
+    req,
+    querySchema: CountChatInputGuideTotalQuerySchema
+  }).query;
 
   return CountChatInputGuideTotalResponseSchema.parse({
     total: await MongoChatInputGuide.countDocuments({ appId })

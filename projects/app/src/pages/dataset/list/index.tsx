@@ -21,16 +21,22 @@ import FolderSlideCard from '@/components/common/folder/SlideCard';
 import { DatasetRoleList } from '@fastgpt/global/support/permission/dataset/constant';
 import {
   postUpdateDatasetCollaborators,
-  deleteDatasetCollaborators,
   getCollaboratorList
 } from '@/web/core/dataset/api/collaborator';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { type CreateDatasetType } from '@/pageComponents/dataset/list/CreateModal';
+import { resolveDatasetCreateAction } from '@/pageComponents/dataset/list/commercialDatasetTypes';
 import { DatasetTypeEnum } from '@fastgpt/global/core/dataset/constants';
-import { useToast } from '@fastgpt/web/hooks/useToast';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
+import {
+  canCreateSubFolder,
+  DEFAULT_MAX_FOLDER_DEPTH,
+  normalizeParentId
+} from '@fastgpt/global/common/parentFolder/depth';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
+import ProModal from '@/components/ProTip/ProModal';
+import DatasetListFilters from '@/pageComponents/dataset/list/ListFilters';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
@@ -42,7 +48,7 @@ const Dataset = () => {
   const { isPc } = useSystem();
   const { t } = useTranslation();
   const router = useRouter();
-  const { parentId } = router.query as { parentId: string };
+  const parentId = normalizeParentId(router.query.parentId);
 
   const {
     myDatasets,
@@ -56,25 +62,28 @@ const Dataset = () => {
     onDelDataset,
     onUpdateDataset,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    listFilters,
+    setListFilters
   } = useContextSelector(DatasetsContext, (v) => v);
   const { userInfo } = useUserStore();
   const { feConfigs } = useSystemStore();
-  const { toast } = useToast();
+  const maxFolderDepth = feConfigs?.limit?.maxFolderDepth ?? DEFAULT_MAX_FOLDER_DEPTH;
+  const canCreateFolder = canCreateSubFolder(parentId, paths, maxFolderDepth);
+
   const [editFolderData, setEditFolderData] = useState<EditFolderFormType>();
   const [createDatasetType, setCreateDatasetType] = useState<CreateDatasetType>();
+  const [proModalOpen, setProModalOpen] = useState(false);
 
   const onSelectDatasetType = useCallback(
-    (e: CreateDatasetType) => {
-      if (!feConfigs?.isPlus && [DatasetTypeEnum.websiteDataset].includes(e)) {
-        return toast({
-          status: 'warning',
-          title: t('common:commercial_function_tip')
-        });
+    (type: CreateDatasetType) => {
+      if (resolveDatasetCreateAction(type, feConfigs?.isPlus) === 'proModal') {
+        setProModalOpen(true);
+        return;
       }
-      setCreateDatasetType(e);
+      setCreateDatasetType(type);
     },
-    [t, toast, feConfigs]
+    [feConfigs?.isPlus]
   );
 
   const RenderSearchInput = useMemo(
@@ -108,32 +117,41 @@ const Dataset = () => {
     >
       <Flex pt={[4, 6]} pl={3} pr={folderDetail ? [3, 6] : [3, 8]}>
         <Flex flexGrow={1} flexDirection="column">
-          <Flex alignItems={'center'} justifyContent={'space-between'}>
-            <FolderPath
-              paths={paths}
-              FirstPathDom={
-                <Flex flex={1} alignItems={'center'}>
-                  <Box
-                    pl={2}
-                    letterSpacing={1}
-                    fontSize={'1.25rem'}
-                    fontWeight={'bold'}
-                    color={'myGray.900'}
-                  >
-                    {t('common:core.dataset.My Dataset')}
-                  </Box>
-                </Flex>
-              }
-              onClick={(e) => {
-                router.push({
-                  query: {
-                    parentId: e
-                  }
-                });
-              }}
-            />
+          <Flex alignItems={'center'} gap={3} minW={0}>
+            <Box flexShrink={0}>
+              <FolderPath
+                paths={paths}
+                FirstPathDom={
+                  <Flex alignItems={'center'}>
+                    <Box
+                      pl={2}
+                      letterSpacing={1}
+                      fontSize={'1.25rem'}
+                      fontWeight={'bold'}
+                      color={'myGray.900'}
+                    >
+                      {t('common:core.dataset.My Dataset')}
+                    </Box>
+                  </Flex>
+                }
+                onClick={(e) => {
+                  router.push({
+                    query: {
+                      parentId: e
+                    }
+                  });
+                }}
+              />
+            </Box>
 
-            {isPc && RenderSearchInput}
+            {isPc && (
+              <>
+                <Box flexShrink={0}>{RenderSearchInput}</Box>
+                <DatasetListFilters value={listFilters} onChange={setListFilters} />
+              </>
+            )}
+
+            <Flex flex={1} />
 
             {(folderDetail
               ? folderDetail.permission.hasWritePer
@@ -218,6 +236,8 @@ const Dataset = () => {
                         {
                           icon: FolderIcon,
                           label: t('common:Folder'),
+                          disabled: !canCreateFolder,
+                          disabledTip: t('common:folder_depth_limit_tip'),
                           onClick: () => setEditFolderData({})
                         }
                       ]
@@ -274,11 +294,6 @@ const Dataset = () => {
                     ...params,
                     datasetId: folderDetail._id
                   }),
-                onDelOneCollaborator: async (params) =>
-                  deleteDatasetCollaborators({
-                    ...params,
-                    datasetId: folderDetail._id
-                  }),
                 refreshDeps: [folderDetail._id, folderDetail.inheritPermission]
               }}
             />
@@ -297,8 +312,7 @@ const Dataset = () => {
                 name,
                 intro: intro ?? ''
               });
-              loadMyDatasets();
-              refetchPaths();
+              await Promise.all([loadMyDatasets(), refetchPaths()]);
             } catch (error) {
               return Promise.reject(error);
             }
@@ -323,13 +337,16 @@ const Dataset = () => {
           parentId={parentId || undefined}
         />
       )}
+      {!feConfigs?.isPlus && (
+        <ProModal isOpen={proModalOpen} onClose={() => setProModalOpen(false)} />
+      )}
     </MyBox>
   );
 };
 export async function getServerSideProps(content: any) {
   return {
     props: {
-      ...(await serviceSideProps(content, ['dataset', 'user']))
+      ...(await serviceSideProps(content, ['app', 'common', 'dataset', 'user']))
     }
   };
 }

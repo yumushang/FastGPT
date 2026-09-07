@@ -3,6 +3,8 @@ import {
   getUploadInspectBytes,
   validateUploadFile
 } from '@fastgpt/service/common/s3/validation/upload';
+import { datasetAllowedExtensions } from '@fastgpt/service/common/s3/utils/uploadConstraints';
+import { anydocTestExtensions, createAnydocFixture } from '../../worker/readFile/anydocFixtures';
 
 const pngBuffer = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -20,6 +22,11 @@ const genericZipBuffer = Buffer.from(
   'UEsDBBQAAAAAANeFbFyFEUoNCwAAAAsAAAAJAAAAaGVsbG8udHh0aGVsbG8gd29ybGRQSwECFAMUAAAAAADXhWxchRFKDQsAAAALAAAACQAAAAAAAAAAAAAAgAEAAAAAaGVsbG8udHh0UEsFBgAAAAABAAEANwAAADIAAAAAAA==',
   'base64'
 );
+const cfbBuffer = (() => {
+  const buffer = Buffer.alloc(512);
+  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(buffer);
+  return buffer;
+})();
 
 describe('getUploadInspectBytes', () => {
   it('returns the configured inspection size', () => {
@@ -31,9 +38,33 @@ describe('getUploadInspectBytes', () => {
     expect(getUploadInspectBytes('demo.xlsx')).toBe(64 * 1024);
     expect(getUploadInspectBytes('demo.pptx')).toBe(64 * 1024);
   });
+
+  it('uses a larger inspection window for legacy Office uploads', () => {
+    expect(getUploadInspectBytes('demo.doc')).toBe(64 * 1024);
+    expect(getUploadInspectBytes('demo.wps')).toBe(64 * 1024);
+    expect(getUploadInspectBytes('demo.xls')).toBe(64 * 1024);
+    expect(getUploadInspectBytes('demo.ppt')).toBe(64 * 1024);
+  });
 });
 
 describe('validateUploadFile', () => {
+  it.each(anydocTestExtensions)('接受真实 .%s 文件内容', async (extension) => {
+    const { buffer } = await createAnydocFixture(extension);
+
+    await expect(
+      validateUploadFile({
+        buffer,
+        filename: `fixture.${extension}`,
+        uploadConstraints: {
+          allowedExtensions: datasetAllowedExtensions
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: `fixture.${extension}`,
+      extension: `.${extension}`
+    });
+  });
+
   it('accepts matching png content', async () => {
     await expect(
       validateUploadFile({
@@ -43,7 +74,7 @@ describe('validateUploadFile', () => {
           defaultContentType: 'image/png'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'demo.png',
       contentType: 'image/png'
     });
@@ -61,7 +92,7 @@ describe('validateUploadFile', () => {
     ).rejects.toThrow('UploadFileTypeMismatch');
   });
 
-  it('accepts mismatched binary content when detected type is also allowed', async () => {
+  it('rejects mismatched binary content when detected type is also allowed', async () => {
     await expect(
       validateUploadFile({
         buffer: pngBuffer,
@@ -71,10 +102,7 @@ describe('validateUploadFile', () => {
           allowedExtensions: ['.jpg', '.jpeg', '.png']
         }
       })
-    ).resolves.toEqual({
-      filename: 'demo.png',
-      contentType: 'image/png'
-    });
+    ).rejects.toThrow('UploadFileTypeMismatch');
   });
 
   it('accepts text-like files without binary signature', async () => {
@@ -86,7 +114,7 @@ describe('validateUploadFile', () => {
           defaultContentType: 'application/json'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'demo.json',
       contentType: 'application/json'
     });
@@ -101,7 +129,7 @@ describe('validateUploadFile', () => {
           defaultContentType: 'application/octet-stream'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'hello world.txt',
       contentType: 'text/plain'
     });
@@ -116,7 +144,7 @@ describe('validateUploadFile', () => {
           defaultContentType: 'application/octet-stream'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'archive.custom',
       contentType: 'application/octet-stream'
     });
@@ -131,9 +159,181 @@ describe('validateUploadFile', () => {
           defaultContentType: 'application/octet-stream'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'README',
       contentType: 'application/octet-stream'
+    });
+  });
+
+  it('accepts extensionless png content when png is allowed', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: pngBuffer,
+        filename: 'image',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.png']
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'image.png',
+      contentType: 'image/png',
+      extension: '.png',
+      detectionSource: 'magic',
+      correctedFilename: true
+    });
+  });
+
+  it('accepts extensionless docx content when docx is allowed', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: docxBuffer,
+        filename: 'document',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.docx']
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'document.docx',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      extension: '.docx'
+    });
+  });
+
+  it('rejects extensionless unknown binary when only opaque custom extension is allowed', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from([0, 1, 2, 3]),
+        filename: 'data',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.dat'],
+          extensionRules: [
+            {
+              extension: '.dat',
+              source: 'custom',
+              verification: 'opaque'
+            }
+          ]
+        }
+      })
+    ).rejects.toThrow('InvalidUploadFileType');
+  });
+
+  it('accepts extensionless unknown binary with declared opaque extension', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from([0, 1, 2, 3]),
+        filename: 'data',
+        fileHint: {
+          filename: 'data',
+          declaredExtension: '.dat',
+          source: 'remote-url'
+        },
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.dat'],
+          extensionRules: [
+            {
+              extension: '.dat',
+              source: 'custom',
+              verification: 'opaque'
+            }
+          ]
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'data.dat',
+      contentType: 'application/octet-stream',
+      extension: '.dat',
+      detectionSource: 'opaque-extension'
+    });
+  });
+
+  it('rejects extensionless unknown binary declared as content-verifiable image', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from([0, 1, 2, 3]),
+        filename: 'image',
+        fileHint: {
+          filename: 'image',
+          declaredExtension: '.png',
+          source: 'remote-url'
+        },
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.png']
+        }
+      })
+    ).rejects.toThrow('InvalidUploadFileType');
+  });
+
+  it('accepts custom opaque extension even when content has no stable magic', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from('plain custom payload', 'utf8'),
+        filename: 'data.dat',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.dat'],
+          extensionRules: [
+            {
+              extension: '.dat',
+              source: 'custom',
+              verification: 'opaque'
+            }
+          ]
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'data.dat',
+      contentType: 'application/octet-stream',
+      extension: '.dat',
+      detectionSource: 'opaque-extension'
+    });
+  });
+
+  it('accepts custom exe extension as opaque', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from([0, 1, 2, 3]),
+        filename: 'tool.exe',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.exe'],
+          extensionRules: [
+            {
+              extension: '.exe',
+              source: 'custom',
+              verification: 'opaque'
+            }
+          ]
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'tool.exe',
+      contentType: 'application/octet-stream',
+      extension: '.exe',
+      detectionSource: 'opaque-extension'
+    });
+  });
+
+  it('accepts extensionless text when text fallback is allowed', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from('plain text body', 'utf8'),
+        filename: 'README',
+        uploadConstraints: {
+          defaultContentType: 'application/octet-stream',
+          allowedExtensions: ['.txt']
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'README.txt',
+      contentType: 'text/plain',
+      extension: '.txt',
+      detectionSource: 'text'
     });
   });
 
@@ -160,7 +360,20 @@ describe('validateUploadFile', () => {
           allowedExtensions: ['.png']
         }
       })
-    ).rejects.toThrow('InvalidUploadFileType');
+    ).rejects.toThrow('UploadFileTypeMismatch');
+  });
+
+  it('rejects PHP text content renamed as png', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: Buffer.from('<?php echo "not an image"; ?>', 'utf8'),
+        filename: 'sample.png',
+        uploadConstraints: {
+          defaultContentType: 'image/png',
+          allowedExtensions: ['.txt', '.png']
+        }
+      })
+    ).rejects.toThrow('UploadFileTypeMismatch');
   });
 
   it('accepts OOXML files even when detection falls back to zip container', async () => {
@@ -173,8 +386,43 @@ describe('validateUploadFile', () => {
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'demo.docx',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    });
+  });
+
+  it.each(['demo.doc', 'demo.wps', 'demo.xls', 'demo.ppt'])(
+    'accepts legacy Office CFB content for %s',
+    async (filename) => {
+      await expect(
+        validateUploadFile({
+          buffer: cfbBuffer,
+          filename,
+          uploadConstraints: {
+            allowedExtensions: [`.${filename.split('.').pop()}`]
+          }
+        })
+      ).resolves.toMatchObject({
+        filename,
+        contentType: 'application/x-cfb',
+        detectionSource: 'magic'
+      });
+    }
+  );
+
+  it('accepts a Word OOXML macro variant through the same document family', async () => {
+    await expect(
+      validateUploadFile({
+        buffer: docxBuffer,
+        filename: 'demo.docm',
+        uploadConstraints: {
+          allowedExtensions: ['.docm']
+        }
+      })
+    ).resolves.toMatchObject({
+      filename: 'demo.docm',
+      extension: '.docm',
       contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     });
   });
@@ -191,7 +439,7 @@ describe('validateUploadFile', () => {
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       filename: 'demo.docx',
       contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     });

@@ -10,29 +10,46 @@ import { getErrText } from '@fastgpt/global/common/error/utils';
 import { useTranslation } from 'next-i18next';
 import { validateRedirectUrl } from '@/web/common/utils/uri';
 import type { LoginSuccessResponseType } from '@fastgpt/global/openapi/support/user/account/login/api';
+import { useLoginRedirectAfterLogin } from '@/web/support/user/loginRedirect';
+import type { LangEnum } from '@fastgpt/global/common/i18n/type';
+import { getFastGPTSem, onFastGPTLoginSuccess } from '@/web/support/marketing/utils';
+import { resetUserModelCatalogAfterLogin } from '@/web/core/ai/model/useUserModelStore';
 
 const FastLogin = ({
   code,
   token,
-  callbackUrl
+  callbackUrl,
+  lastTmbId
 }: {
   code: string;
   token: string;
   callbackUrl: string;
+  lastTmbId?: string;
 }) => {
   const { setUserInfo } = useUserStore();
   const router = useRouter();
   const { toast } = useToast();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const resolveLoginRedirect = useLoginRedirectAfterLogin();
   const loginSuccess = useCallback(
-    (res: LoginSuccessResponseType) => {
+    async (res: LoginSuccessResponseType) => {
+      const safeCallbackUrl = validateRedirectUrl(callbackUrl);
+      const targetRoute = await resolveLoginRedirect({
+        user: res.user,
+        fallbackRoute: safeCallbackUrl,
+        lastTmbId
+      });
+
+      resetUserModelCatalogAfterLogin();
       setUserInfo(res.user);
 
-      setTimeout(() => {
-        router.push(validateRedirectUrl(callbackUrl));
-      }, 100);
+      if (targetRoute) {
+        setTimeout(() => {
+          router.push(targetRoute);
+        }, 100);
+      }
     },
-    [setUserInfo, router, callbackUrl]
+    [callbackUrl, lastTmbId, resolveLoginRedirect, router, setUserInfo]
   );
 
   const authCode = useCallback(
@@ -40,7 +57,9 @@ const FastLogin = ({
       try {
         const res = await postFastLogin({
           code,
-          token
+          token,
+          fastgpt_sem: getFastGPTSem(),
+          language: i18n.language as LangEnum
         });
         if (!res) {
           toast({
@@ -51,7 +70,7 @@ const FastLogin = ({
             router.replace('/login');
           }, 1000);
         }
-        loginSuccess(res);
+        await onFastGPTLoginSuccess(loginSuccess, res);
       } catch (error) {
         toast({
           status: 'warning',
@@ -62,7 +81,7 @@ const FastLogin = ({
         }, 1000);
       }
     },
-    [loginSuccess, router, t, toast]
+    [i18n.language, loginSuccess, router, t, toast]
   );
 
   useEffect(() => {
@@ -81,7 +100,8 @@ export async function getServerSideProps(content: any) {
       code: content?.query?.code || '',
       token: content?.query?.token || '',
       callbackUrl: content?.query?.callbackUrl || '/dashboard/agent',
-      ...(await serviceSideProps(content))
+      lastTmbId: content?.query?.lastTmbId || '',
+      ...(await serviceSideProps(content, ['login']))
     }
   };
 }

@@ -27,19 +27,26 @@ const WholeResponseModal = ({ onClose, dataId }: { onClose: () => void; dataId: 
       isOpen={true}
       onClose={onClose}
       isLoading={isLoading}
+      size={'xl'}
       w={['90vw', '880px']}
       maxW={['90vw', '880px']}
       h={['90vh', '80vh']}
-      maxH={['90vh', '700px']}
-      px={0}
-      py={8}
-      headerPx={'32px'}
+      maxH={['90vh', '80vh']}
+      headerStyles={{
+        px: [5, 8],
+        pt: [6, 8]
+      }}
+      bodyStyles={{
+        px: [5, 8],
+        pt: [4, 6],
+        pb: [5, 8]
+      }}
       title={
         <Flex alignItems={'center'} gap={2}>
           <Box fontSize={'20px'} lineHeight={'26px'} letterSpacing={'0.15px'} fontWeight={500}>
-            {t('common:core.chat.response.Complete Response')}
+            {t('chat:response.complete_response')}
           </Box>
-          <QuestionTip label={t('chat:question_tip')} />
+          <QuestionTip label={t('chat:response.question_tip')} />
         </Flex>
       }
     >
@@ -47,7 +54,7 @@ const WholeResponseModal = ({ onClose, dataId }: { onClose: () => void; dataId: 
         (!!response?.length ? (
           <ResponseBox response={response} dataId={dataId} />
         ) : (
-          <EmptyTip text={t('chat:no_workflow_response')} />
+          <EmptyTip text={t('chat:response.no_workflow_response')} />
         ))}
     </MyModal>
   );

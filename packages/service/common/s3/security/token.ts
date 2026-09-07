@@ -1,18 +1,9 @@
 import jwt from 'jsonwebtoken';
-import { differenceInSeconds } from 'date-fns';
 import { ERROR_ENUM } from '@fastgpt/global/common/error/errorCode';
 import type { UploadConstraints } from '../contracts/type';
-import path from 'path';
 import { serviceEnv } from '../../../env';
 
-/* ==================== 路由与类型 ==================== */
-const FileApiPath = {
-  legacyFile: '/api/system/file',
-  proxyDownload: '/api/system/file/download',
-  proxyUpload: '/api/system/file/upload'
-} as const;
-
-type S3ObjectKeyTokenPayload = {
+export type S3ObjectKeyTokenPayload = {
   objectKey: string;
 };
 
@@ -31,27 +22,7 @@ type S3UploadTokenPayload = {
   type: 'upload';
 };
 
-type SignS3DownloadTokenParams = {
-  objectKey: string;
-  bucketName: string;
-  expiredTime: Date;
-  filename?: string;
-};
-
-type SignS3UploadTokenParams = {
-  objectKey: string;
-  bucketName: string;
-  expiredTime: Date;
-  maxSize: number;
-  uploadConstraints: UploadConstraints;
-  metadata?: Record<string, string>;
-};
-
 /* ==================== 通用工具函数 ==================== */
-const getExpiresIn = (expiredTime: Date) => {
-  return Math.max(1, differenceInSeconds(expiredTime, new Date()));
-};
-
 const isRecord = (val: unknown): val is Record<string, unknown> =>
   !!val && typeof val === 'object' && !Array.isArray(val);
 
@@ -61,10 +32,6 @@ const isStringArray = (val: unknown): val is string[] =>
 
 const endpointUrl = `${serviceEnv.FILE_DOMAIN || serviceEnv.FE_DOMAIN || ''}${serviceEnv.NEXT_PUBLIC_BASE_URL}`;
 
-const buildFileApiUrl = (apiPath: string, token: string, query = '') => {
-  return `${endpointUrl}${apiPath}/${token}${query}`;
-};
-
 const parsePayload = <T>(payload: unknown, checker: (value: unknown) => value is T): T => {
   if (!checker(payload)) {
     throw ERROR_ENUM.unAuthFile;
@@ -72,13 +39,7 @@ const parsePayload = <T>(payload: unknown, checker: (value: unknown) => value is
   return payload;
 };
 
-const signToken = <T extends object>(payload: T, expiredTime: Date) => {
-  return jwt.sign(payload, serviceEnv.FILE_TOKEN_KEY, {
-    expiresIn: getExpiresIn(expiredTime)
-  });
-};
-
-const verifyToken = <T>(token: string, checker: (value: unknown) => value is T) => {
+export const verifyToken = <T>(token: string, checker: (value: unknown) => value is T) => {
   return new Promise<T>((resolve, reject) => {
     jwt.verify(token, serviceEnv.FILE_TOKEN_KEY, (err, payload) => {
       if (err) {
@@ -94,7 +55,7 @@ const verifyToken = <T>(token: string, checker: (value: unknown) => value is T) 
 };
 
 /* ==================== Payload 校验器 ==================== */
-const isS3ObjectKeyTokenPayload = (value: unknown): value is S3ObjectKeyTokenPayload => {
+export const isS3ObjectKeyTokenPayload = (value: unknown): value is S3ObjectKeyTokenPayload => {
   return isRecord(value) && isNonEmptyString(value.objectKey) && value.type === undefined;
 };
 
@@ -127,67 +88,12 @@ const isS3UploadTokenPayload = (value: unknown): value is S3UploadTokenPayload =
   );
 };
 
-/* ==================== 旧版文件链接 token ==================== */
-export function jwtSignS3ObjectKey(objectKey: string, expiredTime: Date) {
-  const token = signToken({ objectKey } satisfies S3ObjectKeyTokenPayload, expiredTime);
-
-  return buildFileApiUrl(FileApiPath.legacyFile, token);
-}
-
-export function jwtVerifyS3ObjectKey(token: string) {
-  return verifyToken<S3ObjectKeyTokenPayload>(token, isS3ObjectKeyTokenPayload);
-}
-
 /* ==================== 代理下载 token ==================== */
-export function jwtSignS3DownloadToken({
-  objectKey,
-  bucketName,
-  expiredTime,
-  filename
-}: SignS3DownloadTokenParams) {
-  const token = signToken(
-    {
-      objectKey,
-      bucketName,
-      type: 'download'
-    } satisfies S3DownloadTokenPayload,
-    expiredTime
-  );
-
-  const finalFilename = filename || path.basename(objectKey) || '';
-  const query = finalFilename ? `?filename=${encodeURIComponent(finalFilename)}` : '';
-
-  return buildFileApiUrl(FileApiPath.proxyDownload, token, query);
-}
-
 export function jwtVerifyS3DownloadToken(token: string) {
   return verifyToken<S3DownloadTokenPayload>(token, isS3DownloadTokenPayload);
 }
 
 /* ==================== 代理上传 token ==================== */
-export function jwtSignS3UploadToken({
-  objectKey,
-  bucketName,
-  expiredTime,
-  maxSize,
-  uploadConstraints,
-  metadata
-}: SignS3UploadTokenParams) {
-  const token = signToken(
-    {
-      objectKey,
-      bucketName,
-      maxSize,
-      uploadConstraints,
-      metadata,
-      type: 'upload'
-    } satisfies S3UploadTokenPayload,
-    expiredTime
-  );
-
-  return buildFileApiUrl(FileApiPath.proxyUpload, token);
-}
-
 export function jwtVerifyS3UploadToken(token: string) {
   return verifyToken<S3UploadTokenPayload>(token, isS3UploadTokenPayload);
 }

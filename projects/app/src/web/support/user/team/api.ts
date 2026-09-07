@@ -9,7 +9,6 @@ import type {
   UpdateInviteProps,
   UpdateTeamProps
 } from '@fastgpt/global/support/user/team/controller';
-import type { TeamTagItemType, TeamTagSchema } from '@fastgpt/global/support/user/team/type';
 import type {
   TeamTmbItemType,
   TeamMemberItemType,
@@ -48,6 +47,8 @@ export const getTeamMembers = (
     searchKey?: string;
     orgId?: string;
     groupId?: string;
+    tmbIds?: string[];
+    currentFirst?: boolean;
   }>
 ) => POST<PaginationResponse<TeamMemberItemType>>(`/proApi/support/user/team/member/list`, props);
 export const getTeamMemberCount = () =>
@@ -80,7 +81,7 @@ export const postAcceptInvitationLink = (linkId: string) =>
   POST<string>(`/proApi/support/user/team/invitationLink/accept`, { linkId });
 
 export const getInvitationInfo = (linkId: string) =>
-  GET<InvitationInfoType>(`/proApi/support/user/team/invitationLink/info`, { linkId });
+  GET<InvitationInfoType | undefined>(`/proApi/support/user/team/invitationLink/info`, { linkId });
 export const putForbidInvitationLink = (linkId: string) =>
   PUT<string>(`/proApi/support/user/team/invitationLink/forbid`, { linkId });
 
@@ -97,11 +98,6 @@ export const updateOneMemberPermission = (data: {
 }) => PUT('/proApi/support/user/team/collaborator/updateOne', data);
 export const deleteMemberPermission = (id: DeletePermissionQuery) =>
   DELETE('/proApi/support/user/team/collaborator/delete', id);
-
-/* --------------- team tags ---------------- */
-export const getTeamsTags = () => GET<TeamTagSchema[]>(`/proApi/support/user/team/tag/list`);
-export const loadTeamTagsByDomain = (domain: string) =>
-  GET<TeamTagItemType[]>(`/proApi/support/user/team/tag/async`, { domain });
 
 /* team limit */
 export const checkTeamExportDatasetLimit = (datasetId: string) =>
@@ -120,7 +116,7 @@ export const redeemCoupon = (couponCode: string) =>
   GET(`/proApi/support/wallet/coupon/redeem`, { key: couponCode });
 
 export const getTeamInvoiceHeader = () =>
-  GET<TeamInvoiceHeaderType>(`/proApi/support/user/team/invoiceAccount/getTeamInvoiceHeader`);
+  GET<TeamInvoiceHeaderType>(`/proApi/support/wallet/bill/invoice/account/getTeamHeader`);
 
 export const updateTeamInvoiceHeader = (data: TeamInvoiceHeaderType) =>
-  POST(`/proApi/support/user/team/invoiceAccount/update`, data);
+  POST(`/proApi/support/wallet/bill/invoice/account/updateHeader`, data);

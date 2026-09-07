@@ -11,7 +11,7 @@ import { Alert } from '@/components/docs/Alert';
 
 ## 多模型支持
 
-FastGPT 使用了 one-api 项目来管理模型池，其可以兼容 OpenAI 、Azure 、国内主流模型和本地模型等。
+FastGPT 使用了 one-api 项目来管理模型池，其可以兼容 OpenAI、Azure、国内主流模型和本地模型等。
 
 可参考：[Sealos 快速部署 OneAPI](../config/model/intro.mdx)
 
@@ -53,11 +53,11 @@ FastGPT 使用了 one-api 项目来管理模型池，其可以兼容 OpenAI 、A
 
 由于需要部署数据库，部署完后需要等待 2~4 分钟才能正常访问。默认用了最低配置，首次访问时会有些慢。
 
-根据提示，输入`root_password`，和 `openai`/`oneapi` 的地址和密钥。
+根据提示，输入 `root_password`，和 `openai` / `oneapi` 的地址和密钥。
 
 ![](../../../public/imgs/sealos1.png)
 
-点击部署后，会跳转到应用管理页面。可以点击`fastgpt`主应用右侧的详情按键（名字为 fastgpt-xxxx）， 如下图所示。
+点击部署后，会跳转到应用管理页面。可以点击 `fastgpt` 主应用右侧的详情按键（名字为 fastgpt-xxxx），如下图所示。
 
 ![](../../../public/imgs/sealos-deploy1.jpg)
 
@@ -71,7 +71,7 @@ FastGPT 使用了 one-api 项目来管理模型池，其可以兼容 OpenAI 、A
 
 用户名：`root`
 
-密码是刚刚一键部署时设置的`root_password`
+密码是刚刚一键部署时设置的 `root_password`
 
 ### 3. 配置模型
 
@@ -83,13 +83,13 @@ FastGPT 使用了 one-api 项目来管理模型池，其可以兼容 OpenAI 、A
 
 ## 收费
 
-Sealos 采用按量计费的方式，也就是申请了多少 cpu、内存、磁盘，就按该申请量进行计费。具体的计费标准，可以打开`sealos`控制面板中的`费用中心`进行查看。
+Sealos 采用按量计费的方式，也就是申请了多少 cpu、内存、磁盘，就按该申请量进行计费。具体的计费标准，可以打开 `sealos` 控制面板中的 `费用中心` 进行查看。
 
 ## Sealos 使用
 
 ### 简介
 
-FastGPT 商业版共包含了2个应用（fastgpt, fastgpt-plus）和2个数据库，使用多 Api Key 时候需要安装 OneAPI（一个应用和一个数据库），总计3个应用和3个数据库。
+FastGPT 商业版共包含了 2 个应用（fastgpt, fastgpt-plus）和 2 个数据库，使用多 API Key 时候需要安装 OneAPI（一个应用和一个数据库），总计 3 个应用和 3 个数据库。
 
 ![](../../../public/imgs/onSealos1.png)
 
@@ -97,9 +97,9 @@ FastGPT 商业版共包含了2个应用（fastgpt, fastgpt-plus）和2个数据�
 
 ### 修改配置文件和环境变量
 
-在 Sealos 中，你可以打开`应用管理`（App Launchpad）看到部署的 FastGPT，可以打开`数据库`（Database）看到对应的数据库。
+在 Sealos 中，你可以打开 `应用管理`（App Launchpad）看到部署的 FastGPT，可以打开 `数据库`（Database）看到对应的数据库。
 
-在`应用管理`中，选中 FastGPT，点击变更，可以看到对应的环境变量和配置文件。
+在 `应用管理` 中，选中 FastGPT，点击变更，可以看到对应的环境变量和配置文件。
 
 ![](../../../public/imgs/fastgptonsealos1.png)
 
@@ -110,16 +110,16 @@ FastGPT 商业版共包含了2个应用（fastgpt, fastgpt-plus）和2个数据�
 
 ### 如何更新/升级 FastGPT
 
-[升级脚本文档](../upgrading/upgrade-intruction.mdx)先看下文档，看下需要升级哪个版本。注意，不要跨版本升级！！！！！
+[升级脚本文档](../upgrading/upgrade-instruction.mdx)先看下文档，看下需要升级哪个版本。注意，不要跨版本升级。
 
-例如，目前是4.5 版本，要升级到4.5.1，就先把镜像版本改成v4.5.1，执行一下升级脚本，等待完成后再继续升级。如果目标版本不需要执行初始化，则可以跳过。
+例如，目前是 4.5 版本，要升级到 4.5.1，就先把镜像版本改成 v4.5.1，执行一下升级脚本，等待完成后再继续升级。如果目标版本不需要执行初始化，则可以跳过。
 
 升级步骤：
 
-1. 查看[更新文档](../upgrading/upgrade-intruction.mdx)，确认要升级的版本，避免跨版本升级。
+1. 查看[更新文档](../upgrading/upgrade-instruction.mdx)，确认要升级的版本，避免跨版本升级。
 2. 打开 sealos 的应用管理
-3. 有2个应用 fastgpt ， fastgpt-pro
-4. 点击对应应用右边3个点，变更。或者点详情后右上角的变更。
+3. 有 2 个应用 fastgpt、fastgpt-pro
+4. 点击对应应用右边 3 个点，变更。或者点详情后右上角的变更。
 5. 修改镜像的版本号
 
 ![](../../../public/imgs/onsealos2.png)
@@ -135,17 +135,17 @@ FastGPT 商业版共包含了2个应用（fastgpt, fastgpt-plus）和2个数据�
 
 ### 配置自定义域名
 
-点击对应应用的变更->点击自定义域名->填写域名-> 操作域名 Cname -> 确认 -> 确认变。
+点击对应应用的变更 ->点击自定义域名 ->填写域名 -> 操作域名 Cname -> 确认 -> 确认变。
 
 ![](../../../public/imgs/onsealos4.png)
 
-### 如何修改配置文件
+### 如何修改环境变量
 
-打开 Sealos 的应用管理 -> 找到对应的应用 -> 变更 -> 往下拉到高级配置，里面有个配置文件 -> 新增或点击对应的配置文件可以进行编辑 -> 点击右上角确认变。
+打开 Sealos 的应用管理 -> 找到对应的应用 -> 变更 -> 修改环境变量 -> 点击右上角确认变。
 
 ![](../../../public/imgs/onsealos5.png)
 
-[配置文件参考](../config/json.mdx)
+[环境变量说明](../config/env.mdx)
 
 ### 修改站点名称以及 favicon
 
@@ -162,10 +162,9 @@ SYSTEM_FAVICON 可以是一个网络地址
 
 ![](../../../public/imgs/onsealos6.png)
 
-### 挂载logo
+### 挂载 logo
 
-目前暂时无法 把浏览器上的logo替换。仅支持svg，待后续可视化做了后可以全部替换。
-新增一个挂载文件，文件名为：/app/projects/app/public/icon/logo.svg ，值为 svg 对应的值。
+目前暂时无法把浏览器上的 logo 替换。仅支持 svg，待后续可视化做了后可以全部替换。新增一个挂载文件，文件名为：/app/projects/app/public/icon/logo.svg，值为 svg 对应的值。
 
 ![](../../../public/imgs/onsealos7.png)
 

@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 import React, { useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import {
   Button,
@@ -160,6 +161,7 @@ export const MultipleRowSelect = ({
   maxH = 300,
   onSelect,
   ButtonProps,
+  onOpenFunc,
   changeOnEverySelect = false,
   rowMinWidth = 'auto'
 }: MultipleSelectProps & {
@@ -172,6 +174,14 @@ export const MultipleRowSelect = ({
 
   const MenuRef = useRef<(HTMLDivElement | null)[]>([]);
   const SelectedItemRef = useRef<(HTMLDivElement | null)[]>([]);
+
+  // 异步列表从单列切换为分组时，使用外部 value 恢复完整路径；有效的手动路径保持不变。
+  const resolvedCloneValue =
+    isOpen && !list.some((item) => item.value === cloneValue[0])
+      ? Array.isArray(value)
+        ? value
+        : []
+      : cloneValue;
 
   useEffect(() => {
     if (isOpen) {
@@ -186,16 +196,16 @@ export const MultipleRowSelect = ({
   }, [isOpen]);
 
   const minWidth = `${MenuRef.current?.[0]?.offsetWidth || 0}px`;
-
   const onOpenSelect = useCallback(() => {
     setCloneValue(Array.isArray(value) ? value : []);
     onOpen();
-  }, [value, onOpen]);
+    onOpenFunc?.();
+  }, [value, onOpen, onOpenFunc]);
 
   return (
     <Box
       css={css({
-        '& div': {
+        '& div:not([data-preserve-width])': {
           width: 'auto !important'
         }
       })}
@@ -230,8 +240,14 @@ export const MultipleRowSelect = ({
               }
             : {})}
         >
-          <Flex alignItems={'center'}>
-            <Box flex="1" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+          <Flex alignItems={'center'} minW={0} overflow={'hidden'}>
+            <Box
+              flex="1 1 0"
+              minW={0}
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+            >
               {label ?? placeholder}
             </Box>
             <MyIcon name={'core/chat/chevronDown'} w={4} flexShrink={0} color={'myGray.500'} />
@@ -265,7 +281,7 @@ export const MultipleRowSelect = ({
           <RenderList
             list={list}
             index={0}
-            cloneValue={cloneValue}
+            cloneValue={resolvedCloneValue}
             setCloneValue={setCloneValue}
             onSelect={onSelect}
             onClose={onClose}

@@ -3,7 +3,7 @@ import { responseWriteController } from '@fastgpt/service/common/response';
 import { readFromSecondary } from '@fastgpt/service/common/mongo/utils';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
 import dayjs from 'dayjs';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import { replaceRegChars } from '@fastgpt/global/common/string/tools';
 import { NextAPI } from '@/service/middleware/entry';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
@@ -14,13 +14,16 @@ import {
   ChatItemResponseCollectionName
 } from '@fastgpt/service/core/chat/constants';
 import { MongoTeamMember } from '@fastgpt/service/support/user/team/teamMemberSchema';
-import { type ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatSourceTypeEnum, type ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
 import { AppLogKeysEnum } from '@fastgpt/global/core/app/logs/constants';
 import { sanitizeCsvField } from '@fastgpt/service/common/file/csv';
 import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
 import { addAuditLog, getI18nAppType } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
-import { useIPFrequencyLimit } from '@fastgpt/service/common/middle/reqFrequencyLimit';
+import {
+  assertMemberRateLimit,
+  MemberRateLimitPolicy
+} from '@fastgpt/service/common/rateLimit/interface/member';
 import { getAppLatestVersion } from '@fastgpt/service/core/app/version/controller';
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 import { getTimezoneCodeFromStr } from '@fastgpt/global/common/time/timezone';
@@ -28,7 +31,13 @@ import { getLocationFromIp } from '@fastgpt/service/common/geo';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { AppVersionCollectionName } from '@fastgpt/service/core/app/version/schema';
 import { ExportChatLogsBodySchema } from '@fastgpt/global/openapi/core/app/log/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { isUnselectedLogUserFilter } from '@fastgpt/global/core/app/logs/utils';
 const logger = getLogger(LogCategories.MODULE.APP.LOGS);
+
+const appChatSourceMatch = {
+  $or: [{ sourceType: ChatSourceTypeEnum.app }, { sourceType: { $exists: false } }]
+};
 
 const formatJsonString = (data: any) => {
   if (data == null) return '';
@@ -39,7 +48,7 @@ const formatJsonString = (data: any) => {
 };
 
 async function handler(req: ApiRequestProps, res: NextApiResponse) {
-  let {
+  const {
     appId,
     dateStart,
     dateEnd,
@@ -53,7 +62,10 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     feedbackType,
     unreadOnly,
     errorFilter
-  } = ExportChatLogsBodySchema.parse(req.body);
+  } = parseApiInput({
+    req,
+    bodySchema: ExportChatLogsBodySchema
+  }).body;
 
   const locale = getLocale(req);
   const timezoneCode = getTimezoneCodeFromStr(dateStart);
@@ -64,10 +76,36 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     appId,
     per: AppReadChatLogPerVal
   });
+  await assertMemberRateLimit({
+    policy: MemberRateLimitPolicy.ExportChatLogs,
+    memberId: String(tmbId)
+  });
   const { chatConfig } = await getAppLatestVersion(appId, app);
   const variables = (chatConfig.variables || []).filter(
     (item) => item.type !== VariableInputEnum.password
   );
+  const csvHeader = `\uFEFF${title},${variables.map((variable) => formatJsonString(variable.label)).join(',')}`;
+  const logExportAudit = () => {
+    addAuditLog({
+      tmbId,
+      teamId,
+      event: AuditEventEnum.EXPORT_APP_CHAT_LOG,
+      params: {
+        appName: app.name,
+        appType: getI18nAppType(app.type)
+      }
+    });
+  };
+
+  // 用户未选择时鉴权后直接给空 CSV，避免再跑成员聚合和聊天日志 pipeline。
+  if (isUnselectedLogUserFilter(tmbIds, outLinkUids)) {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8;');
+    res.setHeader('Content-Disposition', 'attachment; filename=usage.csv; ');
+    res.write(csvHeader);
+    res.end();
+    logExportAudit();
+    return;
+  }
 
   // Get members
   const teamMemberWithContact = await MongoTeamMember.aggregate([
@@ -95,6 +133,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
 
   const where = {
     appId: new Types.ObjectId(appId),
+    $and: [appChatSourceMatch],
     // Feedback type filtering (BEFORE pagination for performance)
     ...(feedbackType === 'has_feedback' &&
       !unreadOnly && {
@@ -170,7 +209,16 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
             {
               $match: {
                 $expr: {
-                  $and: [{ $eq: ['$appId', '$$appId'] }, { $eq: ['$chatId', '$$chatId'] }]
+                  $and: [
+                    { $eq: ['$appId', '$$appId'] },
+                    { $eq: ['$chatId', '$$chatId'] },
+                    {
+                      $or: [
+                        { $eq: ['$sourceType', ChatSourceTypeEnum.app] },
+                        { $eq: [{ $type: '$sourceType' }, 'missing'] }
+                      ]
+                    }
+                  ]
                 }
               }
             },
@@ -244,7 +292,16 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
             {
               $match: {
                 $expr: {
-                  $and: [{ $eq: ['$appId', '$$appId'] }, { $eq: ['$chatId', '$$chatId'] }]
+                  $and: [
+                    { $eq: ['$appId', '$$appId'] },
+                    { $eq: ['$chatId', '$$chatId'] },
+                    {
+                      $or: [
+                        { $eq: ['$sourceType', ChatSourceTypeEnum.app] },
+                        { $eq: [{ $type: '$sourceType' }, 'missing'] }
+                      ]
+                    }
+                  ]
                 }
               }
             },
@@ -398,9 +455,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     readStream: cursor
   });
 
-  write(
-    `\uFEFF${title},${variables.map((variable) => formatJsonString(variable.label)).join(',')}`
-  );
+  write(csvHeader);
 
   cursor.on('data', (doc) => {
     const createdTime = doc.createTime
@@ -486,20 +541,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     res.end();
   });
 
-  (async () => {
-    addAuditLog({
-      tmbId,
-      teamId,
-      event: AuditEventEnum.EXPORT_APP_CHAT_LOG,
-      params: {
-        appName: app.name,
-        appType: getI18nAppType(app.type)
-      }
-    });
-  })();
+  logExportAudit();
 }
 
-export default NextAPI(
-  useIPFrequencyLimit({ id: 'export-chat-logs', seconds: 1, limit: 1, force: true }),
-  handler
-);
+export default NextAPI(handler);

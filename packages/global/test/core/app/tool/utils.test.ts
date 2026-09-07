@@ -1,6 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { splitCombineToolId, getToolRawId } from '@fastgpt/global/core/app/tool/utils';
+import {
+  getTeamPluginSource,
+  getToolIdentityKey,
+  getToolNameCandidates,
+  getToolRawId,
+  hasDebugToolInNodes,
+  hasDebugToolInSelectedTools,
+  isTeamPluginSource,
+  parseDebugToolSource,
+  parseTeamPluginSource,
+  parseToolsetToolId,
+  shouldUseLegacyToolDescriptionFallback,
+  splitCombineToolId,
+  splitToolsetToolPluginId
+} from '@fastgpt/global/core/app/tool/utils';
 import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+
+describe('shouldUseLegacyToolDescriptionFallback', () => {
+  it('only enables fallback for workflow, system and commercial tools', () => {
+    expect(
+      shouldUseLegacyToolDescriptionFallback({
+        toolId: 'personal-tool',
+        flowNodeType: FlowNodeTypeEnum.pluginModule
+      })
+    ).toBe(true);
+    expect(shouldUseLegacyToolDescriptionFallback({ toolId: 'systemTool-search' })).toBe(true);
+    expect(shouldUseLegacyToolDescriptionFallback({ toolId: 'commercial-search' })).toBe(true);
+    expect(shouldUseLegacyToolDescriptionFallback({ toolId: 'mcp-app/search' })).toBe(false);
+    expect(shouldUseLegacyToolDescriptionFallback({ toolId: 'http-app/search' })).toBe(false);
+  });
+});
 
 describe('splitCombineToolId', () => {
   describe('personal tools (pure ObjectId)', () => {
@@ -111,6 +141,93 @@ describe('splitCombineToolId', () => {
   });
 });
 
+describe('parseDebugToolSource', () => {
+  it('should parse stable tmb debug source', () => {
+    expect(parseDebugToolSource('debug:tmbId:tmb-1')).toEqual({
+      tmbId: 'tmb-1'
+    });
+  });
+
+  it('should ignore invalid debug source', () => {
+    expect(parseDebugToolSource('debug:invalid')).toBeUndefined();
+    expect(parseDebugToolSource('debug:tmbId:tmb-1:session:dbg-1')).toBeUndefined();
+    expect(parseDebugToolSource('system')).toBeUndefined();
+  });
+
+  it('does not parse debug source from combined tool id', () => {
+    expect(() => splitCombineToolId('debug:tmbId:tmb-1|weather')).toThrow('Invalid tool id');
+  });
+});
+
+describe('team plugin source', () => {
+  it('builds and parses a stable team source', () => {
+    const source = getTeamPluginSource('team-1');
+
+    expect(source).toBe('teamId:team-1');
+    expect(isTeamPluginSource(source)).toBe(true);
+    expect(parseTeamPluginSource(source)).toEqual({ teamId: 'team-1' });
+  });
+
+  it('rejects malformed team sources', () => {
+    expect(parseTeamPluginSource('team')).toBeUndefined();
+    expect(parseTeamPluginSource('teamId:team-1:extra')).toBeUndefined();
+    expect(parseTeamPluginSource('system')).toBeUndefined();
+  });
+});
+
+describe('getToolIdentityKey', () => {
+  it('keeps system and team tools with the same id distinct', () => {
+    const id = 'systemTool-weather';
+    const systemKey = getToolIdentityKey(id, 'system');
+    const teamKey = getToolIdentityKey(id, 'teamId:team-1');
+
+    expect(systemKey).not.toBe(teamKey);
+  });
+
+  it('treats missing source as system source', () => {
+    expect(getToolIdentityKey('systemTool-weather', undefined)).toBe(
+      getToolIdentityKey('systemTool-weather', 'system')
+    );
+  });
+});
+
+describe('debug tool detection', () => {
+  it('detects explicit debug source in selected tools', () => {
+    expect(
+      hasDebugToolInSelectedTools([
+        {
+          id: 'node-id',
+          pluginId: 'systemTool-weather',
+          source: 'debug:tmbId:tmb-1'
+        } as any
+      ])
+    ).toBe(true);
+  });
+
+  it('ignores debug-looking ids without explicit debug source', () => {
+    expect(
+      hasDebugToolInSelectedTools([
+        {
+          id: 'debug:tmbId:tmb-1|node-id',
+          pluginId: 'debug:tmbId:tmb-1|weather'
+        } as any
+      ])
+    ).toBe(false);
+  });
+
+  it('detects explicit debug source in workflow nodes', () => {
+    expect(
+      hasDebugToolInNodes([
+        {
+          pluginId: 'systemTool-weather',
+          source: 'debug:tmbId:tmb-1',
+          inputs: []
+        } as any
+      ])
+    ).toBe(true);
+  });
+});
+
 describe('getToolRawId', () => {
   it('should return pluginId for pure ObjectId', () => {
     const result = getToolRawId('507f1f77bcf86cd799439011');
@@ -145,5 +262,46 @@ describe('getToolRawId', () => {
   it('should handle converted community tool', () => {
     const result = getToolRawId('community-oldPlugin');
     expect(result).toBe('oldPlugin');
+  });
+});
+
+describe('splitToolsetToolPluginId', () => {
+  it('should preserve slashes inside tool name', () => {
+    const result = splitToolsetToolPluginId('toolset-abc/namespace/nestedTool');
+
+    expect(result).toEqual({
+      parentId: 'toolset-abc',
+      toolName: 'namespace/nestedTool'
+    });
+  });
+
+  it('should preserve leading slash in tool name', () => {
+    const result = splitToolsetToolPluginId('69e20f48dbec7c6ece77556b//test');
+
+    expect(result).toEqual({
+      parentId: '69e20f48dbec7c6ece77556b',
+      toolName: '/test'
+    });
+  });
+});
+
+describe('parseToolsetToolId', () => {
+  it('should parse combined HTTP tool id and preserve leading slash in tool name', () => {
+    const result = parseToolsetToolId('http-69e20f48dbec7c6ece77556b//test');
+
+    expect(result).toEqual({
+      parentId: '69e20f48dbec7c6ece77556b',
+      toolName: '/test'
+    });
+  });
+});
+
+describe('getToolNameCandidates', () => {
+  it('should prefer full tool name and fallback to last segment for legacy ids', () => {
+    expect(getToolNameCandidates('toolset/tool')).toEqual(['toolset/tool', 'tool']);
+  });
+
+  it('should preserve leading slash name before fallback', () => {
+    expect(getToolNameCandidates('/test')).toEqual(['/test', 'test']);
   });
 });

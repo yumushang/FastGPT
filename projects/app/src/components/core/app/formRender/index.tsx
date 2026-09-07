@@ -16,7 +16,8 @@ import FileSelector from '../FileSelector/index';
 import { formatTime2YMDHMS, formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import type { SelectedDatasetType } from '@fastgpt/global/core/workflow/type/io';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { getFileSelectRenderProps } from './utils';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
 const InputRender = (props: InputRenderProps) => {
   const {
@@ -32,8 +33,6 @@ const InputRender = (props: InputRenderProps) => {
   } = props;
 
   const { t } = useSafeTranslation();
-  const { llmModelList } = useSystemStore();
-
   // Password
   const [isPasswordEditing, setIsPasswordEditing] = useState(false);
 
@@ -211,32 +210,39 @@ const InputRender = (props: InputRenderProps) => {
     return (
       <AIModelSelector
         {...commonProps}
-        cacheModel={false}
-        list={(modelList || llmModelList).map((item) => ({
-          value: item.model,
-          label: item.name
-        }))}
+        modelType={ModelTypeEnum.llm}
+        outLinkAuthData={props.outLinkAuthData}
+        {...(modelList
+          ? {
+              list: modelList.map((item) => ({
+                value: item.modelId ?? item.model,
+                label: item.name
+              }))
+            }
+          : {})}
       />
     );
   }
 
   if (inputType === InputTypeEnum.fileSelect) {
     const files = Array.isArray(value) ? value : [];
+    const fileSelectProps = getFileSelectRenderProps(props);
     return (
       <FileSelector
         value={files}
-        onChange={(e) => onChange?.(e)}
+        onChange={onChange}
         isDisabled={isDisabled}
         isInvalid={isInvalid}
-        maxFiles={props.maxFiles}
-        canSelectFile={props.canSelectFile}
-        canSelectImg={props.canSelectImg}
-        canSelectVideo={props.canSelectVideo}
-        canSelectAudio={props.canSelectAudio}
-        canSelectCustomFileExtension={props.canSelectCustomFileExtension}
-        customFileExtensionList={props.customFileExtensionList}
-        canLocalUpload={props.canLocalUpload}
-        canUrlUpload={props.canUrlUpload}
+        maxFiles={fileSelectProps.maxFiles}
+        canSelectFile={fileSelectProps.canSelectFile}
+        canSelectImg={fileSelectProps.canSelectImg}
+        canSelectVideo={fileSelectProps.canSelectVideo}
+        canSelectAudio={fileSelectProps.canSelectAudio}
+        canSelectCustomFileExtension={fileSelectProps.canSelectCustomFileExtension}
+        customFileExtensionList={fileSelectProps.customFileExtensionList}
+        canLocalUpload={fileSelectProps.canLocalUpload}
+        canUrlUpload={fileSelectProps.canUrlUpload}
+        onFileErrorChange={props.onFileErrorChange}
       />
     );
   }

@@ -12,7 +12,7 @@ import {
   css
 } from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
-import { getToolPreviewNode } from '@/web/core/app/api/tool';
+import { getClientToolPreviewNode } from '@/web/core/app/api/tool';
 import type {
   FlowNodeItemType,
   NodeTemplateListItemType,
@@ -26,9 +26,7 @@ import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import CostTooltip from '@/components/core/app/tool/CostTooltip';
 import {
   FlowNodeTypeEnum,
-  AppNodeFlowNodeTypeMap,
-  isNestedParentNodeType,
-  isInteractiveNodeType
+  isNestedParentNodeType
 } from '@fastgpt/global/core/workflow/node/constant';
 import { getColorSchemaByFlowNodeType } from '@fastgpt/web/core/workflow/utils';
 import { useContextSelector } from 'use-context-selector';
@@ -38,24 +36,34 @@ import { sliderWidth } from '../../NodeTemplatesModal';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { useWorkflowUtils } from '../../hooks/useUtils';
 import { moduleTemplatesFlat } from '@fastgpt/global/core/workflow/template/constants';
+import {
+  buildNodeTemplateContext,
+  getNodeContainerCheckError,
+  translateNodeContainerCheckError
+} from '@fastgpt/global/core/workflow/template/context';
 import { LoopStartNode } from '@fastgpt/global/core/workflow/template/system/loop/loopStart';
 import { LoopEndNode } from '@fastgpt/global/core/workflow/template/system/loop/loopEnd';
 import { LoopRunStartNode } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRunStart';
 import { useReactFlow } from 'reactflow';
 import type { Node } from 'reactflow';
-import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { nodeTemplate2FlowNode } from '@/web/core/workflow/utils';
+import { applyWorkflowStartInputAutoFill } from '@/web/core/workflow/workflowStartAutoFill';
+import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { WorkflowModalContext } from '../../../context/workflowModalContext';
+import { isDebugToolSource, getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import DebugToolTag from '@fastgpt/web/components/core/plugin/tool/DebugToolTag';
+import SystemToolTag from '@fastgpt/web/components/core/plugin/tool/SystemToolTag';
+import { normalizeFlowNodeInputType } from '@fastgpt/global/core/app/formEdit/utils';
 
 export type TemplateListProps = {
   onAddNode: ({ newNodes }: { newNodes: Node<FlowNodeItemType>[] }) => void;
   isPopover?: boolean;
   templates: NodeTemplateListItemType[];
   templateType: TemplateTypeEnum;
-  onUpdateParentId: (parentId: string) => void;
+  onUpdateParentId: (parentId: string, source?: string) => void;
 };
 
 const NodeTemplateListItem = ({
@@ -72,15 +80,24 @@ const NodeTemplateListItem = ({
     position: { x: number; y: number };
   }) => void;
   isPopover?: boolean;
-  onUpdateParentId: (parentId: string) => void;
+  onUpdateParentId: (parentId: string, source?: string) => void;
 }) => {
   const { t } = useTranslation();
   const { feConfigs } = useSystemStore();
 
   const { screenToFlowPosition } = useReactFlow();
   const handleParams = useContextSelector(WorkflowModalContext, (v) => v.handleParams);
-  const isToolHandle = handleParams?.handleId === 'selectedTools';
   const isSystemTool = templateType === TemplateTypeEnum.systemTools;
+  const isToolSet = template.flowNodeType === FlowNodeTypeEnum.toolSet;
+  const isToolSelector = handleParams?.handleId === NodeOutputKeyEnum.selectedTools;
+  // 工具集（系统工具、团队 HTTP/MCP 工具）只有在工具调用的工具选择器里才允许直接创建节点；
+  // 侧边栏等其他场景点击卡片一律进入工具集内部，选择单个工具。
+  const allowDirectAddToolSet = isToolSet && isToolSelector;
+  const canDragCreateNode =
+    !isPopover && (!template.isFolder || isToolSet) && (!isToolSet || allowDirectAddToolSet);
+  const showExpandArrow = template.isFolder || isToolSet;
+  const isDebugTool = isDebugToolSource(template.source);
+  const isSystemSource = template.source === 'system';
 
   return (
     <MyTooltip
@@ -94,9 +111,12 @@ const NodeTemplateListItem = ({
               objectFit={'contain'}
               borderRadius={'sm'}
             />
-            <Box fontWeight={'bold'} ml={3} color={'myGray.900'} flex={'1'}>
-              {template.name}
-            </Box>
+            <Flex alignItems={'center'} gap={2} ml={3} flex={'1'} minW={0}>
+              <Box fontWeight={'bold'} color={'myGray.900'} className="textEllipsis">
+                {template.name}
+              </Box>
+              {isDebugTool && <DebugToolTag />}
+            </Flex>
             {isSystemTool && (
               <Box color={'myGray.500'}>By {template.author || feConfigs?.systemTitle}</Box>
             )}
@@ -131,10 +151,9 @@ const NodeTemplateListItem = ({
         whiteSpace={'nowrap'}
         overflow={'hidden'}
         textOverflow={'ellipsis'}
-        draggable={
-          !isPopover && (!template.isFolder || template.flowNodeType === FlowNodeTypeEnum.toolSet)
-        }
+        draggable={canDragCreateNode}
         onDragEnd={(e) => {
+          if (!canDragCreateNode) return;
           if (e.clientX < sliderWidth) return;
           const nodePosition = screenToFlowPosition({ x: e.clientX, y: e.clientY });
           handleAddNode({
@@ -143,9 +162,8 @@ const NodeTemplateListItem = ({
           });
         }}
         onClick={() => {
-          // Not tool handle, cannot add toolset
-          if (!isToolHandle && template.flowNodeType === FlowNodeTypeEnum.toolSet) {
-            onUpdateParentId(template.id);
+          if (isToolSet && !allowDirectAddToolSet) {
+            onUpdateParentId(template.id, template.source);
             return;
           }
           // Team folder
@@ -168,18 +186,21 @@ const NodeTemplateListItem = ({
           borderRadius={'sm'}
           flexShrink={0}
         />
-        <Box flex={'1 0 0'} ml={3}>
-          <Box
-            color={'myGray.900'}
-            fontWeight={'500'}
-            fontSize={isPopover ? 'xs' : 'sm'}
-            className="textEllipsis"
-          >
-            {t(template.name as any)}
-          </Box>
+        <Box flex={'1 0 0'} ml={3} minW={0}>
+          <Flex alignItems={'center'} gap={2} minW={0}>
+            <Box
+              color={'myGray.900'}
+              fontWeight={'500'}
+              fontSize={isPopover ? 'xs' : 'sm'}
+              className="textEllipsis"
+            >
+              {t(template.name as any)}
+            </Box>
+            {feConfigs?.enable_team_plugin_upload === true && isSystemSource && <SystemToolTag />}
+            {isDebugTool && <DebugToolTag />}
+          </Flex>
         </Box>
-        {/* Folder right arrow */}
-        {template.isFolder && (
+        {showExpandArrow && (
           <Box
             color={'myGray.500'}
             _hover={{
@@ -192,7 +213,7 @@ const NodeTemplateListItem = ({
             display="none"
             onClick={(e) => {
               e.stopPropagation();
-              onUpdateParentId(template.id);
+              onUpdateParentId(template.id, template.source);
             }}
           >
             <MyIcon name="common/arrowRight" w={isPopover ? '16px' : '20px'} />
@@ -220,14 +241,12 @@ const NodeTemplateList = ({
   onUpdateParentId
 }: TemplateListProps) => {
   const { t, i18n } = useTranslation();
-  const { feConfigs } = useSystemStore();
   const { toast } = useToast();
   const { computedNewNodeName } = useWorkflowUtils();
-  const { getNodeList, getNodeById } = useContextSelector(WorkflowBufferDataContext, (v) => v);
+  const { edges, getNodeById, getNodes } = useContextSelector(WorkflowBufferDataContext, (v) => v);
   const handleParams = useContextSelector(WorkflowModalContext, (v) => v.handleParams);
+  const isToolSelector = handleParams?.handleId === NodeOutputKeyEnum.selectedTools;
   const { getIntersectingNodes } = useReactFlow();
-
-  const showSkill = !!feConfigs?.show_skill;
 
   const handleAddNode = useCallback(
     async ({
@@ -240,10 +259,26 @@ const NodeTemplateList = ({
       try {
         const templateNode = await (async () => {
           try {
-            if (AppNodeFlowNodeTypeMap[template.flowNodeType]) {
-              const node = await getToolPreviewNode({ appId: template.id });
+            const shouldLoadPreviewNode = [
+              FlowNodeTypeEnum.tool,
+              FlowNodeTypeEnum.toolSet,
+              FlowNodeTypeEnum.appModule,
+              FlowNodeTypeEnum.pluginModule
+            ].includes(template.flowNodeType);
+
+            if (shouldLoadPreviewNode) {
+              const node = await getClientToolPreviewNode({
+                appId: template.id,
+                getLatestVersion: true,
+                source: template.source
+              });
               return {
                 ...node,
+                flowNodeType:
+                  template.flowNodeType === FlowNodeTypeEnum.toolSet
+                    ? FlowNodeTypeEnum.toolSet
+                    : node.flowNodeType,
+                isFolder: template.flowNodeType === FlowNodeTypeEnum.toolSet ? true : node.isFolder,
                 colorSchema: node.colorSchema ?? getColorSchemaByFlowNodeType(node.flowNodeType)
               };
             }
@@ -262,76 +297,85 @@ const NodeTemplateList = ({
           }
         })();
 
-        const defaultValueMap: Record<string, any> = {
-          [NodeInputKeyEnum.userChatInput]: undefined,
-          [NodeInputKeyEnum.datasetSearchInput]: undefined,
-          [NodeInputKeyEnum.fileUrlList]: undefined
-        };
-
-        getNodeList().forEach((node) => {
-          if (node.flowNodeType === FlowNodeTypeEnum.workflowStart) {
-            defaultValueMap[NodeInputKeyEnum.userChatInput] = [
-              node.nodeId,
-              NodeOutputKeyEnum.userChatInput
-            ];
-            defaultValueMap[NodeInputKeyEnum.fileUrlList] = [
-              [node.nodeId, NodeOutputKeyEnum.userFiles]
-            ];
-            defaultValueMap[NodeInputKeyEnum.datasetSearchInput] = [
-              [node.nodeId, NodeOutputKeyEnum.userChatInput],
-              [node.nodeId, NodeOutputKeyEnum.userFiles]
-            ];
-          }
-        });
-
         const currentNode = getNodeById(handleParams?.nodeId);
+        // 工具选择器保留历史可选项；未声明 isTool 的节点按普通节点初始化输入类型。
+        const isToolMode = isToolSelector && templateNode.isTool === true;
 
-        // Popover insertion inherits the source node's parent; a dragged
-        // loopRunBreak with no inherited parent falls back to hit-testing.
+        // 快捷添加继承源节点所在容器；侧边栏添加（点击/拖拽）没有源节点，按落点命中容器，
+        // 保证拖入容器内部与快捷添加走同一套嵌套限制校验，无法通过拖拽绕过。
         let effectiveParentNodeId: string | undefined = currentNode?.parentNodeId;
-        if (templateNode.flowNodeType === FlowNodeTypeEnum.loopRunBreak && !effectiveParentNodeId) {
-          const dropLoopRun = getIntersectingNodes({
+        if (!effectiveParentNodeId && !handleParams) {
+          const dropContainer = getIntersectingNodes({
             x: position.x,
             y: position.y,
             width: 1,
             height: 1
-          }).find((n) => n.type === FlowNodeTypeEnum.loopRun && !n.data?.isFolded);
-          if (dropLoopRun) {
-            effectiveParentNodeId = dropLoopRun.id;
+          }).find((n) => isNestedParentNodeType(n.type ?? '') && !n.data?.isFolded);
+          if (dropContainer) {
+            effectiveParentNodeId = dropContainer.id;
           }
         }
         const effectiveParentNode = effectiveParentNodeId
           ? getNodeById(effectiveParentNodeId)
           : undefined;
 
-        const isNestedParentNode = isNestedParentNodeType(templateNode.flowNodeType);
-        if (isNestedParentNode && !!effectiveParentNodeId) {
-          toast({
-            status: 'warning',
-            title: t('workflow:can_not_loop')
+        const containerChildNodes = effectiveParentNode
+          ? getNodes().filter((item) => item.data.parentNodeId === effectiveParentNode.nodeId)
+          : [];
+        const containerContext = buildNodeTemplateContext({
+          sourceNode: handleParams ? currentNode : undefined,
+          edges,
+          getNodeById,
+          handleId: handleParams?.handleId,
+          isSidebar: !handleParams,
+          targetParentType: effectiveParentNode?.flowNodeType,
+          hasToolNode: containerChildNodes.some(
+            (item) => item.data.flowNodeType === FlowNodeTypeEnum.toolCall
+          ),
+          hasLoopRunNode: containerChildNodes.some(
+            (item) => item.data.flowNodeType === FlowNodeTypeEnum.loopRun
+          )
+        });
+        if (containerContext) {
+          const checkError = getNodeContainerCheckError({
+            node: templateNode,
+            context: containerContext
           });
-          return;
-        }
-
-        if (effectiveParentNodeId && isInteractiveNodeType(templateNode.flowNodeType)) {
-          if (effectiveParentNode?.flowNodeType === FlowNodeTypeEnum.parallelRun) {
+          if (checkError) {
             toast({
               status: 'warning',
-              title: t('workflow:can_not_parallel')
+              title: translateNodeContainerCheckError(checkError, t)
             });
             return;
           }
         }
 
-        if (templateNode.flowNodeType === FlowNodeTypeEnum.loopRunBreak) {
-          if (effectiveParentNode?.flowNodeType !== FlowNodeTypeEnum.loopRun) {
-            toast({
-              status: 'warning',
-              title: t('workflow:loop_run_break_must_inside_loop_run')
-            });
-            return;
-          }
-        }
+        const preparedInputs = templateNode.inputs
+          .filter((input) => input.deprecated !== true)
+          .map((input) => ({
+            ...input,
+            value: input.value ?? input.defaultValue,
+            valueDesc: input.valueDesc ? t(input.valueDesc as any) : undefined,
+            label: t(input.label as any),
+            description: input.description ? t(input.description as any) : undefined,
+            placeholder: input.placeholder ? t(input.placeholder as any) : undefined,
+            debugLabel: input.debugLabel ? t(input.debugLabel as any) : undefined,
+            toolDescription: input.toolDescription ? t(input.toolDescription as any) : undefined,
+            list: Array.isArray(input.list)
+              ? input.list.map((opt: any) => ({
+                  ...opt,
+                  label: opt?.label ? t(opt.label as any) : opt?.label
+                }))
+              : input.list
+          }));
+        const inputsWithAutoFill =
+          currentNode?.flowNodeType === FlowNodeTypeEnum.workflowStart
+            ? applyWorkflowStartInputAutoFill({
+                inputs: preparedInputs,
+                workflowStartNodeId: currentNode.nodeId,
+                workflowStartOutputs: currentNode.outputs
+              })
+            : preparedInputs;
 
         const newNode = nodeTemplate2FlowNode({
           template: {
@@ -342,26 +386,13 @@ const NodeTemplateList = ({
               pluginId: templateNode.pluginId
             }),
             intro: t(templateNode.intro as any),
-            inputs: templateNode.inputs
-              .filter((input) => input.deprecated !== true)
-              .map((input) => ({
-                ...input,
-                value: defaultValueMap[input.key] ?? input.value ?? input.defaultValue,
-                valueDesc: input.valueDesc ? t(input.valueDesc as any) : undefined,
-                label: t(input.label as any),
-                description: input.description ? t(input.description as any) : undefined,
-                placeholder: input.placeholder ? t(input.placeholder as any) : undefined,
-                debugLabel: input.debugLabel ? t(input.debugLabel as any) : undefined,
-                toolDescription: input.toolDescription
-                  ? t(input.toolDescription as any)
-                  : undefined,
-                list: Array.isArray(input.list)
-                  ? input.list.map((opt: any) => ({
-                      ...opt,
-                      label: opt?.label ? t(opt.label as any) : opt?.label
-                    }))
-                  : input.list
-              })),
+            inputs: inputsWithAutoFill.map((input) =>
+              normalizeFlowNodeInputType(input, {
+                isTool: isToolMode,
+                // 插件预览中的 selectedType 是定义侧控件，不代表画布上的最终选择。
+                forceDefaultMode: isToolMode
+              })
+            ),
             outputs: templateNode.outputs
               .filter((output) => output.deprecated !== true)
               .map((output) => ({
@@ -374,7 +405,13 @@ const NodeTemplateList = ({
           position,
           selected: true,
           parentNodeId: effectiveParentNodeId,
-          t
+          t,
+          formatName: (templateName) =>
+            computedNewNodeName({
+              templateName,
+              flowNodeType: templateNode.flowNodeType,
+              pluginId: templateNode.pluginId
+            })
         });
 
         const newNodes = [newNode];
@@ -418,8 +455,10 @@ const NodeTemplateList = ({
     [
       computedNewNodeName,
       getNodeById,
+      getNodes,
+      edges,
       handleParams,
-      getNodeList,
+      isToolSelector,
       getIntersectingNodes,
       onAddNode,
       t,
@@ -447,7 +486,7 @@ const NodeTemplateList = ({
         }, {});
 
         templates.forEach((item) => {
-          if (!showSkill && item.flowNodeType === FlowNodeTypeEnum.agent) {
+          if (item.flowNodeType === FlowNodeTypeEnum.agent) {
             return;
           }
           if (item.templateType && map[item.templateType]) {
@@ -529,7 +568,7 @@ const NodeTemplateList = ({
               >
                 {item.list.map((template) => (
                   <NodeTemplateListItem
-                    key={template.id}
+                    key={getToolIdentityKey(template.id, template.source)}
                     template={template}
                     templateType={templateType}
                     handleAddNode={handleAddNode}

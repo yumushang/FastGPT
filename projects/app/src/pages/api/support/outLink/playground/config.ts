@@ -2,19 +2,25 @@ import { MongoOutLink } from '@fastgpt/service/support/outLink/schema';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
 import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
 import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
-import type { ApiRequestProps } from '@fastgpt/service/type/next';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import {
-  type PlaygroundVisibilityConfigQuery,
-  type PlaygroundVisibilityConfigResponse,
-  PlaygroundVisibilityConfigQuerySchema,
-  PlaygroundVisibilityConfigResponseSchema
-} from '@fastgpt/global/support/outLink/api';
+  GetPlaygroundVisibilityConfigParamsSchema,
+  type GetPlaygroundVisibilityConfigParamsType
+} from '@fastgpt/global/openapi/core/app/publishChannel/playground/api';
+import {
+  PlaygroundVisibilityConfigSchema,
+  type PlaygroundVisibilityConfigType
+} from '@fastgpt/global/support/outLink/type';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 
 async function handler(
-  req: ApiRequestProps<{}, PlaygroundVisibilityConfigQuery>
-): Promise<PlaygroundVisibilityConfigResponse> {
-  const { appId } = PlaygroundVisibilityConfigQuerySchema.parse(req.query);
+  req: ApiRequestProps<Record<string, never>, GetPlaygroundVisibilityConfigParamsType>
+): Promise<PlaygroundVisibilityConfigType> {
+  const { appId } = parseApiInput({
+    req,
+    querySchema: GetPlaygroundVisibilityConfigParamsSchema
+  }).query;
 
   await authApp({
     req,
@@ -31,7 +37,7 @@ async function handler(
     'showRunningStatus showSkillReferences showCite showFullText canDownloadSource showWholeResponse'
   ).lean();
 
-  return PlaygroundVisibilityConfigResponseSchema.parse({
+  return PlaygroundVisibilityConfigSchema.parse({
     showRunningStatus: existingConfig?.showRunningStatus ?? true,
     showSkillReferences: existingConfig?.showSkillReferences ?? false,
     showCite: existingConfig?.showCite ?? true,

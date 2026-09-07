@@ -1,42 +1,57 @@
-import type { NextApiResponse } from 'next';
 import { MongoChatItem } from '@fastgpt/service/core/chat/chatItemSchema';
-import { authChatCrud } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
 import { NextAPI } from '@/service/middleware/entry';
-import { type ApiRequestProps } from '@fastgpt/service/type/next';
+import { type ApiRequestProps } from '@fastgpt/next/type';
 import {
   DeleteChatRecordBodySchema,
   DeleteChatRecordResponseSchema,
   type DeleteChatRecordResponseType
 } from '@fastgpt/global/openapi/core/chat/record/api';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { buildChatSourceQuery } from '@fastgpt/service/core/chat/source';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 
-async function handler(
-  req: ApiRequestProps,
-  _res: NextApiResponse
-): Promise<DeleteChatRecordResponseType> {
-  const { appId, chatId, contentId, delFile, ...authProps } = DeleteChatRecordBodySchema.parse(
-    req.query
-  );
-  await authChatCrud({
+const hasRequestBodyPayload = (body: unknown) =>
+  !!body && typeof body === 'object' && Object.keys(body).length > 0;
+
+async function handler(req: ApiRequestProps): Promise<DeleteChatRecordResponseType> {
+  const params = hasRequestBodyPayload(req.body)
+    ? parseApiInput({ req, bodySchema: DeleteChatRecordBodySchema }).body
+    : parseApiInput({ req, querySchema: DeleteChatRecordBodySchema }).query;
+  const { sourceType, sourceId, chatId, contentId, contentIds, outLinkAuthData } = params;
+  const authRes = await authChatTargetCrud({
     req,
     authToken: true,
     authApiKey: true,
-    appId,
+    sourceType,
+    sourceId,
     chatId,
-    ...authProps
+    ...(sourceType === ChatSourceTypeEnum.skillEdit ? { per: WritePermissionVal } : {}),
+    outLinkAuthData
   });
+  const resolvedSourceId = authRes.sourceId;
 
-  await MongoChatItem.updateOne(
+  const targetContentIds = Array.from(
+    new Set([...(contentIds ?? []), ...(contentId ? [contentId] : [])])
+  );
+
+  if (targetContentIds.length === 0) {
+    return DeleteChatRecordResponseSchema.parse(undefined);
+  }
+
+  await MongoChatItem.updateMany(
     {
-      appId,
+      ...buildChatSourceQuery({ sourceType, sourceId: resolvedSourceId }),
       chatId,
-      dataId: contentId
+      dataId: { $in: targetContentIds }
     },
     {
       $set: { deleteTime: new Date() }
     }
   );
 
-  return DeleteChatRecordResponseSchema.parse({});
+  return DeleteChatRecordResponseSchema.parse(undefined);
 }
 
 export default NextAPI(handler);

@@ -1,113 +1,80 @@
 ---
 title: Template Import
-description: Introduction and usage of the FastGPT template import feature
+description: Batch-import Dataset data from a CSV or Excel template
 ---
 
-## Background
+Template import lets you add prepared content or question-answer pairs to a Dataset in batches. FastGPT accepts `.csv` and `.xlsx` files and creates Dataset entries from the questions, answers, indexes, and metadata in the template.
 
-FastGPT provides a template import feature that lets you batch-import Q&A pair data using a predefined CSV template format. This is especially useful if you already have structured Q&A data and want to quickly load it into a knowledge base.
+## File Structure
 
-## Template Structure
+The first row must contain the headers. The following columns are supported:
 
-The template uses CSV format with the following columns:
+| Header     | Required | Count      | Description                                                     |
+| ---------- | -------- | ---------- | --------------------------------------------------------------- |
+| `q`        | Yes      | Exactly 1  | Content or a question                                           |
+| `a`        | Yes      | Exactly 1  | The answer; it can be empty when importing standalone content   |
+| `index`    | No       | Repeatable | A custom index. A row can contain multiple indexes              |
+| `metadata` | No       | At most 1  | A JSON object for custom information such as source or category |
 
-- q: Question column — stores questions users might ask
-- a: Answer column — stores the corresponding answers
-- indexes: Index column — stores related indexes for the question
+Each row represents one Dataset entry. `q` and `a` should not both be empty. Headers can appear in any order, but do not add unsupported headers.
 
-### Example Data
+### CSV Example
 
 ```csv
-q,a,indexes
-"Who are you?","I'm an AI assistant, always here to chat with you, answer your questions, discuss topics, address everyday queries, or brainstorm creative ideas. I do my best to help using my 'knowledge brain' — I hope to be your go-to partner for exploring and learning!","1. What are you?\n2. What can you do?\n3. What kinds of questions can you answer?\n4. What kind of partner do you want to be?\n5. How do you provide help?"
-"What are you?","I'm an AI assistant, always ready to chat with users and answer their questions. I can participate in knowledge discussions, address everyday queries, and brainstorm creative ideas, providing help and companionship through my 'knowledge brain'. I hope to be a great partner for interaction and exploration.","What are you?"
-"What can you do?","I can chat with users, answer questions, participate in knowledge discussions, address everyday queries, and brainstorm creative ideas, providing help and companionship through my 'knowledge brain'.","What can you do?"
+q,a,index,index,metadata
+"What is FastGPT?","FastGPT is an AI agent development platform.","FastGPT overview","AI agent platform","{""source"":""product-doc"",""category"":""overview""}"
+"How do I import Dataset data?","Use a CSV or Excel template.","Dataset import","template import","{""source"":""help-center""}"
 ```
 
-## Usage Instructions
+Use UTF-8 encoding for CSV files. Cells that contain commas, line breaks, or double quotes must be escaped according to CSV rules.
 
-### 1. Open the Knowledge Base, Click Import, and Select Template Import
+### Excel Example
 
-![](/imgs/template/import.png)
+Excel files use the same headers and data structure as CSV files:
 
-![](/imgs/template/box.png)
+| q                             | a                                            | index            | index             | metadata                                         |
+| ----------------------------- | -------------------------------------------- | ---------------- | ----------------- | ------------------------------------------------ |
+| What is FastGPT?              | FastGPT is an AI agent development platform. | FastGPT overview | AI agent platform | `{"source":"product-doc","category":"overview"}` |
+| How do I import Dataset data? | Use a CSV or Excel template.                 | Dataset import   | template import   | `{"source":"help-center"}`                       |
 
-### 2. Download the Template
+Excel files must meet these requirements:
 
-Click to download the CSV template. It contains two content modes:
+- Use the `.xlsx` extension. `.xls` files are not supported.
+- Include exactly one worksheet.
+- Do not contain merged cells.
+- Use the first row for the template headers.
 
-#### Standard Mode Template
+## Import a Template
 
-![](/imgs/template/nomal.png)
+1. Open the target Dataset and select **Template Import** from the import menu.
 
-Corresponding CSV format:
+   ![Template Import dialog](/imgs/template-import-dialog.png)
 
-![](/imgs/template/nomal_data.png)
+2. Select **Download CSV Template** for an example, or prepare an `.xlsx` file with the same structure.
+3. Add your data and verify the headers, cell contents, and file format.
+4. Select the file and confirm the import. You can import one file at a time.
+5. After the import finishes, review the data and indexing status in the Dataset Collection.
 
-In standard mode, q is the content, a is empty, and indexes can have multiple entries.
+   ![Dataset collection after a template import](/imgs/template-import-result.png)
 
-#### Q&A Pair Mode Template
+## Metadata
 
-![](/imgs/template/Question-answer.png)
+Use `metadata` to attach structured information to each entry. The cell must contain a valid JSON object, for example:
 
-Corresponding CSV format:
+```json
+{ "source": "product-doc", "category": "overview", "version": 2 }
+```
 
-![](/imgs/template/Question-answer_data.png)
+Do not use an array, plain text, or invalid JSON. In CSV files, escape the JSON according to CSV rules. In Excel files, enter the JSON string directly in the cell.
 
-In Q&A pair mode, q is the question, a is the answer, and indexes are the index entries.
+## Invalid File Format
 
-### 3. Fill in Your Data
+If FastGPT reports an invalid file format, check the following:
 
-Fill in your Q&A data following the template format:
-- Each row represents one content entry or one Q&A pair
-- The question (q) must never be empty
-- Within a row, you can add more index entries by extending columns to the right
+- The file uses the `.csv` or `.xlsx` extension.
+- The header row contains only supported columns.
+- There is exactly one `q` column and one `a` column, with no more than one `metadata` column.
+- Quotes, commas, and line breaks are correctly escaped in CSV files.
+- The Excel file contains exactly one worksheet and no merged cells.
 
-### 4. Import Limits
-
-- Only CSV format files are supported
-- Maximum file size is 100MB
-- Data must strictly follow the template format, otherwise import may fail
-- Only one file can be imported at a time
-
-After a successful import:
-
-![](/imgs/template/import_csv.png)
-
-### 4. Important Notes
-
-- Ensure the CSV file uses UTF-8 encoding
-- If content contains commas, wrap the entire value in double quotes
-- The indexes column is used as search indexes for related questions, helping improve retrieval accuracy
-- We recommend testing with a small dataset before importing large amounts of data
-
-## Best Practices
-
-1. **Data Preparation**
-   - Ensure content or Q&A pair quality — answers should be clear and accurate
-   - Add appropriate index keywords for each import entry
-   - Avoid duplicate content or Q&A pairs
-
-2. **Format Check**
-   - Verify the CSV file format before importing
-   - Ensure there are no extra blank lines or spaces
-   - Verify that special characters are properly escaped
-
-3. **Batch Import**
-   - For large datasets, import in batches
-   - Verify data correctness after each batch
-
-## FAQ
-
-Q: Why did my file import fail?
-A: Check the following:
-- Is the file format CSV?
-- Is the encoding UTF-8?
-- Does the data strictly follow the template format?
-- Does the file exceed the size limit?
-
-Q: How do I verify a successful import?
-A: After a successful import, you can:
-- Search for imported questions in the knowledge base
-- Test answer accuracy through conversations
-- Check the knowledge base data statistics
+Start with a small test file. After confirming the format, import larger datasets in batches.
