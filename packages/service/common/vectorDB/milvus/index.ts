@@ -5,7 +5,7 @@ import {
   MILVUS_ADDRESS,
   MILVUS_TOKEN
 } from '../constants';
-import type { VectorControllerType } from '../type';
+import type { UpdateCustomDataPropsType, VectorControllerType } from '../type';
 import { retryFn } from '@fastgpt/global/common/system/utils';
 import { getLogger, LogCategories } from '../../logger';
 import { customNanoid } from '@fastgpt/global/common/string/tools';
@@ -199,6 +199,22 @@ export class MilvusCtrl implements VectorControllerType {
     await client.delete({
       collection_name: DatasetVectorTableName,
       filter: concatWhere
+    });
+  };
+  updateCustomData: VectorControllerType['updateCustomData'] = async (
+    props: UpdateCustomDataPropsType
+  ): Promise<void> => {
+    const client = await this.getClient();
+    const { idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    await client.upsert({
+      collection_name: DatasetVectorTableName,
+      data: idList.map((id) => ({
+        id: Number(id),
+        customData: JSON.stringify(customData)
+      }))
     });
   };
   embRecall: VectorControllerType['embRecall'] = async (props) => {

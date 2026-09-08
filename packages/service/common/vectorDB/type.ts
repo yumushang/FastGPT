@@ -16,9 +16,18 @@ export const InsertVectorControllerPropsSchema = z.object({
   teamId: z.string(),
   datasetId: z.string(),
   collectionId: z.string(),
-  vectors: z.array(z.array(z.number()))
+  vectors: z.array(z.array(z.number())),
+  customData: z.any().optional()
 });
 export type InsertVectorControllerPropsType = z.infer<typeof InsertVectorControllerPropsSchema>;
+
+export const UpdateCustomDataPropsSchema = z.object({
+  teamId: z.string(),
+  customData: z.any().optional(),
+  idList: z.array(z.string())
+});
+
+export type UpdateCustomDataPropsType = z.infer<typeof UpdateCustomDataPropsSchema>;
 
 // Insert vector response schema
 export const InsertVectorResponseSchema = z.object({
@@ -55,7 +64,8 @@ export const EmbeddingRecallCtrlPropsSchema = z.object({
   limit: z.number(),
   forbidCollectionIdList: z.array(z.string()),
   filterCollectionIdList: z.array(z.string()).optional(),
-  retry: z.number().optional()
+  retry: z.number().optional(),
+  customDataFilterMatch: z.string().optional()
 });
 export type EmbeddingRecallCtrlPropsType = z.infer<typeof EmbeddingRecallCtrlPropsSchema>;
 
@@ -94,6 +104,8 @@ export interface VectorControllerType {
    * Insert vectors into the database
    */
   insert(props: InsertVectorControllerPropsType): Promise<InsertVectorResponseType>;
+
+  updateCustomData(props: UpdateCustomDataPropsType): Promise<void>;
 
   /**
    * Delete vectors from the database

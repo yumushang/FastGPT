@@ -75,7 +75,7 @@ const DatasetDataSchema = new Schema({
     ],
     default: []
   },
-
+  customData: Object,
   updateTime: {
     type: Date,
     default: () => new Date()

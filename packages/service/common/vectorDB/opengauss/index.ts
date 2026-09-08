@@ -1,7 +1,7 @@
 /* openGauss DataVec vector crud */
 import { DatasetVectorTableName } from '../constants';
 import { OgClient, connectOg } from './controller';
-import type { VectorControllerType } from '../type';
+import type { UpdateCustomDataPropsType, VectorControllerType } from '../type';
 import dayjs from 'dayjs';
 import { getLogger, LogCategories } from '../../logger';
 
@@ -19,7 +19,8 @@ export class OpenGaussVectorCtrl implements VectorControllerType {
             team_id VARCHAR(50) NOT NULL,
             dataset_id VARCHAR(50) NOT NULL,
             collection_id VARCHAR(50) NOT NULL,
-            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            custom_data JSONB
         );
       `);
 
@@ -50,7 +51,7 @@ export class OpenGaussVectorCtrl implements VectorControllerType {
     }
   };
   insert: VectorControllerType['insert'] = async (props) => {
-    const { teamId, datasetId, collectionId, vectors } = props;
+    const { teamId, datasetId, collectionId, vectors, customData } = props;
 
     const values = vectors.map((vector) => [
       { key: 'vector', value: `[${vector}]` },
@@ -58,6 +59,12 @@ export class OpenGaussVectorCtrl implements VectorControllerType {
       { key: 'dataset_id', value: String(datasetId) },
       { key: 'collection_id', value: String(collectionId) }
     ]);
+
+    if (customData) {
+      values.forEach((item) => {
+        item.push({ key: 'custom_data', value: JSON.stringify(customData) });
+      });
+    }
 
     const { rowCount, rows } = await OgClient.insert(DatasetVectorTableName, {
       values
@@ -103,6 +110,21 @@ export class OpenGaussVectorCtrl implements VectorControllerType {
     if (!where) return;
 
     await OgClient.delete(DatasetVectorTableName, {
+      where: [where]
+    });
+  };
+  updateCustomData: VectorControllerType['updateCustomData'] = async (
+    props: UpdateCustomDataPropsType
+  ): Promise<void> => {
+    const { teamId, idList, customData } = props;
+
+    if (idList.length === 0 || !customData) return;
+
+    const teamIdWhere = `team_id='${String(teamId)}' AND`;
+    const where = `${teamIdWhere} id IN (${idList.map((id) => String(id)).join(',')})`;
+
+    await OgClient.update(DatasetVectorTableName, {
+      values: [{ key: 'custom_data', value: JSON.stringify(customData) }],
       where: [where]
     });
   };

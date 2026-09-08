@@ -30,7 +30,8 @@ const DatasetDataTextSchema = new Schema({
     ref: DatasetDataCollectionName,
     required: true
   },
-  fullTextToken: String
+  fullTextToken: String,
+  customData: Object
 });
 
 try {

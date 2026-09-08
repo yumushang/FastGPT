@@ -32,7 +32,8 @@ export async function registerNodeInstrumentation() {
       { instrumentationCheck },
       { getErrText },
       { configureLogger, getLogger, LogCategories },
-      { InitialErrorEnum }
+      { InitialErrorEnum },
+      { initLangfuse }
     ] = await Promise.all([
       import('@fastgpt/service/common/mongo/init'),
       import('@fastgpt/service/common/mongo/index'),
@@ -53,7 +54,8 @@ export async function registerNodeInstrumentation() {
       import('@/service/common/system/health'),
       import('@fastgpt/global/common/error/utils'),
       import('@fastgpt/service/common/logger'),
-      import('@fastgpt/service/common/system/constants')
+      import('@fastgpt/service/common/system/constants'),
+      import('@fastgpt/service/common/langfuse')
     ]);
 
     await runInitializationStep({
@@ -207,6 +209,11 @@ export async function registerNodeInstrumentation() {
       logger,
       getErrText
     });
+
+    if (process.env.LANGFUSE_ENABLE === 'true') {
+      initLangfuse();
+      logger.info('initLangfuse');
+    }
 
     logger.info('System initialized successfully');
   } catch (error) {

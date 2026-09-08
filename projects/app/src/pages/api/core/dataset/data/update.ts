@@ -10,7 +10,7 @@ import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
 import { UpdateDatasetDataBodySchema } from '@fastgpt/global/openapi/core/dataset/data/api';
 
 async function handler(req: ApiRequestProps) {
-  const { dataId, q, a, indexes = [] } = UpdateDatasetDataBodySchema.parse(req.body);
+  const { dataId, q, a, indexes = [], customData } = UpdateDatasetDataBodySchema.parse(req.body);
 
   // auth data permission
   const {
@@ -37,7 +37,8 @@ async function handler(req: ApiRequestProps) {
       a,
       indexes,
       model: vectorModel,
-      indexPrefix: indexPrefixTitle ? `# ${name}` : undefined
+      indexPrefix: indexPrefixTitle ? `# ${name}` : undefined,
+      customData
     });
 
     pushGenerateVectorUsage({

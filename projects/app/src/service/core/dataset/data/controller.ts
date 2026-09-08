@@ -1,5 +1,8 @@
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
-import { insertDatasetDataVector } from '@fastgpt/service/common/vectorDB/controller';
+import {
+  insertDatasetDataVector,
+  updateDatasetDataCustomData
+} from '@fastgpt/service/common/vectorDB/controller';
 import { jiebaSplit } from '@fastgpt/service/common/string/jieba/index';
 import { deleteDatasetDataVector } from '@fastgpt/service/common/vectorDB/controller';
 import { pushCollectionUpdateJob } from '@fastgpt/service/core/dataset/collection/mq';
@@ -174,7 +177,8 @@ export async function insertData2Dataset({
   indexPrefix,
   embeddingModel,
   imageDescMap,
-  session
+  session,
+  customData
 }: CreateDatasetDataPropsType & {
   embeddingModel: string;
   indexSize?: number;
@@ -208,7 +212,8 @@ export async function insertData2Dataset({
     model: embModel,
     teamId,
     datasetId,
-    collectionId
+    collectionId,
+    customData
   });
   const results = newIndexes.map((item, index) => ({
     ...item,
@@ -227,6 +232,7 @@ export async function insertData2Dataset({
         imageId,
         imageDescMap,
         chunkIndex,
+        customData,
         indexes: results
       }
     ],
@@ -241,7 +247,8 @@ export async function insertData2Dataset({
         datasetId,
         collectionId,
         dataId: _id,
-        fullTextToken: await jiebaSplit({ text: `${q}\n${a}`.trim() })
+        fullTextToken: await jiebaSplit({ text: `${q}\n${a}`.trim() }),
+        customData
       }
     ],
     { session, ordered: true }
@@ -299,7 +306,8 @@ export async function updateData2Dataset({
   indexes,
   model,
   indexSize = 512,
-  indexPrefix
+  indexPrefix,
+  customData
 }: UpdateDatasetDataPropsType & { model: string; indexSize?: number }) {
   if (!Array.isArray(indexes)) {
     return Promise.reject('indexes is required');
@@ -386,7 +394,8 @@ export async function updateData2Dataset({
         model: getEmbeddingModel(model),
         teamId: mongoData.teamId,
         datasetId: mongoData.datasetId,
-        collectionId: mongoData.collectionId
+        collectionId: mongoData.collectionId,
+        customData: customData
       });
 
       // Update dataIds for the items
@@ -402,6 +411,12 @@ export async function updateData2Dataset({
   const newIndexes = patchResult
     .filter((item) => item.type !== 'delete')
     .map((item) => item.index) as DatasetDataIndexItemType[];
+
+  // Get unchanged indexes for customData update
+  const unchangedIndexList = patchResult
+    .filter((item) => item.type === 'unChange')
+    .map((item) => item.index.dataId)
+    .filter(Boolean) as string[];
 
   // 6. update mongo data
   await mongoSessionRun(async (session) => {
@@ -420,12 +435,16 @@ export async function updateData2Dataset({
     mongoData.q = q || mongoData.q;
     mongoData.a = a ?? mongoData.a;
     mongoData.indexes = newIndexes;
+    mongoData.customData = customData;
     await mongoData.save({ session });
 
     // update mongo data text
     await MongoDatasetDataText.updateOne(
       { dataId: mongoData._id },
-      { fullTextToken: await jiebaSplit({ text: `${mongoData.q}\n${mongoData.a}`.trim() }) },
+      {
+        fullTextToken: await jiebaSplit({ text: `${mongoData.q}\n${mongoData.a}`.trim() }),
+        customData: customData
+      },
       { session }
     );
 
@@ -434,6 +453,15 @@ export async function updateData2Dataset({
       await deleteDatasetDataVector({
         teamId: mongoData.teamId,
         idList: deleteVectorIdList
+      });
+    }
+
+    // Update customData for unchanged indexes in vector store
+    if (unchangedIndexList.length > 0 && customData) {
+      await updateDatasetDataCustomData({
+        teamId: mongoData.teamId,
+        idList: unchangedIndexList,
+        customData
       });
     }
   });

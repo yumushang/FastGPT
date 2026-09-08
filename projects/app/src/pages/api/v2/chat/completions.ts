@@ -324,6 +324,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       streamResumeMirror: mirror
     });
 
+    const chHeaders = (() => {
+      const headers: Record<string, string> = {};
+      const prefix = 'ch-';
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (key.toLowerCase().startsWith(prefix) && typeof value === 'string') {
+          const headerKey = key.slice(prefix.length);
+          headers[headerKey] = value;
+        }
+      }
+      return Object.keys(headers).length > 0 ? headers : undefined;
+    })();
+
     /* start flow controller */
     const {
       flowResponses,
@@ -367,7 +379,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           maxRunTimes: WORKFLOW_MAX_RUN_TIMES,
           workflowStreamResponse: workflowResponseWrite,
           responseAllData,
-          responseDetail: showCite
+          responseDetail: showCite,
+          chHeaders
         });
       }
       return Promise.reject('您的工作流版本过低，请重新发布一次');

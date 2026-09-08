@@ -21,6 +21,8 @@ import {
   GetDatasetListBodySchema,
   type GetDatasetListResponse
 } from '@fastgpt/global/openapi/core/dataset/api';
+import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection/schema';
+import { Types } from '@fastgpt/service/common/mongo';
 
 async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
   const { parentId, type, searchKey } = GetDatasetListBodySchema.parse(req.body);
@@ -77,6 +79,18 @@ async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
       myOrgSet.has(String(item.orgId))
   );
 
+  // 校验是否是合法的 MongoDB ObjectId (24 hex chars)
+  const isObjectId = (id: string) => /^[0-9a-fA-F]{24}$/.test(id);
+
+  // 如果是 ObjectId, 同时也作为数据集id查询出对应知识库id
+  let datasetIdsFromCollection: string[] = [];
+  if (searchKey && isObjectId(searchKey)) {
+    const collections = await MongoDatasetCollection.find({
+      _id: new Types.ObjectId(searchKey)
+    }).select('datasetId');
+    datasetIdsFromCollection = collections.map((c) => String(c.datasetId));
+  }
+
   const findDatasetQuery = (() => {
     // Filter apps by permission, if not owner, only get apps that I have permission to access
     const idList = { _id: { $in: myRoles.map((item) => item.resourceId) } };
@@ -92,19 +106,33 @@ async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
       ? {
           $or: [
             { name: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } },
-            { intro: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } }
+            { intro: { $regex: new RegExp(`${replaceRegChars(searchKey)}`, 'i') } },
+            ...(isObjectId(searchKey) ? [{ _id: new Types.ObjectId(searchKey) }] : [])
           ]
         }
       : {};
 
+    // 根据数据集id查询知识库 过滤条件
+    const datasetIdFromCollectionMatch =
+      datasetIdsFromCollection.length > 0
+        ? {
+            _id: {
+              $in: datasetIdsFromCollection.map((id) => new Types.ObjectId(id))
+            }
+          }
+        : null;
+
     if (searchKey) {
-      const data = {
+      const data: any = {
         ...datasetPerQuery,
         teamId,
         deleteTime: null, // 搜索时也要过滤已删除数据
-        ...searchMatch
+        ...(datasetIdFromCollectionMatch
+          ? {
+              $or: [...(searchMatch.$or || []), datasetIdFromCollectionMatch]
+            }
+          : searchMatch)
       };
-      // @ts-ignore
       delete data.parentId;
       return data;
     }

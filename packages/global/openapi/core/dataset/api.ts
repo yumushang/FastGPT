@@ -369,7 +369,8 @@ export const SearchDatasetTestBodySchema = z.object({
   }),
   datasetDeepSearchBg: z.string().optional().meta({
     description: '深度搜索背景描述'
-  })
+  }),
+  customDataFilterMatch: z.string().optional()
 });
 export type SearchDatasetTestBody = z.infer<typeof SearchDatasetTestBodySchema>;
 

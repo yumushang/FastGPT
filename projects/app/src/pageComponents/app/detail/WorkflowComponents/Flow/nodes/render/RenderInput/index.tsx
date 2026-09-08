@@ -13,6 +13,7 @@ import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import SandboxTipTag from '@/pageComponents/app/detail/components/SandboxTipTag';
 import SandboxNotSupportTip from '@/pageComponents/app/detail/components/SandboxNotSupportTip';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import { WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 
 const RenderList: Record<
   FlowNodeInputTypeEnum,
@@ -112,7 +113,6 @@ const RenderInput = ({ flowInputList, nodeId, CustomComponent, mb = 5 }: Props) 
 
   const filterProInputs = useMemoEnhance(() => {
     return flowInputList.filter((input) => {
-      if (input.isPro && !feConfigs?.isPlus) return false;
       return true;
     });
   }, [feConfigs?.isPlus, flowInputList]);
