@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import FileSelectorBox, { type SelectFileItemType } from '@/components/Select/FileSelectorBox';
 import {
-  getPkgPluginUploadURL,
+  uploadPkgPluginFile,
   parseUploadedPkgPlugin,
   confirmPkgPluginUpload
 } from '@/web/core/plugin/admin/api';
@@ -17,7 +17,6 @@ import { getMarketPlaceToolTags } from '@/web/core/plugin/marketplace/api';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import type { GetAdminSystemToolsResponseType } from '@fastgpt/global/openapi/core/plugin/admin/tool/api';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
-import { putFileToS3 } from '@fastgpt/web/common/file/utils';
 
 type UploadedPluginFile = SelectFileItemType & {
   status: 'uploading' | 'parsing' | 'success' | 'error' | 'duplicate';
@@ -55,21 +54,14 @@ const ImportPluginModal = ({
         )
       );
 
-      const { formData, objectName, postURL } = await getPkgPluginUploadURL({
-        filename: file.name
+      const { objectName } = await uploadPkgPluginFile({
+        filename: file.name,
+        file: file.file
       });
 
-      await putFileToS3({
-        url: postURL,
-        headers: formData,
-        file: file.file,
-        t,
-        onSuccess: () => {
-          setUploadedFiles((prev) =>
-            prev.map((f) => (f.name === file.name ? { ...f, status: 'parsing' } : f))
-          );
-        }
-      });
+      setUploadedFiles((prev) =>
+        prev.map((f) => (f.name === file.name ? { ...f, status: 'parsing' } : f))
+      );
 
       const parseResult = await parseUploadedPkgPlugin({ objectName });
 
@@ -103,6 +95,7 @@ const ImportPluginModal = ({
         )
       );
     } catch (error: any) {
+      console.error('Upload plugin error:', error);
       setUploadedFiles((prev) =>
         prev.map((prevFile) =>
           prevFile.name === file.name
