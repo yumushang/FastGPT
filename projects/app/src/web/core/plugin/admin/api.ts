@@ -2,6 +2,7 @@ import { GET, PUT, POST, DELETE } from '@/web/common/api/request';
 import type {
   GetPkgPluginUploadURLQueryType,
   GetPkgPluginUploadURLResponseType,
+  UploadPkgPluginResponseType,
   ParseUploadedPkgPluginQueryType,
   ParseUploadedPkgPluginResponseType,
   ConfirmUploadPkgPluginBodyType,
@@ -12,6 +13,13 @@ import type {
 // Pkg plugin
 export const getPkgPluginUploadURL = (params: GetPkgPluginUploadURLQueryType) =>
   GET<GetPkgPluginUploadURLResponseType>(`/core/plugin/admin/pkg/presign`, params);
+
+export const uploadPkgPluginFile = ({ filename, file }: { filename: string; file: File }) =>
+  PUT<UploadPkgPluginResponseType>(
+    `/core/plugin/admin/pkg/upload?filename=${encodeURIComponent(filename)}`,
+    file,
+    { timeout: 5 * 60 * 1000 }
+  );
 
 export const parseUploadedPkgPlugin = (params: ParseUploadedPkgPluginQueryType) =>
   GET<ParseUploadedPkgPluginResponseType>(`/core/plugin/admin/pkg/parse`, params);

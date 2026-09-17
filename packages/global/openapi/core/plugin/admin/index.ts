@@ -2,6 +2,8 @@ import type { OpenAPIPath } from '../../../type';
 import {
   GetPkgPluginUploadURLQuerySchema,
   GetPkgPluginUploadURLResponseSchema,
+  UploadPkgPluginQuerySchema,
+  UploadPkgPluginResponseSchema,
   ParseUploadedPkgPluginQuerySchema,
   ParseUploadedPkgPluginResponseSchema,
   ConfirmUploadPkgPluginBodySchema,
@@ -30,6 +32,27 @@ export const PluginAdminPath: OpenAPIPath = {
           content: {
             'application/json': {
               schema: GetPkgPluginUploadURLResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+  '/core/plugin/admin/pkg/upload': {
+    put: {
+      summary: '上传插件包(服务端中转)',
+      description:
+        '将插件包文件通过服务端中转上传到存储服务,避免客户端直连文件服务器,需要系统管理员权限',
+      tags: [TagsMap.pluginAdmin],
+      requestParams: {
+        query: UploadPkgPluginQuerySchema
+      },
+      responses: {
+        200: {
+          description: '成功上传插件包',
+          content: {
+            'application/json': {
+              schema: UploadPkgPluginResponseSchema
             }
           }
         }

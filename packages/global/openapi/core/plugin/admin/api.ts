@@ -14,6 +14,16 @@ export const GetPkgPluginUploadURLResponseSchema = z.object({
 });
 export type GetPkgPluginUploadURLResponseType = z.infer<typeof GetPkgPluginUploadURLResponseSchema>;
 
+// 1.1 Upload Pkg Plugin (server-side relay upload) Schema
+export const UploadPkgPluginQuerySchema = z.object({
+  filename: z.string()
+});
+export type UploadPkgPluginQueryType = z.infer<typeof UploadPkgPluginQuerySchema>;
+export const UploadPkgPluginResponseSchema = z.object({
+  objectName: z.string()
+});
+export type UploadPkgPluginResponseType = z.infer<typeof UploadPkgPluginResponseSchema>;
+
 // 2. Parse Uploaded Pkg Plugin Schema
 export const ParseUploadedPkgPluginQuerySchema = z.object({
   objectName: z.string()
