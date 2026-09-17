@@ -179,13 +179,15 @@ function request(
   { cancelToken, maxQuantity, withCredentials, ...config }: ConfigType,
   method: Method
 ): any {
-  /* 去空 */
-  for (const key in data) {
-    const val = data[key];
-    if (data[key] === undefined) {
-      delete data[key];
-    } else if (val instanceof Date) {
-      data[key] = dayjs(val).format();
+  /* 去空(仅处理普通对象和数组;File/Blob/FormData 等原始 body 直接透传) */
+  if (data && (Array.isArray(data) || Object.getPrototypeOf(data) === Object.prototype)) {
+    for (const key in data) {
+      const val = data[key];
+      if (data[key] === undefined) {
+        delete data[key];
+      } else if (val instanceof Date) {
+        data[key] = dayjs(val).format();
+      }
     }
   }
 
