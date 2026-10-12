@@ -15,7 +15,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`未配置商业版链接: ${path}`);
     }
 
-    const targetUrl = new URL(requestPath, FastGPTProUrl);
+    const targetUrl = new URL(
+      `${FastGPTProUrl}/${path?.join('/')}?${new URLSearchParams(query).toString()}`
+    );
 
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers)) {
