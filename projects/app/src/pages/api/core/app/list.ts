@@ -17,14 +17,19 @@ import { replaceRegChars } from '@fastgpt/global/common/string/tools';
 import { getGroupsByTmbId } from '@fastgpt/service/support/permission/memberGroup/controllers';
 import { getOrgIdSetWithParentByTmbId } from '@fastgpt/service/support/permission/org/controllers';
 import { addSourceMember } from '@fastgpt/service/support/user/utils';
-import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import {
+  FlowNodeInputTypeEnum,
+  FlowNodeTypeEnum
+} from '@fastgpt/global/core/workflow/node/constant';
 import { sumPer } from '@fastgpt/global/support/permission/utils';
 import { MongoOpenApi } from '@fastgpt/service/support/openapi/schema';
+import { NodeInputKeyEnum, VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 
 export type ListAppBody = {
   parentId?: ParentIdType;
   type?: AppTypeEnum | AppTypeEnum[];
   searchKey?: string;
+  modelId?: string;
 };
 
 /*
@@ -38,7 +43,7 @@ export type ListAppBody = {
 */
 
 async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemType[]> {
-  const { parentId, type, searchKey } = req.body;
+  const { parentId, type, searchKey, modelId } = req.body;
 
   // Auth user permission
   const [{ tmbId, teamId, permission: teamPer }] = await Promise.all([
@@ -107,17 +112,22 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
     : [];
 
   const findAppsQuery = (() => {
+    // 关键词搜索、按模型筛选均为全团队范围，不限制在 parentId 下（权限由下方 hasReadPer 过滤兜底）
+    const isTeamWide = !!(searchKey || modelId);
+
     // Filter apps by permission, if not owner, only get apps that I have permission to access
     const idList = { _id: { $in: myPerList.map((item) => item.resourceId) } };
-    const appPerQuery = teamPer.isOwner
-      ? {
-          parentId: parentId ? parseParentIdInMongo(parentId) : null
-        }
-      : parentId
+    const appPerQuery = isTeamWide
+      ? {}
+      : teamPer.isOwner
         ? {
-            $or: [idList, parseParentIdInMongo(parentId)]
+            parentId: parentId ? parseParentIdInMongo(parentId) : null
           }
-        : { $or: [idList, { parentId: null }] };
+        : parentId
+          ? {
+              $or: [idList, parseParentIdInMongo(parentId)]
+            }
+          : { $or: [idList, { parentId: null }] };
 
     const searchMatch = searchKey
       ? {
@@ -138,28 +148,102 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       return { $ne: AppTypeEnum.hidden } as const;
     })();
 
-    if (searchKey) {
-      const data = {
-        ...appPerQuery,
-        teamId,
-        ...searchMatch,
-        type: _type
-      };
+    // 匹配某个节点输入（inputs）的条件
+    const nodeInputMatch = (inputMatch: Record<string, unknown>) => ({
+      modules: {
+        $elemMatch: {
+          inputs: {
+            $elemMatch: inputMatch
+          }
+        }
+      }
+    });
 
-      // @ts-ignore
-      delete data.parentId;
-      return data;
-    }
+    // Filter apps by used model (workflow nodes & chatConfig & app variables)
+    const modelMatch = modelId
+      ? {
+          $or: [
+            // 节点输入的扁平模型字段
+            nodeInputMatch({
+              key: {
+                $in: [
+                  NodeInputKeyEnum.aiModel,
+                  NodeInputKeyEnum.datasetSearchRerankModel,
+                  NodeInputKeyEnum.datasetSearchExtensionModel,
+                  NodeInputKeyEnum.datasetDeepSearchModel
+                ]
+              },
+              value: modelId
+            }),
+            // agent 节点：数据集检索配置存在 agent_datasetParams 内
+            nodeInputMatch({
+              key: NodeInputKeyEnum.datasetParams,
+              $or: [
+                { 'value.rerankModel': modelId },
+                { 'value.datasetSearchExtensionModel': modelId },
+                { 'value.datasetDeepSearchModel': modelId }
+              ]
+            }),
+            // 旧版系统配置节点（userGuide）：tts / questionGuide 的模型
+            {
+              modules: {
+                $elemMatch: {
+                  flowNodeType: FlowNodeTypeEnum.systemConfig,
+                  inputs: {
+                    $elemMatch: {
+                      key: { $in: [NodeInputKeyEnum.tts, NodeInputKeyEnum.questionGuide] },
+                      'value.model': modelId
+                    }
+                  }
+                }
+              }
+            },
+            // 自定义模型输入（renderTypeList 含 selectLLMModel）：当前值或默认值
+            nodeInputMatch({
+              renderTypeList: FlowNodeInputTypeEnum.selectLLMModel,
+              $or: [{ value: modelId }, { defaultValue: modelId }]
+            }),
+            // 表单输入节点：selectLLMModel 字段的默认值
+            nodeInputMatch({
+              key: NodeInputKeyEnum.userInputForms,
+              value: {
+                $elemMatch: {
+                  type: FlowNodeInputTypeEnum.selectLLMModel,
+                  defaultValue: modelId
+                }
+              }
+            }),
+            // 应用变量：llmSelect 变量的默认值
+            {
+              'chatConfig.variables': {
+                $elemMatch: {
+                  type: VariableInputEnum.llmSelect,
+                  defaultValue: modelId
+                }
+              }
+            },
+            { 'chatConfig.ttsConfig.model': modelId },
+            { 'chatConfig.questionGuide.model': modelId }
+          ]
+        }
+      : {};
+
+    // 权限、关键词、模型条件各自独立，用 $and 组合，避免 $or 被展开覆盖
+    const andConditions = [
+      appPerQuery,
+      ...(searchKey ? [searchMatch] : []),
+      ...(modelId ? [modelMatch] : [])
+    ].filter((item) => Object.keys(item).length > 0);
 
     return {
-      ...appPerQuery,
       teamId,
       type: _type,
-      ...parseParentIdInMongo(parentId)
+      ...(andConditions.length > 0 ? { $and: andConditions } : {})
     };
   })();
   const limit = (() => {
-    if (searchKey) return 50;
+    // 仅按关键词搜索时限制条数；带 modelId 时权限为后置过滤，预截断会挤掉有权限的结果
+    if (searchKey && !modelId) return 50;
     return;
   })();
 

@@ -39,6 +39,8 @@ export type DatasetContextType = {
   onUpdateDataset: (data: UpdateDatasetBody) => Promise<void>;
   searchKey: string;
   setSearchKey: React.Dispatch<React.SetStateAction<string>>;
+  searchModelId?: string;
+  setSearchModelId: React.Dispatch<React.SetStateAction<string | undefined>>;
 };
 
 export const DatasetsContext = createContext<DatasetContextType>({
@@ -63,6 +65,10 @@ export const DatasetsContext = createContext<DatasetContextType>({
   searchKey: '',
   setSearchKey: function (value: React.SetStateAction<string>): void {
     throw new Error('Function not implemented.');
+  },
+  searchModelId: undefined,
+  setSearchModelId: function (value: React.SetStateAction<string | undefined>): void {
+    throw new Error('Function not implemented.');
   }
 });
 
@@ -71,6 +77,7 @@ function DatasetContextProvider({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
   const [moveDatasetId, setMoveDatasetId] = useState<string>();
   const [searchKey, setSearchKey] = useState('');
+  const [searchModelId, setSearchModelId] = useState<string>();
   const { parentId = null } = router.query as { parentId?: string | null };
 
   const {
@@ -81,11 +88,12 @@ function DatasetContextProvider({ children }: { children: React.ReactNode }) {
     () =>
       getDatasets({
         searchKey,
-        parentId
+        parentId,
+        vectorModel: searchModelId
       }),
     {
       manual: false,
-      refreshDeps: [parentId, searchKey],
+      refreshDeps: [parentId, searchKey, searchModelId],
       throttleWait: 300
     }
   );
@@ -156,7 +164,9 @@ function DatasetContextProvider({ children }: { children: React.ReactNode }) {
     myDatasets,
     loadMyDatasets,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    searchModelId,
+    setSearchModelId
   };
 
   return (

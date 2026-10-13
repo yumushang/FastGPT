@@ -31,6 +31,7 @@ import { useToast } from '@fastgpt/web/hooks/useToast';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
+import ModelFilterSelect from '@/components/Select/ModelFilterSelect';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
@@ -56,10 +57,12 @@ const Dataset = () => {
     onDelDataset,
     onUpdateDataset,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    searchModelId,
+    setSearchModelId
   } = useContextSelector(DatasetsContext, (v) => v);
   const { userInfo } = useUserStore();
-  const { feConfigs } = useSystemStore();
+  const { feConfigs, embeddingModelList } = useSystemStore();
   const { toast } = useToast();
   const [editFolderData, setEditFolderData] = useState<EditFolderFormType>();
   const [createDatasetType, setCreateDatasetType] = useState<CreateDatasetType>();
@@ -133,7 +136,16 @@ const Dataset = () => {
               }}
             />
 
-            {isPc && RenderSearchInput}
+            {isPc && (
+              <Flex alignItems={'center'} gap={3}>
+                <ModelFilterSelect
+                  models={embeddingModelList}
+                  value={searchModelId}
+                  onChange={setSearchModelId}
+                />
+                {RenderSearchInput}
+              </Flex>
+            )}
 
             {(folderDetail
               ? folderDetail.permission.hasWritePer
@@ -218,7 +230,16 @@ const Dataset = () => {
             )}
           </Flex>
 
-          {!isPc && <Box mt={2}>{RenderSearchInput}</Box>}
+          {!isPc && (
+            <Flex mt={2} gap={2} alignItems={'center'}>
+              <ModelFilterSelect
+                models={embeddingModelList}
+                value={searchModelId}
+                onChange={setSearchModelId}
+              />
+              <Box flex={'1 0 0'}>{RenderSearchInput}</Box>
+            </Flex>
+          )}
 
           <Box flexGrow={1}>
             <List />

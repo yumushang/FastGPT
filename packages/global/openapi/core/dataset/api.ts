@@ -183,6 +183,10 @@ export const GetDatasetListBodySchema = z.object({
   searchKey: z.string().optional().meta({
     example: '产品文档',
     description: '搜索关键词,按名称和简介模糊匹配'
+  }),
+  vectorModel: z.string().optional().meta({
+    example: 'text-embedding-3-small',
+    description: '按知识库使用的索引模型(Embedding)筛选'
   })
 });
 export type GetDatasetListBody = z.infer<typeof GetDatasetListBodySchema>;
