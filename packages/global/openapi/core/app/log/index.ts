@@ -13,7 +13,9 @@ import {
   GetLogKeysResponseSchema,
   UpdateLogKeysBodySchema,
   GetLogUsersBodySchema,
-  GetLogUsersResponseSchema
+  GetLogUsersResponseSchema,
+  GetTeamAppChatStatsBodySchema,
+  GetTeamAppChatStatsResponseSchema
 } from './api';
 
 export const AppLogPath: OpenAPIPath = {
@@ -171,6 +173,31 @@ export const AppLogPath: OpenAPIPath = {
           content: {
             'application/json': {
               schema: GetLogUsersResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+  '/core/app/logs/teamStats': {
+    post: {
+      summary: '获取团队应用调用量统计',
+      description:
+        '统计团队内全部应用（排除文件夹与已删除应用）在时间范围内的对话次数、报错次数、使用人数，按对话次数降序',
+      tags: [TagsMap.appLog],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: GetTeamAppChatStatsBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功获取团队应用调用量统计',
+          content: {
+            'application/json': {
+              schema: GetTeamAppChatStatsResponseSchema
             }
           }
         }

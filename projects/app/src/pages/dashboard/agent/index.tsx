@@ -37,6 +37,7 @@ import ModelFilterSelect from '@/components/Select/ModelFilterSelect';
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
 );
+const ChatStatsDrawer = dynamic(() => import('@/pageComponents/dashboard/agent/ChatStatsDrawer'));
 
 const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
   const { t } = useTranslation();
@@ -65,6 +66,11 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     isOpen: isOpenJsonImportModal,
     onOpen: onOpenJsonImportModal,
     onClose: onCloseJsonImportModal
+  } = useDisclosure();
+  const {
+    isOpen: isOpenChatStatsDrawer,
+    onOpen: onOpenChatStatsDrawer,
+    onClose: onCloseChatStatsDrawer
   } = useDisclosure();
   //if there is a workflow url in the session storage, open the json import modal and import the workflow
   useMount(() => {
@@ -148,6 +154,17 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                     isClearable
                   />
                 </>
+              )}
+
+              {userInfo?.team.permission.hasManagePer && (
+                <Button
+                  variant={'grayBase'}
+                  leftIcon={<MyIcon name={'chart'} w={'18px'} mr={-1} />}
+                  onClick={onOpenChatStatsDrawer}
+                  px={5}
+                >
+                  {t('app:team_chat_stats')}
+                </Button>
               )}
 
               {(folderDetail
@@ -248,6 +265,7 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
         />
       )}
       {isOpenJsonImportModal && <JsonImportModal onClose={onCloseJsonImportModal} />}
+      {isOpenChatStatsDrawer && <ChatStatsDrawer onClose={onCloseChatStatsDrawer} />}
     </Flex>
   );
 };
