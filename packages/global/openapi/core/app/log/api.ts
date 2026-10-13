@@ -326,3 +326,40 @@ export const GetLogUsersResponseSchema = z.object({
   list: z.array(LogUserSchema).meta({ description: '使用者列表' })
 });
 export type GetLogUsersResponse = z.infer<typeof GetLogUsersResponseSchema>;
+
+/* Get team app chat stats */
+export const GetTeamAppChatStatsBodySchema = z.object({
+  dateStart: z.union([z.string(), z.date()]).meta({
+    example: '2024-01-01T00:00:00.000Z',
+    description: '开始时间'
+  }),
+  dateEnd: z.union([z.string(), z.date()]).meta({
+    example: '2024-12-31T23:59:59.999Z',
+    description: '结束时间'
+  }),
+  sources: z
+    .array(z.nativeEnum(ChatSourceEnum))
+    .optional()
+    .meta({
+      example: [ChatSourceEnum.api, ChatSourceEnum.online],
+      description: '对话来源筛选'
+    })
+});
+export type GetTeamAppChatStatsBody = z.infer<typeof GetTeamAppChatStatsBodySchema>;
+
+export const TeamAppChatStatsItemSchema = z.object({
+  appId: z.string().meta({ example: '68ad85a7463006c963799a05', description: '应用 ID' }),
+  name: z.string().meta({ example: '客服机器人', description: '应用名称' }),
+  avatar: z.string().meta({ example: '/icon/logo.svg', description: '应用头像' }),
+  type: z.string().meta({ example: 'advanced', description: '应用类型' }),
+  chatCount: z.number().meta({ example: 100, description: '对话次数(chats 文档数)' }),
+  errorCount: z.number().meta({ example: 5, description: '报错次数' }),
+  userCount: z.number().meta({ example: 20, description: '使用人数(tmbId + outLinkUid 去重)' })
+});
+export type TeamAppChatStatsItemType = z.infer<typeof TeamAppChatStatsItemSchema>;
+
+export const GetTeamAppChatStatsResponseSchema = z.object({
+  list: z.array(TeamAppChatStatsItemSchema).meta({ description: '各应用调用量统计列表' }),
+  totalChatCount: z.number().meta({ example: 1000, description: '对话次数合计' })
+});
+export type GetTeamAppChatStatsResponse = z.infer<typeof GetTeamAppChatStatsResponseSchema>;

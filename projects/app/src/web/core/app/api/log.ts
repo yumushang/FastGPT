@@ -10,7 +10,9 @@ import type {
   getTotalDataResponse,
   getAppChatLogsResponseType,
   GetLogUsersBody,
-  GetLogUsersResponse
+  GetLogUsersResponse,
+  GetTeamAppChatStatsBody,
+  GetTeamAppChatStatsResponse
 } from '@fastgpt/global/openapi/core/app/log/api';
 
 export const updateLogKeys = (data: updateLogKeysBody) =>
@@ -30,3 +32,6 @@ export const getAppChartData = (data: getChartDataBody) =>
 
 export const getLogUsers = (data: GetLogUsersBody) =>
   POST<GetLogUsersResponse>('/core/app/logs/getUsers', data, { maxQuantity: 1 });
+
+export const getTeamAppChatStats = (data: GetTeamAppChatStatsBody) =>
+  POST<GetTeamAppChatStatsResponse>('/core/app/logs/teamStats', data, { maxQuantity: 1 });
