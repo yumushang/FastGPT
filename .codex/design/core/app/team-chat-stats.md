@@ -191,3 +191,15 @@ export const getTeamAppChatStats = (data: GetTeamAppChatStatsBody) =>
 - `packages/global` 独立 `tsc --noEmit`：240 个存量错误全部位于 `test/` 目录，`openapi/` 下 0 错误。
 - `test/cases` 下无 logs/teamStats 相关测试，按约定跳过。
 - i18n 三个 `app.json` 均通过 JSON 合法性校验。
+
+## 7. 迭代记录
+
+### v2(2026-10-13):行跳转 + 数据导出
+
+1. **行点击跳转**：表格行 `onClick` → `router.push('/app/detail?appId=' + appId)`(复用 `dashboard/agent/List.tsx` 的跳转路径),行加 `cursor: pointer`。
+2. **数据导出**:筛选栏右侧新增导出按钮(`common:Export` + `common/download` 图标,空数据禁用),前端直接基于已加载的全量聚合数据生成 CSV(无需新 API):
+   - 列:名称、类型(`appTypeTagMap` label 经 `t()` 翻译)、会话次数、报错数量、使用人数;末尾追加合计行。
+   - `\uFEFF` BOM 保证 Excel 打开中文不乱码;单元格按 CSV 规范转义(逗号/引号/换行)。
+   - 文件名:`全部应用调用量_yyyyMMdd-yyyyMMdd.csv`(随当前时间范围)。
+   - 改动文件:仅 `projects/app/src/pageComponents/dashboard/agent/ChatStatsDrawer/index.tsx`,复用 `common:Export` 等已有 i18n key,无新增翻译。
+   - 验证:`projects/app` typecheck 通过,eslint 0 error。
