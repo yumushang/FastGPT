@@ -93,6 +93,7 @@ export const dispatchChatCompletion = async (props: ChatProps): Promise<ChatResp
       aiChatStopSign,
       aiChatResponseFormat,
       aiChatJsonSchema,
+      aiChatExtraBody,
 
       fileUrlList: fileLinks, // node quote file links
       stringQuoteText //abandon
@@ -197,6 +198,7 @@ export const dispatchChatCompletion = async (props: ChatProps): Promise<ChatResp
           type: aiChatResponseFormat,
           json_schema: aiChatJsonSchema
         },
+        extraBody: aiChatExtraBody,
         retainDatasetCite,
         useVision: aiChatVision,
         requestOrigin

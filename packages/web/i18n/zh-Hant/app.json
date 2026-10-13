@@ -137,6 +137,8 @@
   "export_configs": "匯出設定",
   "export_filtered_sensitive_config_successful": "已複製設定，自動過濾部分敏感資訊，請注意檢查是否仍有敏感資料",
   "export_log_filename": "{{name}} 對話日誌.csv",
+  "extra_body": "Body 額外欄位",
+  "extra_body_tip": "發起對話請求時，會將其合併進請求 Body。與模型設定中的 Body 額外欄位鍵衝突時，以此處為準。範例：{\"reasoning_effort\": \"minimal\"}",
   "fastgpt_marketplace": "FastGPT 插件市場",
   "file_recover": "檔案將會覆蓋目前內容",
   "file_upload": "檔案上傳",

@@ -741,11 +741,35 @@ type LLMRequestBodyType<T> = Omit<T, 'model' | 'stop' | 'response_format' | 'mes
   toolCallMode?: 'toolChoice' | 'prompt';
   useVision?: boolean;
   requestOrigin?: string;
+  extraBody?: Record<string, any> | string;
+};
+export const parseExtraBody = (
+  extraBody?: Record<string, any> | string
+): Record<string, any> | undefined => {
+  if (!extraBody) return undefined;
+
+  const parsed = (() => {
+    if (typeof extraBody === 'string') {
+      if (!extraBody.trim()) return undefined;
+      try {
+        return json5.parse(extraBody);
+      } catch (error) {
+        throw new Error('Extra body error');
+      }
+    }
+    return extraBody;
+  })();
+
+  if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+    return undefined;
+  }
+  return parsed;
 };
 const llmCompletionsBodyFormat = async <T extends ChatCompletionCreateParams>({
   retainDatasetCite,
   useVision,
   requestOrigin,
+  extraBody,
 
   tools,
   tool_choice,
@@ -842,9 +866,11 @@ const llmCompletionsBodyFormat = async <T extends ChatCompletionCreateParams>({
     });
   }
 
+  const formatExtraBody = parseExtraBody(extraBody);
   requestBody = {
     ...requestBody,
-    ...modelData?.defaultConfig
+    ...modelData?.defaultConfig,
+    ...formatExtraBody
   };
 
   return {

@@ -184,6 +184,7 @@ export type SettingAIDataType = {
   [NodeInputKeyEnum.aiChatStopSign]?: string;
   [NodeInputKeyEnum.aiChatResponseFormat]?: string;
   [NodeInputKeyEnum.aiChatJsonSchema]?: string;
+  [NodeInputKeyEnum.aiChatExtraBody]?: string;
 };
 
 export type AppTemplateSchemaType = {

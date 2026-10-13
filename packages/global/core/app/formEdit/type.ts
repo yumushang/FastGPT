@@ -45,6 +45,7 @@ export const AppFormEditFormV1TypeSchema = z.object({
     [NodeInputKeyEnum.aiChatStopSign]: z.string().optional(),
     [NodeInputKeyEnum.aiChatResponseFormat]: z.string().optional(),
     [NodeInputKeyEnum.aiChatJsonSchema]: z.string().optional(),
+    [NodeInputKeyEnum.aiChatExtraBody]: z.string().optional(),
     [NodeInputKeyEnum.useAgentSandbox]: z.boolean().default(false).optional()
   }),
   dataset: AppDatasetSearchParamsTypeSchema.extend({

@@ -63,6 +63,7 @@ export type AIChatSettingsModalProps = {
   showStopSign?: boolean;
   showResponseFormat?: boolean;
   showReasoning?: boolean;
+  showExtraBody?: boolean;
 };
 
 const AIChatSettingsModal = ({
@@ -75,7 +76,8 @@ const AIChatSettingsModal = ({
   showTopP = true,
   showStopSign = true,
   showResponseFormat = true,
-  showReasoning = true
+  showReasoning = true,
+  showExtraBody = true
 }: AIChatSettingsModalProps & {
   onClose: () => void;
   onSuccess: (e: SettingAIDataType) => void;
@@ -115,6 +117,7 @@ const AIChatSettingsModal = ({
   const stopSign = watch(NodeInputKeyEnum.aiChatStopSign);
   const responseFormat = watch(NodeInputKeyEnum.aiChatResponseFormat);
   const jsonSchema = watch(NodeInputKeyEnum.aiChatJsonSchema);
+  const extraBody = watch(NodeInputKeyEnum.aiChatExtraBody);
 
   const tokenLimit = useMemo(() => {
     return selectedModel?.maxResponse || 4096;
@@ -408,6 +411,33 @@ const AIChatSettingsModal = ({
                 value={jsonSchema || ''}
                 onChange={(e) => {
                   setValue(NodeInputKeyEnum.aiChatJsonSchema, e);
+                }}
+                bg={'myGray.25'}
+              />
+            </Box>
+          </Flex>
+        )}
+        {showExtraBody && (
+          <Flex {...FlexItemStyles} h="auto">
+            <Box {...LabelStyles}>
+              <Flex alignItems={'center'}>
+                <Box mr={0.5}>{t('app:extra_body')}</Box>
+                <QuestionTip label={t('app:extra_body_tip')} />
+              </Flex>
+              <Switch
+                isChecked={extraBody !== undefined}
+                size={'sm'}
+                onChange={(e) => {
+                  setValue(NodeInputKeyEnum.aiChatExtraBody, e.target.checked ? '' : undefined);
+                }}
+              />
+            </Box>
+            <Box flex={'1 0 0'}>
+              <JsonEditor
+                isDisabled={extraBody === undefined}
+                value={extraBody || ''}
+                onChange={(e) => {
+                  setValue(NodeInputKeyEnum.aiChatExtraBody, e);
                 }}
                 bg={'myGray.25'}
               />

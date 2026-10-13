@@ -122,6 +122,12 @@ export const AiChatModule: FlowNodeTemplateType = {
       label: '',
       valueType: WorkflowIOValueTypeEnum.string
     },
+    {
+      key: NodeInputKeyEnum.aiChatExtraBody,
+      renderTypeList: [FlowNodeInputTypeEnum.hidden],
+      label: '',
+      valueType: WorkflowIOValueTypeEnum.string
+    },
     // settings modal ---
     Input_Template_System_Prompt,
     Input_Template_History,
