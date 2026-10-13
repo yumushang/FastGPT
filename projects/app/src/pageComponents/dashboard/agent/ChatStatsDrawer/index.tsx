@@ -1,7 +1,20 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Flex, Table, TableContainer, Tbody, Td, Th, Thead, Tr } from '@chakra-ui/react';
+import {
+  Box,
+  Button,
+  Flex,
+  Table,
+  TableContainer,
+  Tbody,
+  Td,
+  Th,
+  Thead,
+  Tr
+} from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
-import { addDays } from 'date-fns';
+import { useRouter } from 'next/router';
+import { addDays, format } from 'date-fns';
+import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyRightDrawer from '@fastgpt/web/components/common/MyDrawer/MyRightDrawer';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
@@ -17,9 +30,11 @@ import type { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { getTeamAppChatStats } from '@/web/core/app/api/log';
 import AppTypeTag from '../TypeTag';
+import { appTypeTagMap } from '../../constant';
 
 const ChatStatsDrawer = ({ onClose }: { onClose: () => void }) => {
   const { t } = useTranslation();
+  const router = useRouter();
 
   const [dateRange, setDateRange] = useState<DateRangeType>({
     from: new Date(addDays(new Date(), -6).setHours(0, 0, 0, 0)),
@@ -57,6 +72,47 @@ const ChatStatsDrawer = ({ onClose }: { onClose: () => void }) => {
   });
 
   const list = data?.list ?? [];
+
+  const onExport = () => {
+    const escapeCsvCell = (cell: string | number) => {
+      const content = String(cell).trim();
+      if (content.includes(',') || content.includes('"') || content.includes('\n')) {
+        return `"${content.replace(/"/g, '""')}"`;
+      }
+      return content;
+    };
+    const getTypeLabel = (type: string) => {
+      const labelKey = appTypeTagMap[type as keyof typeof appTypeTagMap]?.label;
+      return labelKey ? t(labelKey as any) : type;
+    };
+
+    const header = [
+      t('common:Name'),
+      t('common:support.standard.type'),
+      t('app:logs_chat_count'),
+      t('app:logs_error_count'),
+      t('app:team_chat_stats_user_count')
+    ];
+    const rows = list.map((item) => [
+      item.name,
+      getTypeLabel(item.type),
+      item.chatCount,
+      item.errorCount,
+      item.userCount
+    ]);
+    rows.push([t('app:team_chat_stats_total'), '', data?.totalChatCount ?? 0, '', '']);
+
+    const csvContent = [header, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${t('app:team_chat_stats_title')}_${format(dateRange.from, 'yyyyMMdd')}-${format(dateRange.to, 'yyyyMMdd')}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <MyRightDrawer
@@ -105,6 +161,17 @@ const ChatStatsDrawer = ({ onClose }: { onClose: () => void }) => {
               }}
             />
           </Flex>
+          <Box flex={'1'} />
+          <Button
+            variant={'grayBase'}
+            size={'sm'}
+            h={9}
+            leftIcon={<MyIcon name={'common/download'} w={'14px'} />}
+            onClick={onExport}
+            isDisabled={list.length === 0}
+          >
+            {t('common:Export')}
+          </Button>
         </Flex>
 
         <TableContainer mt={4} flex={'1 0 0'} overflowY={'auto'}>
@@ -120,7 +187,12 @@ const ChatStatsDrawer = ({ onClose }: { onClose: () => void }) => {
             </Thead>
             <Tbody fontSize={'sm'}>
               {list.map((item) => (
-                <Tr key={item.appId} _hover={{ bg: 'myWhite.600' }}>
+                <Tr
+                  key={item.appId}
+                  cursor={'pointer'}
+                  _hover={{ bg: 'myWhite.600' }}
+                  onClick={() => router.push(`/app/detail?appId=${item.appId}`)}
+                >
                   <Td>
                     <Flex alignItems={'center'}>
                       <Avatar src={item.avatar} w={'20px'} mr={2} borderRadius={'sm'} />
