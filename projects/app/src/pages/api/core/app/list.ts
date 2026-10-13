@@ -20,11 +20,13 @@ import { addSourceMember } from '@fastgpt/service/support/user/utils';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { sumPer } from '@fastgpt/global/support/permission/utils';
 import { MongoOpenApi } from '@fastgpt/service/support/openapi/schema';
+import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 
 export type ListAppBody = {
   parentId?: ParentIdType;
   type?: AppTypeEnum | AppTypeEnum[];
   searchKey?: string;
+  modelId?: string;
 };
 
 /*
@@ -38,7 +40,7 @@ export type ListAppBody = {
 */
 
 async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemType[]> {
-  const { parentId, type, searchKey } = req.body;
+  const { parentId, type, searchKey, modelId } = req.body;
 
   // Auth user permission
   const [{ tmbId, teamId, permission: teamPer }] = await Promise.all([
@@ -138,11 +140,41 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       return { $ne: AppTypeEnum.hidden } as const;
     })();
 
+    // Filter apps by used model (workflow nodes & chatConfig)
+    const modelMatch = modelId
+      ? {
+          $or: [
+            {
+              modules: {
+                $elemMatch: {
+                  inputs: {
+                    $elemMatch: {
+                      key: {
+                        $in: [
+                          NodeInputKeyEnum.aiModel,
+                          NodeInputKeyEnum.datasetSearchRerankModel,
+                          NodeInputKeyEnum.datasetSearchExtensionModel,
+                          NodeInputKeyEnum.datasetDeepSearchModel
+                        ]
+                      },
+                      value: modelId
+                    }
+                  }
+                }
+              }
+            },
+            { 'chatConfig.ttsConfig.model': modelId },
+            { 'chatConfig.questionGuide.model': modelId }
+          ]
+        }
+      : {};
+
     if (searchKey) {
       const data = {
         ...appPerQuery,
         teamId,
         ...searchMatch,
+        ...modelMatch,
         type: _type
       };
 
@@ -155,6 +187,7 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
       ...appPerQuery,
       teamId,
       type: _type,
+      ...modelMatch,
       ...parseParentIdInMongo(parentId)
     };
   })();

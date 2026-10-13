@@ -25,7 +25,7 @@ import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection
 import { Types } from '@fastgpt/service/common/mongo';
 
 async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
-  const { parentId, type, searchKey } = GetDatasetListBodySchema.parse(req.body);
+  const { parentId, type, searchKey, vectorModel } = GetDatasetListBodySchema.parse(req.body);
 
   // Auth user permission
   const [{ tmbId, teamId, permission: teamPer }] = await Promise.all([
@@ -127,6 +127,7 @@ async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
         ...datasetPerQuery,
         teamId,
         deleteTime: null, // 搜索时也要过滤已删除数据
+        ...(vectorModel ? { vectorModel } : {}),
         ...(datasetIdFromCollectionMatch
           ? {
               $or: [...(searchMatch.$or || []), datasetIdFromCollectionMatch]
@@ -142,6 +143,7 @@ async function handler(req: ApiRequestProps): Promise<GetDatasetListResponse> {
       teamId,
       deleteTime: null, // 关键：只返回未删除的数据
       ...(type ? (Array.isArray(type) ? { type: { $in: type } } : { type }) : {}),
+      ...(vectorModel ? { vectorModel } : {}),
       ...parseParentIdInMongo(parentId)
     };
   })();

@@ -32,6 +32,7 @@ import { useUserStore } from '@/web/support/user/useUserStore';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
 import TemplateCreatePanel from '@/pageComponents/dashboard/agent/TemplateCreatePanel';
+import ModelFilterSelect from '@/components/Select/ModelFilterSelect';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
@@ -53,7 +54,9 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     folderDetail,
     refetchFolderDetail,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    searchModelId,
+    setSearchModelId
   } = useContextSelector(AppListContext, (v) => v);
   const [editFolder, setEditFolder] = useState<EditFolderFormType>();
   const { userInfo } = useUserStore();
@@ -133,15 +136,18 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
             <Flex flex={1} />
             <Flex alignItems={'center'} gap={3}>
               {isPc && (
-                <SearchInput
-                  maxW={['auto', '250px']}
-                  value={searchKey}
-                  bg={'white'}
-                  onChange={(e) => setSearchKey(e.target.value)}
-                  placeholder={t('app:search_agent')}
-                  maxLength={30}
-                  isClearable
-                />
+                <>
+                  <ModelFilterSelect value={searchModelId} onChange={setSearchModelId} />
+                  <SearchInput
+                    maxW={['auto', '250px']}
+                    value={searchKey}
+                    bg={'white'}
+                    onChange={(e) => setSearchKey(e.target.value)}
+                    placeholder={t('app:search_agent')}
+                    maxLength={30}
+                    isClearable
+                  />
+                </>
               )}
 
               {(folderDetail
@@ -170,8 +176,9 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
             </Flex>
           </Flex>
           {!isPc && (
-            <Box mt={2}>
-              {
+            <Flex mt={2} gap={2} alignItems={'center'}>
+              <ModelFilterSelect value={searchModelId} onChange={setSearchModelId} />
+              <Box flex={'1 0 0'}>
                 <SearchInput
                   maxW={['auto', '250px']}
                   value={searchKey}
@@ -180,8 +187,8 @@ const MyApps = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
                   maxLength={30}
                   isClearable
                 />
-              }
-            </Box>
+              </Box>
+            </Flex>
           )}
 
           <MyBox flex={'1 0 0'} isLoading={myApps.length === 0 && isFetchingApps}>

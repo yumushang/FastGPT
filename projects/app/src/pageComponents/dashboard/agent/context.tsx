@@ -30,6 +30,8 @@ type AppListContextType = {
   refetchFolderDetail: () => Promise<AppDetailType | null>;
   searchKey: string;
   setSearchKey: React.Dispatch<React.SetStateAction<string>>;
+  searchModelId?: string;
+  setSearchModelId: React.Dispatch<React.SetStateAction<string | undefined>>;
 };
 
 export const AppListContext = createContext<AppListContextType>({
@@ -54,6 +56,10 @@ export const AppListContext = createContext<AppListContextType>({
   searchKey: '',
   setSearchKey: function (value: React.SetStateAction<string>): void {
     throw new Error('Function not implemented.');
+  },
+  searchModelId: undefined,
+  setSearchModelId: function (value: React.SetStateAction<string | undefined>): void {
+    throw new Error('Function not implemented.');
   }
 });
 
@@ -65,6 +71,7 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
     type: AppTypeEnum;
   };
   const [searchKey, setSearchKey] = useState('');
+  const [searchModelId, setSearchModelId] = useState<string>();
 
   const {
     data = [],
@@ -102,11 +109,11 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
           : [AppTypeEnum.toolFolder, type];
       })();
 
-      return getMyApps({ parentId, type: formatType, searchKey });
+      return getMyApps({ parentId, type: formatType, searchKey, modelId: searchModelId });
     },
     {
       manual: false,
-      refreshDeps: [searchKey, parentId, type],
+      refreshDeps: [searchKey, searchModelId, parentId, type],
       throttleWait: 500,
       refreshOnWindowFocus: true
     }
@@ -184,7 +191,9 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
     onUpdateApp,
     setMoveAppId,
     searchKey,
-    setSearchKey
+    setSearchKey,
+    searchModelId,
+    setSearchModelId
   };
   return (
     <AppListContext.Provider value={contextValue}>
