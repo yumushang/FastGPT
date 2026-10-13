@@ -384,6 +384,7 @@ export type AIChatNodeProps = {
   [NodeInputKeyEnum.aiChatStopSign]?: string;
   [NodeInputKeyEnum.aiChatResponseFormat]?: string;
   [NodeInputKeyEnum.aiChatJsonSchema]?: string;
+  [NodeInputKeyEnum.aiChatExtraBody]?: string;
 
   [NodeInputKeyEnum.aiChatQuoteRole]?: AiChatQuoteRoleType;
   [NodeInputKeyEnum.aiChatQuoteTemplate]?: string;

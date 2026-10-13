@@ -98,12 +98,19 @@ const SelectAiModelRender = ({ inputs = [], nodeId }: RenderInputProps) => {
         (input) => input.key === NodeInputKeyEnum.aiChatResponseFormat
       )?.value,
       aiChatJsonSchema: inputs.find((input) => input.key === NodeInputKeyEnum.aiChatJsonSchema)
-        ?.value
+        ?.value,
+      aiChatExtraBody: inputs.find((input) => input.key === NodeInputKeyEnum.aiChatExtraBody)?.value
     }),
     [inputs, model]
   );
 
-  return <SettingLLMModel defaultData={llmModelData} onChange={onChangeModel} />;
+  return (
+    <SettingLLMModel
+      defaultData={llmModelData}
+      onChange={onChangeModel}
+      showExtraBody={inputs.some((input) => input.key === NodeInputKeyEnum.aiChatExtraBody)}
+    />
+  );
 };
 
 export default React.memo(SelectAiModelRender);

@@ -97,6 +97,10 @@ export const appWorkflow2Form = ({
         node.inputs,
         NodeInputKeyEnum.aiChatJsonSchema
       );
+      defaultAppForm.aiSettings.aiChatExtraBody = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.aiChatExtraBody
+      );
       defaultAppForm.aiSettings.useAgentSandbox = findInputValueByKey(
         node.inputs,
         NodeInputKeyEnum.useAgentSandbox
@@ -365,6 +369,13 @@ export function form2AppWorkflow(
           label: '',
           valueType: WorkflowIOValueTypeEnum.string,
           value: formData.aiSettings.aiChatJsonSchema
+        },
+        {
+          key: NodeInputKeyEnum.aiChatExtraBody,
+          renderTypeList: [FlowNodeInputTypeEnum.hidden],
+          label: '',
+          valueType: WorkflowIOValueTypeEnum.string,
+          value: formData.aiSettings.aiChatExtraBody
         }
       ],
       outputs: AiChatModule.outputs
