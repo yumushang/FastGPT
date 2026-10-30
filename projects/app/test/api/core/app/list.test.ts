@@ -333,6 +333,23 @@ describe('app list api: filter by modelId', () => {
     expect(rootList).not.toContain(nestedAppId);
   });
 
+  it('should list apps in folder for team owner', async () => {
+    const { owner } = await getFakeUsers(1);
+
+    const folderId = await createApp({
+      auth: owner,
+      name: 'owner-folder',
+      type: AppTypeEnum.folder
+    });
+    const childAppId = await createApp({
+      auth: owner,
+      name: 'owner-folder-app',
+      parentId: folderId
+    });
+
+    expect(await listAppIds(owner, { parentId: folderId })).toEqual([childAppId]);
+  });
+
   it('should apply searchKey and modelId at the same time', async () => {
     const { owner } = await getFakeUsers(1);
 

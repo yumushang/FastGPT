@@ -120,9 +120,9 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
     const appPerQuery = isTeamWide
       ? {}
       : teamPer.isOwner
-        ? {
-            parentId: parentId ? parseParentIdInMongo(parentId) : null
-          }
+        ? parentId
+          ? parseParentIdInMongo(parentId)
+          : { parentId: null }
         : parentId
           ? {
               $or: [idList, parseParentIdInMongo(parentId)]
