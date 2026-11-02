@@ -131,6 +131,8 @@ const buildHttpRequest = ({
   };
 };
 
+const isTimingLogEnabled = () => process.env.HTTP_TOOL_TIMING_LOG === 'true';
+
 export const runHTTPTool = async ({
   baseUrl,
   toolPath,
@@ -142,6 +144,19 @@ export const runHTTPTool = async ({
   staticHeaders,
   staticBody
 }: RunHTTPToolParams): Promise<RunHTTPToolResult> => {
+  // 性能打点：HTTP_TOOL_TIMING_LOG=true 时，在日志中输出各阶段耗时
+  const timingEnabled = isTimingLogEnabled();
+  const timingStart = performance.now();
+  let lastTimingAt = timingStart;
+  let timingStatus: 'success' | 'error' = 'success';
+  const timing: Record<string, number> = {};
+  const markTiming = (stage: string) => {
+    if (!timingEnabled) return;
+    const now = performance.now();
+    timing[stage] = Math.round((now - lastTimingAt) * 100) / 100;
+    lastTimingAt = now;
+  };
+
   try {
     // Construct full base URL
     const fullBaseUrl = !baseUrl
@@ -155,10 +170,13 @@ export const runHTTPTool = async ({
     const fullUrl = fullBaseUrl
       ? new URL(toolPath, fullBaseUrl).toString()
       : new URL(toolPath).toString();
+    markTiming('buildUrl');
 
     if (await isInternalAddress(fullUrl)) {
+      timingStatus = 'error';
       return { errorMsg: PRIVATE_URL_TEXT };
     }
+    markTiming('internalAddressCheck');
 
     const { headers, body, queryParams } = buildHttpRequest({
       method,
@@ -169,6 +187,7 @@ export const runHTTPTool = async ({
       staticHeaders,
       staticBody
     });
+    markTiming('buildRequest');
 
     let tempHeaders: Record<string, string> = { ...headers };
     if (process.env.XF_SIGN_ENABLE === 'true' && process.env.XF_SIGN_MD5SECRET) {
@@ -178,7 +197,10 @@ export const runHTTPTool = async ({
         ...signHeaders
       };
     }
+    markTiming('sign');
+
     logger.info('runHTTPTool', { baseUrl, toolPath, queryParams, body, headers: tempHeaders });
+    markTiming('logRequest');
 
     const { data } = await axios({
       method: method.toUpperCase(),
@@ -189,11 +211,24 @@ export const runHTTPTool = async ({
       params: queryParams,
       timeout: 300000
     });
+    markTiming('axiosRequest');
 
     return { data };
   } catch (error) {
+    timingStatus = 'error';
     console.log(error);
     return { errorMsg: getErrText(error) };
+  } finally {
+    if (timingEnabled) {
+      logger.info('[HTTP_TOOL_TIMING] runHTTPTool', {
+        method,
+        baseUrl,
+        toolPath,
+        status: timingStatus,
+        stages: timing,
+        totalMs: Math.round((performance.now() - timingStart) * 100) / 100
+      });
+    }
   }
 };
 
