@@ -4,13 +4,25 @@ import { isInternalAddress } from '@fastgpt/service/common/system/utils';
 // Mock dns module
 vi.mock('dns/promises', () => ({
   default: {
-    resolve4: vi.fn(),
-    resolve6: vi.fn()
+    lookup: vi.fn()
   }
 }));
 
 // Import mocked dns after mock setup
 import dns from 'dns/promises';
+
+const mockLookup = (...addresses: string[]) => {
+  vi.mocked(dns.lookup).mockResolvedValue(
+    addresses.map((address) => ({
+      address,
+      family: address.includes(':') ? 6 : 4
+    }))
+  );
+};
+
+const mockLookupError = () => {
+  vi.mocked(dns.lookup).mockRejectedValue(new Error('DNS resolution failed'));
+};
 
 describe('SSRF Protection - isInternalAddress', () => {
   const originalEnv = process.env.CHECK_INTERNAL_IP;
@@ -98,15 +110,13 @@ describe('SSRF Protection - isInternalAddress', () => {
     });
 
     test('应该阻止解析到私有 IP 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['10.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('10.0.0.1');
 
       expect(await isInternalAddress('http://internal.example.com/')).toBe(false);
     });
 
     test('应该允许解析到公共 IP 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('8.8.8.8');
 
       expect(await isInternalAddress('http://example.com/')).toBe(false);
     });
@@ -223,93 +233,80 @@ describe('SSRF Protection - isInternalAddress', () => {
 
   describe('DNS 解析功能测试（CHECK_INTERNAL_IP=true）', () => {
     test('应该阻止解析到私有 IPv4 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['10.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('10.0.0.1');
 
       expect(await isInternalAddress('http://internal.example.com/')).toBe(true);
     });
 
     test('应该阻止解析到 localhost 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['127.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('127.0.0.1');
 
       expect(await isInternalAddress('http://localhost.example.com/')).toBe(true);
     });
 
     test('应该阻止解析到 link-local 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['169.254.169.254']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('169.254.169.254');
 
       expect(await isInternalAddress('http://metadata.example.com/')).toBe(true);
     });
 
     test('应该阻止解析到私有 IPv6 的域名', async () => {
-      vi.mocked(dns.resolve4).mockRejectedValue(new Error('No A records'));
-      vi.mocked(dns.resolve6).mockResolvedValue(['fc00::1']);
+      mockLookup('fc00::1');
 
       expect(await isInternalAddress('http://internal-v6.example.com/')).toBe(true);
     });
 
     test('应该阻止解析到多个 IP 且包含私有 IP 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8', '10.0.0.1', '1.1.1.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('8.8.8.8', '10.0.0.1', '1.1.1.1');
 
       expect(await isInternalAddress('http://mixed.example.com/')).toBe(true);
     });
 
     test('应该允许解析到公共 IP 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8', '1.1.1.1']);
-      vi.mocked(dns.resolve6).mockResolvedValue(['2001:4860:4860::8888']);
+      mockLookup('8.8.8.8', '1.1.1.1', '2001:4860:4860::8888');
 
       expect(await isInternalAddress('http://public.example.com/')).toBe(false);
     });
 
     test('应该允许 DNS 解析失败的域名（宽松策略）', async () => {
-      vi.mocked(dns.resolve4).mockRejectedValue(new Error('DNS resolution failed'));
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('DNS resolution failed'));
+      mockLookupError();
 
       // 修改：DNS 解析失败时返回 false（允许访问）
       expect(await isInternalAddress('http://nonexistent.example.com/')).toBe(false);
     });
 
     test('应该阻止 DNS 重绑定攻击尝试', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['127.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('127.0.0.1');
 
       expect(await isInternalAddress('http://127.0.0.1.nip.io/')).toBe(true);
     });
 
     test('应该阻止 xip.io 类型的域名（解析到私有 IP）', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['10.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('10.0.0.1');
 
       expect(await isInternalAddress('http://10.0.0.1.xip.io/')).toBe(true);
     });
 
     test('应该阻止 nip.io 类型的域名（解析到私有 IP）', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.1.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('192.168.1.1');
 
       expect(await isInternalAddress('http://192.168.1.1.nip.io/')).toBe(true);
     });
 
     test('应该允许 xip.io 类型的域名（解析到公共 IP）', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('8.8.8.8');
 
       expect(await isInternalAddress('http://8.8.8.8.xip.io/')).toBe(false);
     });
 
     test('应该正确处理只有 IPv6 解析的域名', async () => {
-      vi.mocked(dns.resolve4).mockRejectedValue(new Error('No A records'));
-      vi.mocked(dns.resolve6).mockResolvedValue(['2001:4860:4860::8888']);
+      mockLookup('2001:4860:4860::8888');
 
       expect(await isInternalAddress('http://ipv6-only.example.com/')).toBe(false);
     });
 
     test('应该正确处理 IPv6 link-local 解析', async () => {
-      vi.mocked(dns.resolve4).mockRejectedValue(new Error('No A records'));
-      vi.mocked(dns.resolve6).mockResolvedValue(['fe80::1']);
+      mockLookup('fe80::1');
 
       expect(await isInternalAddress('http://link-local.example.com/')).toBe(true);
     });
@@ -345,16 +342,14 @@ describe('SSRF Protection - isInternalAddress', () => {
 
     test('应该允许无效的 IPv4 地址（宽松策略）', async () => {
       // 这些会被 URL 解析器处理为域名，DNS 解析失败时允许访问
-      vi.mocked(dns.resolve4).mockRejectedValue(new Error('Invalid hostname'));
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('Invalid hostname'));
+      mockLookupError();
 
       expect(await isInternalAddress('http://256.1.1.1/')).toBe(false);
       expect(await isInternalAddress('http://1.1.1.256/')).toBe(false);
     });
 
     test('应该正确处理特殊字符的 URL', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('8.8.8.8');
 
       expect(await isInternalAddress('http://example.com/path?query=value#fragment')).toBe(false);
     });
@@ -374,14 +369,13 @@ describe('SSRF Protection - isInternalAddress', () => {
 
     test('应该阻止通过 DNS 解析的域名绕过尝试', async () => {
       // Mock DNS 解析返回内部 IP
-      vi.mocked(dns.resolve4).mockResolvedValue(['127.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('127.0.0.1');
 
       expect(await isInternalAddress('http://127.0.0.1.nip.io/')).toBe(true);
       expect(await isInternalAddress('http://localhost.example.com/')).toBe(true);
 
       // Mock DNS 解析返回私有 IP
-      vi.mocked(dns.resolve4).mockResolvedValue(['10.0.0.1']);
+      mockLookup('10.0.0.1');
       expect(await isInternalAddress('http://10.0.0.1.xip.io/')).toBe(true);
     });
 
@@ -407,10 +401,7 @@ describe('SSRF Protection - isInternalAddress', () => {
     });
 
     test('应该正确处理 DNS 超时', async () => {
-      vi.mocked(dns.resolve4).mockImplementation(
-        () => new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 100))
-      );
-      vi.mocked(dns.resolve6).mockImplementation(
+      vi.mocked(dns.lookup).mockImplementation(
         () => new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 100))
       );
 
@@ -419,8 +410,7 @@ describe('SSRF Protection - isInternalAddress', () => {
     });
 
     test('应该正确处理空的 DNS 响应', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue([]);
-      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      mockLookup();
 
       expect(await isInternalAddress('http://empty-dns.example.com/')).toBe(false);
     });
@@ -428,24 +418,21 @@ describe('SSRF Protection - isInternalAddress', () => {
 
   describe('混合场景测试', () => {
     test('应该正确处理同时有公共和私有 IP 的域名', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8', '10.0.0.1']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('8.8.8.8', '10.0.0.1');
 
       // 只要有一个私有 IP 就应该阻止
       expect(await isInternalAddress('http://mixed-ips.example.com/')).toBe(true);
     });
 
     test('应该正确处理 IPv4 和 IPv6 混合解析', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8']);
-      vi.mocked(dns.resolve6).mockResolvedValue(['fc00::1']);
+      mockLookup('8.8.8.8', 'fc00::1');
 
       // IPv6 是私有地址，应该阻止
       expect(await isInternalAddress('http://dual-stack-private.example.com/')).toBe(true);
     });
 
     test('应该正确处理 IPv4 和 IPv6 都是公共 IP', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['8.8.8.8']);
-      vi.mocked(dns.resolve6).mockResolvedValue(['2001:4860:4860::8888']);
+      mockLookup('8.8.8.8', '2001:4860:4860::8888');
 
       expect(await isInternalAddress('http://dual-stack-public.example.com/')).toBe(false);
     });
@@ -483,8 +470,7 @@ describe('SSRF Protection - isInternalAddress', () => {
     });
 
     test('应该阻止 nip.io 通配 DNS 绕过', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['169.254.169.254']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('169.254.169.254');
 
       expect(await isInternalAddress('http://169.254.169.254.nip.io/latest/meta-data/')).toBe(true);
     });
@@ -516,15 +502,13 @@ describe('SSRF Protection - isInternalAddress', () => {
     });
 
     test('域名解析到阿里云元数据 IP 时始终阻止', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['100.100.100.200']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('100.100.100.200');
 
       expect(await isInternalAddress('http://rebind.example.com/')).toBe(true);
     });
 
     test('域名解析到 AWS 元数据 IP 时始终阻止（无需 CHECK_INTERNAL_IP）', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['169.254.169.254']);
-      vi.mocked(dns.resolve6).mockRejectedValue(new Error('No AAAA records'));
+      mockLookup('169.254.169.254');
 
       expect(await isInternalAddress('http://metadata-proxy.example.com/')).toBe(true);
     });

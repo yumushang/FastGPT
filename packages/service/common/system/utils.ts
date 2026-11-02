@@ -116,6 +116,29 @@ const isMetadataIPAddress = (addr: ipaddr.IPv4 | ipaddr.IPv6): boolean => {
   return METADATA_IPS.has(addr.toNormalizedString().toLowerCase());
 };
 
+const DNS_LOOKUP_TIMEOUT_MS = 1500;
+
+/**
+ * 使用系统解析器（dns.lookup）解析域名。
+ * 不用 dns.resolve4/6：c-ares 绕过系统解析器，在部分内网 DNS 环境下会长时间超时（实测 10s+）；
+ * dns.lookup 与 axios 实际建立连接时使用的解析路径一致。
+ */
+const lookupHostAddresses = async (hostname: string): Promise<string[]> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), DNS_LOOKUP_TIMEOUT_MS);
+  });
+
+  try {
+    const addresses = await Promise.race([dns.lookup(hostname, { all: true }), timeout]);
+    return addresses ? addresses.map((item) => item.address) : [];
+  } catch {
+    return [];
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 export const isInternalAddress = async (url: string): Promise<boolean> => {
   if (isDevEnv) return false;
 
@@ -153,28 +176,17 @@ export const isInternalAddress = async (url: string): Promise<boolean> => {
   }
 
   // 4. 域名：解析 DNS；元数据命中始终阻止，私有段受 CHECK_INTERNAL_IP 控制
-  try {
-    const [v4Res, v6Res] = await Promise.allSettled([
-      dns.resolve4(hostDomain),
-      dns.resolve6(hostDomain)
-    ]);
-    const resolvedIPs = [
-      ...(v4Res.status === 'fulfilled' ? v4Res.value : []),
-      ...(v6Res.status === 'fulfilled' ? v6Res.value : [])
-    ];
+  const resolvedIPs = await lookupHostAddresses(hostDomain);
 
-    for (const raw of resolvedIPs) {
-      if (!ipaddr.isValid(raw)) continue;
-      const addr = ipaddr.process(raw);
-      if (isMetadataIPAddress(addr)) return true;
-      const r = addr.range();
-      if (r === 'loopback' || r === 'unspecified') return true;
-      if (checkFullInternal && isInternalIPAddress(addr)) return true;
-    }
-    return false;
-  } catch {
-    return false;
+  for (const raw of resolvedIPs) {
+    if (!ipaddr.isValid(raw)) continue;
+    const addr = ipaddr.process(raw);
+    if (isMetadataIPAddress(addr)) return true;
+    const r = addr.range();
+    if (r === 'loopback' || r === 'unspecified') return true;
+    if (checkFullInternal && isInternalIPAddress(addr)) return true;
   }
+  return false;
 };
 
 export const PRIVATE_URL_TEXT = 'Request to private network not allowed';
