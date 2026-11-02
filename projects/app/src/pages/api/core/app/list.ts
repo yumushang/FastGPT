@@ -124,9 +124,7 @@ async function handler(req: ApiRequestProps<ListAppBody>): Promise<AppListItemTy
           ? parseParentIdInMongo(parentId)
           : { parentId: null }
         : parentId
-          ? {
-              $or: [idList, parseParentIdInMongo(parentId)]
-            }
+          ? parseParentIdInMongo(parentId)
           : { $or: [idList, { parentId: null }] };
 
     const searchMatch = searchKey

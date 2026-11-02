@@ -432,17 +432,32 @@ describe('app list api: filter by modelId', () => {
         })
       ]
     });
-
-    await MongoResourcePermission.create({
-      resourceType: PerResourceTypeEnum.app,
-      teamId: owner.teamId,
-      resourceId: sharedFolderId,
-      tmbId: member.tmbId,
-      permission: ReadPermissionVal
+    // Root app directly shared to member, must not appear when entering another folder
+    const directSharedRootAppId = await createApp({
+      auth: owner,
+      name: 'direct-shared-root-app'
     });
+
+    await MongoResourcePermission.create([
+      {
+        resourceType: PerResourceTypeEnum.app,
+        teamId: owner.teamId,
+        resourceId: sharedFolderId,
+        tmbId: member.tmbId,
+        permission: ReadPermissionVal
+      },
+      {
+        resourceType: PerResourceTypeEnum.app,
+        teamId: owner.teamId,
+        resourceId: directSharedRootAppId,
+        tmbId: member.tmbId,
+        permission: ReadPermissionVal
+      }
+    ]);
 
     // Default list: no permission app is filtered out
     const memberRootList = await listAppIds(member, {});
+    expect(memberRootList).toContain(directSharedRootAppId);
     expect(memberRootList).not.toContain(privateAppId);
     expect(memberRootList).not.toContain(inheritedAppId);
 
@@ -452,9 +467,10 @@ describe('app list api: filter by modelId', () => {
     expect(memberModelList).toEqual([inheritedAppId]);
     expect(memberModelList).not.toContain(privateAppId);
 
-    // Still works when navigating into the shared folder
+    // Still works when navigating into the shared folder, without leaking other permitted apps
     const memberFolderList = await listAppIds(member, { parentId: sharedFolderId });
     expect(memberFolderList).toContain(inheritedAppId);
+    expect(memberFolderList).not.toContain(directSharedRootAppId);
     expect(memberFolderList).not.toContain(privateAppId);
   });
 
