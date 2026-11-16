@@ -57,7 +57,7 @@ import { rewriteNodeOutputByHistories } from '@fastgpt/global/core/workflow/runt
 import { getWorkflowResponseWrite } from '@fastgpt/service/core/workflow/dispatch/utils';
 import { WORKFLOW_MAX_RUN_TIMES } from '@fastgpt/service/core/workflow/constants';
 import { getWorkflowToolInputsFromStoreNodes } from '@fastgpt/global/core/app/tool/workflowTool/utils';
-import { UserError } from '@fastgpt/global/common/error/utils';
+import { UserError, getErrText } from '@fastgpt/global/common/error/utils';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { formatTime2YMDHM } from '@fastgpt/global/common/string/time';
 import { LimitTypeEnum, teamFrequencyLimit } from '@fastgpt/service/common/api/frequencyLimit';
@@ -66,6 +66,7 @@ import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
 import type { AuthResponseType } from '@fastgpt/global/openapi/core/chat/completion/api';
 import { CompletionsPropsSchema } from '@fastgpt/global/openapi/core/chat/completion/api';
 import {
+  takeoverStaleEmptyGeneratingChat,
   tryStartGenerateChat,
   updateChatGenerateStatus
 } from '@fastgpt/service/core/chat/chatGenerateStatus';
@@ -108,6 +109,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const finalResponseChatItemId = responseChatItemId || getNanoid(24);
   let usePreparedRound = false;
   let hasAcquiredGenerateSlot = false;
+  let currentStage = 'init';
 
   try {
     if (!Array.isArray(messages)) {
@@ -275,7 +277,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     runningAppId = String(app._id);
     usePreparedRound = !interactive;
 
-    const canStartGenerate = await tryStartGenerateChat({
+    const generateChatParams = {
       appId: runningAppId,
       chatId: runningChatId,
       teamId,
@@ -284,26 +286,78 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       sourceName: sourceName || '',
       shareId,
       outLinkUid: outLinkUserId
-    });
+    };
+
+    const watchSlowStage = (stage: string, timeoutMs: number) => {
+      const stageStartedAt = Date.now();
+      const timer = setTimeout(() => {
+        logger.warn('Chat generation stage still running', {
+          appId: runningAppId,
+          chatId: runningChatId,
+          stage,
+          elapsedMs: Date.now() - stageStartedAt
+        });
+      }, timeoutMs);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    };
+
+    currentStage = 'tryStartGenerateChat';
+    const canStartGenerate = await tryStartGenerateChat(generateChatParams);
+    let tookOverStaleChat = false;
 
     if (!canStartGenerate) {
-      throw ChatErrEnum.chatIsGenerating;
-    }
-    hasAcquiredGenerateSlot = true;
-
-    if (usePreparedRound) {
-      await prepareChatRound({
+      // 空会话长时间卡在 generating：上一次请求已异常退出，允许本次请求接管，避免永久 409
+      const takeover = await takeoverStaleEmptyGeneratingChat(generateChatParams);
+      if (!takeover.ok) {
+        logger.warn('Chat generation slot rejected', {
+          appId: runningAppId,
+          chatId: runningChatId,
+          requestChatId: chatId || '',
+          reason: takeover.reason,
+          chatGenerateStatus: takeover.chatGenerateStatus
+        });
+        throw ChatErrEnum.chatIsGenerating;
+      }
+      tookOverStaleChat = true;
+      logger.warn('Took over stale empty generating chat', {
         appId: runningAppId,
         chatId: runningChatId,
-        teamId,
-        tmbId: String(tmbId),
-        source,
-        sourceName: sourceName || '',
-        shareId,
-        outLinkUid: outLinkUserId,
-        userContent: userQuestion,
-        responseChatItemId: finalResponseChatItemId
+        requestChatId: chatId || ''
       });
+    }
+    hasAcquiredGenerateSlot = true;
+    logger.debug('Chat generation slot acquired', {
+      appId: runningAppId,
+      chatId: runningChatId,
+      requestChatId: chatId || '',
+      source,
+      stream: !!stream,
+      interactive: !!interactive,
+      usePreparedRound,
+      tookOverStaleChat,
+      isPlugin
+    });
+
+    if (usePreparedRound) {
+      currentStage = 'prepareChatRound';
+      const stopSlowStageWatch = watchSlowStage('prepareChatRound', 30 * 1000);
+      try {
+        await prepareChatRound({
+          appId: runningAppId,
+          chatId: runningChatId,
+          teamId,
+          tmbId: String(tmbId),
+          source,
+          sourceName: sourceName || '',
+          shareId,
+          outLinkUid: outLinkUserId,
+          userContent: userQuestion,
+          responseChatItemId: finalResponseChatItemId
+        });
+      } finally {
+        stopSlowStageWatch();
+      }
     }
 
     mirror = stream
@@ -337,6 +391,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     })();
 
     /* start flow controller */
+    currentStage = 'dispatchWorkFlow';
+    const dispatchStartedAt = Date.now();
     const {
       flowResponses,
       flowUsages,
@@ -385,6 +441,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       return Promise.reject('您的工作流版本过低，请重新发布一次');
     })();
+    logger.debug('Chat workflow dispatched', {
+      appId: runningAppId,
+      chatId: runningChatId,
+      elapsedMs: Date.now() - dispatchStartedAt
+    });
 
     // save chat
     const newTitle = isPlugin
@@ -422,10 +483,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
       durationSeconds
     };
-    if (interactive) {
-      await updateInteractiveChat({ interactive, ...params });
-    } else {
-      await finalizeChatRound(params);
+    currentStage = 'finalizeChatRound';
+    const stopFinalizeSlowStageWatch = watchSlowStage('finalizeChatRound', 30 * 1000);
+    try {
+      if (interactive) {
+        await updateInteractiveChat({ interactive, ...params });
+      } else {
+        await finalizeChatRound(params);
+      }
+    } finally {
+      stopFinalizeSlowStageWatch();
     }
 
     if (interactive) {
@@ -445,7 +512,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    logger.info(`completions running time: ${(Date.now() - startTime) / 1000}s`);
+    logger.info(`completions running time: ${(Date.now() - startTime) / 1000}s`, {
+      appId: runningAppId,
+      chatId: runningChatId,
+      requestChatId: chatId || '',
+      interactive: !!interactive,
+      usePreparedRound,
+      tookOverStaleChat
+    });
 
     /* select fe response field */
     const feResponseData = responseAllData
@@ -551,6 +625,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
   } catch (err) {
+    logger.error('Chat generation failed', {
+      appId: runningAppId,
+      chatId: runningChatId,
+      requestChatId: chatId || '',
+      stage: currentStage,
+      elapsedMs: Date.now() - startTime,
+      hasAcquiredGenerateSlot,
+      usePreparedRound,
+      error: getErrText(err)
+    });
     if (hasAcquiredGenerateSlot && runningAppId && runningChatId) {
       if (usePreparedRound) {
         await failChatRound({

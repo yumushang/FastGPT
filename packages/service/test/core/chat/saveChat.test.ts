@@ -615,6 +615,29 @@ describe('pushChatRecords', () => {
       expect(aiItem?.value).toEqual([]);
       expect(aiItem?.errorMsg).toContain('stream failed');
     });
+
+    it('should delete the chat record when the failed round has no messages', async () => {
+      const props = createMockProps({}, { appId: testAppId, teamId: testTeamId, tmbId: testTmbId });
+
+      await MongoChat.create({
+        chatId: props.chatId,
+        appId: testAppId,
+        teamId: testTeamId,
+        tmbId: testTmbId,
+        source: props.source,
+        chatGenerateStatus: ChatGenerateStatusEnum.generating
+      });
+
+      await failChatRound({
+        appId: testAppId,
+        chatId: props.chatId,
+        responseChatItemId: 'not-written-ai',
+        error: new Error('prepare failed')
+      });
+
+      const chat = await MongoChat.findOne({ appId: testAppId, chatId: props.chatId });
+      expect(chat).toBeNull();
+    });
   });
 
   describe('updateInteractiveChat function', () => {
