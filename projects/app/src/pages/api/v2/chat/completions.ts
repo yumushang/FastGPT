@@ -66,6 +66,7 @@ import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
 import type { AuthResponseType } from '@fastgpt/global/openapi/core/chat/completion/api';
 import { CompletionsPropsSchema } from '@fastgpt/global/openapi/core/chat/completion/api';
 import {
+  takeoverStaleEmptyGeneratingChat,
   tryStartGenerateChat,
   updateChatGenerateStatus
 } from '@fastgpt/service/core/chat/chatGenerateStatus';
@@ -275,7 +276,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     runningAppId = String(app._id);
     usePreparedRound = !interactive;
 
-    const canStartGenerate = await tryStartGenerateChat({
+    const generateChatParams = {
       appId: runningAppId,
       chatId: runningChatId,
       teamId,
@@ -284,10 +285,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       sourceName: sourceName || '',
       shareId,
       outLinkUid: outLinkUserId
-    });
+    };
+
+    const canStartGenerate = await tryStartGenerateChat(generateChatParams);
 
     if (!canStartGenerate) {
-      throw ChatErrEnum.chatIsGenerating;
+      // 空会话长时间卡在 generating：上一次请求已异常退出，允许本次请求接管，避免永久 409
+      const tookOver = await takeoverStaleEmptyGeneratingChat(generateChatParams);
+      if (!tookOver) {
+        throw ChatErrEnum.chatIsGenerating;
+      }
+      logger.warn('Take over stale empty generating chat', {
+        appId: runningAppId,
+        chatId: runningChatId
+      });
     }
     hasAcquiredGenerateSlot = true;
 

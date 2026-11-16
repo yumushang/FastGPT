@@ -1,15 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  EMPTY_GENERATING_TAKEOVER_MS,
   ensureGenerateChat,
+  takeoverStaleEmptyGeneratingChat,
   tryStartGenerateChat,
   updateChatGenerateStatus
 } from '@fastgpt/service/core/chat/chatGenerateStatus';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
+import { MongoChatItem } from '@fastgpt/service/core/chat/chatItemSchema';
 import { ChatGenerateStatusEnum } from '@fastgpt/global/core/chat/constants';
 
 vi.mock('@fastgpt/service/core/chat/chatSchema', () => ({
   MongoChat: {
+    findOne: vi.fn(),
     updateOne: vi.fn()
+  }
+}));
+
+vi.mock('@fastgpt/service/core/chat/chatItemSchema', () => ({
+  MongoChatItem: {
+    exists: vi.fn()
   }
 }));
 
@@ -114,5 +124,85 @@ describe('chatGenerateStatus', () => {
         }
       }
     );
+  });
+
+  describe('takeoverStaleEmptyGeneratingChat', () => {
+    const mockChat = (chat: any) => {
+      vi.mocked(MongoChat.findOne).mockReturnValue({
+        lean: () => Promise.resolve(chat)
+      } as any);
+    };
+    const staleUpdateTime = new Date(Date.now() - EMPTY_GENERATING_TAKEOVER_MS - 1000);
+
+    it('should take over when the chat is stale, generating and empty', async () => {
+      mockChat({
+        chatGenerateStatus: ChatGenerateStatusEnum.generating,
+        updateTime: staleUpdateTime
+      });
+      vi.mocked(MongoChatItem.exists).mockResolvedValue(null as any);
+      vi.mocked(MongoChat.updateOne).mockResolvedValue({ modifiedCount: 1 } as any);
+
+      await expect(takeoverStaleEmptyGeneratingChat(baseParams)).resolves.toBe(true);
+
+      expect(MongoChat.updateOne).toHaveBeenCalledWith(
+        {
+          appId: baseParams.appId,
+          chatId: baseParams.chatId,
+          chatGenerateStatus: ChatGenerateStatusEnum.generating,
+          updateTime: { $lt: expect.any(Date) }
+        },
+        {
+          $set: expect.objectContaining({
+            ...baseParams,
+            hasBeenRead: false,
+            chatGenerateStatus: ChatGenerateStatusEnum.generating,
+            updateTime: expect.any(Date)
+          })
+        }
+      );
+    });
+
+    it('should not take over when the chat already has messages', async () => {
+      mockChat({
+        chatGenerateStatus: ChatGenerateStatusEnum.generating,
+        updateTime: staleUpdateTime
+      });
+      vi.mocked(MongoChatItem.exists).mockResolvedValue({ _id: 'item1' } as any);
+
+      await expect(takeoverStaleEmptyGeneratingChat(baseParams)).resolves.toBe(false);
+      expect(MongoChat.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('should not take over a recently updated generating chat', async () => {
+      mockChat({
+        chatGenerateStatus: ChatGenerateStatusEnum.generating,
+        updateTime: new Date()
+      });
+
+      await expect(takeoverStaleEmptyGeneratingChat(baseParams)).resolves.toBe(false);
+      expect(MongoChatItem.exists).not.toHaveBeenCalled();
+      expect(MongoChat.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('should not take over when the chat is not generating', async () => {
+      mockChat({
+        chatGenerateStatus: ChatGenerateStatusEnum.done,
+        updateTime: staleUpdateTime
+      });
+
+      await expect(takeoverStaleEmptyGeneratingChat(baseParams)).resolves.toBe(false);
+      expect(MongoChat.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('should not take over when another request wins the takeover race', async () => {
+      mockChat({
+        chatGenerateStatus: ChatGenerateStatusEnum.generating,
+        updateTime: staleUpdateTime
+      });
+      vi.mocked(MongoChatItem.exists).mockResolvedValue(null as any);
+      vi.mocked(MongoChat.updateOne).mockResolvedValue({ modifiedCount: 0 } as any);
+
+      await expect(takeoverStaleEmptyGeneratingChat(baseParams)).resolves.toBe(false);
+    });
   });
 });

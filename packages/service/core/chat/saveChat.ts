@@ -651,6 +651,12 @@ export const failChatRound = async (params: FailChatRoundParams) => {
           }
         );
       }
+
+      // 本轮未写入任何消息时删除空 chat 记录，避免日志/历史里残留空会话
+      const hasChatItem = await MongoChatItem.exists({ appId, chatId }).session(session);
+      if (!hasChatItem) {
+        await MongoChat.deleteOne({ appId, chatId }, { session });
+      }
     });
   } catch (saveError) {
     logger.error('Failed to mark chat round as error', { chatId, error: saveError });
