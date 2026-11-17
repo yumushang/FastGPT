@@ -14,11 +14,7 @@ import {
   WxLoginResultResponseSchema
 } from '../../../../../../openapi/support/user/account/login/api';
 import { GetImgCaptchaQuerySchema } from '../../../../../../openapi/support/user/account/captcha/api';
-import {
-  ResetExpiredPswBodySchema,
-  UpdatePasswordByCodeBodySchema,
-  UpdatePasswordByOldBodySchema
-} from '../../../../../../openapi/support/user/account/password/api';
+import { UpdatePasswordByCodeBodySchema } from '../../../../../../openapi/support/user/account/password/api';
 import { AccountRegisterBodySchema } from '../../../../../../openapi/support/user/account/register/api';
 import {
   AccountEmailUsernameSchema,
@@ -26,7 +22,7 @@ import {
   ShortAuthStringSchema
 } from '../../../../../../support/user/account/verification/type';
 
-const captchaPath = '/proApi/support/user/account/captcha/getImgCaptcha';
+const captchaPath = '/support/user/account/captcha/getImgCaptcha';
 const ssoAuthorizationPath = '/proApi/support/user/account/login/getAuthURL';
 const wecomRedirectPath = '/proApi/support/user/account/login/wecom/getRedirectUrl';
 const updatePasswordByCodePath = '/proApi/support/user/account/password/updateByCode';
@@ -37,6 +33,10 @@ describe('user account OpenAPI contracts', () => {
   it('registers the image captcha route in the generated Dev API document', () => {
     expect(openAPIPaths[captchaPath]).toBeDefined();
     expect(openAPIDocument.paths?.[captchaPath]).toBeDefined();
+    expect(openAPIPaths['/proApi/support/user/account/captcha/getImgCaptcha']).toBeUndefined();
+    expect(
+      openAPIDocument.paths?.['/proApi/support/user/account/captcha/getImgCaptcha']
+    ).toBeUndefined();
     expect(openAPIPaths['/api/support/user/account/captcha/getImgCaptcha']).toBeUndefined();
   });
 
@@ -152,14 +152,6 @@ describe('user account OpenAPI contracts', () => {
     ).toThrow();
   });
 
-  it.each([
-    ['old password', UpdatePasswordByOldBodySchema, { oldPsw: 'a'.repeat(101), newPsw: 'new' }],
-    ['new password', UpdatePasswordByOldBodySchema, { oldPsw: 'old', newPsw: 'a'.repeat(101) }],
-    ['expired password', ResetExpiredPswBodySchema, { newPsw: 'a'.repeat(101) }]
-  ] as const)('rejects an overlong %s', (_name, schema, body) => {
-    expect(() => schema.parse(body)).toThrow();
-  });
-
   it('strips a client-supplied team member ID from password reset input', () => {
     expect(
       UpdatePasswordByCodeBodySchema.parse({
@@ -175,20 +167,30 @@ describe('user account OpenAPI contracts', () => {
     });
   });
 
-  it.each([
-    ['old password', UpdatePasswordByOldBodySchema, { oldPsw: '   ', newPsw: 'new' }],
-    ['new password', UpdatePasswordByOldBodySchema, { oldPsw: 'old', newPsw: '   ' }],
-    ['expired password', ResetExpiredPswBodySchema, { newPsw: '   ' }]
-  ] as const)('rejects a blank %s', (_name, schema, body) => {
-    expect(() => schema.parse(body)).toThrow();
-  });
-
   it('does not apply request limits to authentication response strings', () => {
     const longToken = 't'.repeat(101);
 
     expect(
       LoginSuccessResponseSchema.parse({
-        user: {},
+        user: {
+          _id: objectIdLike,
+          username: 'user@example.com',
+          avatar: '/icon/avatar.svg',
+          timezone: 'Asia/Shanghai',
+          hasPassword: true,
+          status: 'active',
+          team: {
+            userId: objectIdLike,
+            teamId: objectIdLike,
+            teamName: 'FastGPT 团队',
+            memberName: '普通成员',
+            avatar: '/icon/avatar.svg',
+            tmbId: objectIdLike,
+            status: 'active',
+            permission: {}
+          },
+          permission: {}
+        },
         token: longToken
       }).token
     ).toBe(longToken);
@@ -202,6 +204,8 @@ describe('user account OpenAPI contracts', () => {
         avatar: '/icon/avatar.svg',
         timezone: 'Asia/Shanghai',
         contact: null,
+        hasPassword: true,
+        status: 'active',
         team: {
           userId: objectIdLike,
           teamId: objectIdLike,
@@ -231,6 +235,8 @@ describe('user account OpenAPI contracts', () => {
         username: 'user@example.com',
         avatar: '/icon/avatar.svg',
         timezone: 'Asia/Shanghai',
+        hasPassword: true,
+        status: 'active',
         team: {
           userId: objectIdLike,
           teamId: objectIdLike,
@@ -250,5 +256,65 @@ describe('user account OpenAPI contracts', () => {
         status: 'active'
       }
     });
+  });
+
+  it.each([
+    { memberName: undefined, expected: 'Member' },
+    { memberName: null, expected: 'Member' },
+    { memberName: '', expected: '' },
+    { memberName: '张三', expected: '张三' },
+    { memberName: 'a'.repeat(21), expected: 'a'.repeat(21) }
+  ])(
+    'normalizes member name $memberName in user details and login responses',
+    ({ memberName, expected }) => {
+      const userDetails = {
+        _id: objectIdLike,
+        username: 'user@example.com',
+        avatar: '/icon/avatar.svg',
+        timezone: 'Asia/Shanghai',
+        contact: null,
+        hasPassword: true,
+        status: 'active',
+        team: {
+          userId: objectIdLike,
+          teamId: objectIdLike,
+          teamName: 'FastGPT 团队',
+          memberName,
+          avatar: '/icon/avatar.svg',
+          tmbId: objectIdLike,
+          status: 'active',
+          notificationAccount: null,
+          permission: {}
+        },
+        permission: {}
+      };
+
+      expect(OpenAPIUserSchema.parse(userDetails).team.memberName).toBe(expected);
+      const { user } = LoginSuccessResponseSchema.parse({
+        user: userDetails,
+        token: 'login-token'
+      });
+      expect(user.team.memberName).toBe(expected);
+      expect(user.team.isSetMemberName).toBe(false);
+    }
+  );
+
+  it('documents the normalized OAuth member name as a string', () => {
+    const response =
+      openAPIDocument.paths?.['/proApi/support/user/account/login/oauth']?.post?.responses?.['200'];
+    const memberNamePath = [
+      'content',
+      'application/json',
+      'schema',
+      'properties',
+      'user',
+      'properties',
+      'team',
+      'properties',
+      'memberName'
+    ];
+
+    expect(response).toHaveProperty([...memberNamePath, 'type'], 'string');
+    expect(response).toHaveProperty([...memberNamePath, 'default'], 'Member');
   });
 });

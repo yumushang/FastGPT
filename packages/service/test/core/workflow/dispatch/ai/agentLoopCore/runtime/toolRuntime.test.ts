@@ -85,6 +85,7 @@ describe('createAgentLoopCoreToolRuntime', () => {
   });
 
   it('adapts optional interactive tool execution', async () => {
+    const onToolResult = vi.fn();
     const provider = {
       buildRuntimeTools: () => [],
       getToolInfo: vi.fn(),
@@ -99,18 +100,17 @@ describe('createAgentLoopCoreToolRuntime', () => {
     };
     const runtime = createAgentLoopCoreToolRuntime({
       toolProvider: provider as any,
+      onToolResult,
       normalizeInteractiveUsages: (usages = []) => usages.filter(Boolean) as any
     });
 
     await expect(
       runtime.executeInteractiveTool?.({
+        call: createCall(),
         childrenResponse: {
           entryNodeIds: ['search']
         },
-        toolParams: {
-          memoryRequestMessages: [],
-          toolCallId: 'call_search'
-        }
+        toolCallId: 'call_search'
       } as any)
     ).resolves.toEqual({
       response: 'interactive result',
@@ -122,6 +122,10 @@ describe('createAgentLoopCoreToolRuntime', () => {
       stop: false,
       errorMessage: undefined,
       metadata: undefined
+    });
+    expect(onToolResult).toHaveBeenCalledWith({
+      callId: 'call_search',
+      result: expect.objectContaining({ response: 'interactive result' })
     });
   });
 });

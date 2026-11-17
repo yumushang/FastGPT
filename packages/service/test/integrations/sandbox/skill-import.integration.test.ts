@@ -1,3 +1,4 @@
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import JSZip from 'jszip';
@@ -10,14 +11,14 @@ import { deleteSkillPackage } from '@fastgpt/service/core/ai/skill/package';
 import {
   getSkillEditRuntimeContext,
   getSkillEditRuntimeStatus,
-  initSkillEditRuntimeSandbox,
+  initSkillEditRuntimeSandbox
+} from '@fastgpt/service/core/ai/sandbox/application/skillEdit/runtime';
+import {
   EDIT_DEBUG_SANDBOX_CHAT_ID,
   getEditDebugSandboxId
-} from '@fastgpt/service/core/ai/sandbox/interface/skillEdit';
-import {
-  getSandboxClient,
-  joinSandboxPath
-} from '@fastgpt/service/core/ai/sandbox/interface/runtime';
+} from '@fastgpt/service/core/ai/skill/edit/config';
+import { getRunningSandboxClient } from '@fastgpt/service/core/ai/sandbox/application/runtime/client';
+import { joinSandboxPath } from '@fastgpt/service/core/ai/sandbox/utils';
 import { deleteSandboxResource } from '@fastgpt/service/core/ai/sandbox/application/resource';
 import { MongoSandboxInstance } from '@fastgpt/service/core/ai/sandbox/infrastructure/instance/schema';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
@@ -33,22 +34,26 @@ const createImportedSkillPackage = async (): Promise<Buffer> => {
 };
 
 describe.skipIf(!integrationProvider).sequential('Skill import Sandbox Integration', () => {
-  const originalFeConfigs = global.feConfigs;
+  const originalConfig = global.systemInstanceConfig;
   const originalSandboxBucket = global.sandboxBucket;
   const originalSkillBucket = global.skillBucket;
   const cleanupArchive = vi.fn(async () => undefined);
 
   afterEach(async () => {
-    global.feConfigs = originalFeConfigs;
+    global.systemInstanceConfig = originalConfig;
     global.sandboxBucket = originalSandboxBucket;
     global.skillBucket = originalSkillBucket;
   });
 
   it('creates the Skill Edit sandbox for an imported package without .gitignore', async () => {
-    global.feConfigs = {
-      ...(originalFeConfigs ?? {}),
-      show_agent_sandbox: true
-    } as typeof global.feConfigs;
+    const snapshot = getTestInstanceConfig();
+    global.systemInstanceConfig = {
+      ...snapshot,
+      subservice: {
+        ...snapshot.subservice,
+        agentSandbox: { ...snapshot.subservice.agentSandbox, provider: integrationProvider! }
+      }
+    };
     global.sandboxBucket = {
       deleteWorkspaceArchiveNow: cleanupArchive
     } as unknown as typeof global.sandboxBucket;
@@ -107,7 +112,7 @@ describe.skipIf(!integrationProvider).sequential('Skill import Sandbox Integrati
     if (!skillVersion) throw new Error(`Imported skill version not found: ${skillId}`);
 
     const sandboxId = getEditDebugSandboxId(skillId);
-    let sandboxClient: Awaited<ReturnType<typeof getSandboxClient>> | undefined;
+    let sandboxClient: Awaited<ReturnType<typeof getRunningSandboxClient>> | undefined;
 
     try {
       const context = await getSkillEditRuntimeContext({ skillId, teamId });
@@ -117,16 +122,13 @@ describe.skipIf(!integrationProvider).sequential('Skill import Sandbox Integrati
 
       await initSkillEditRuntimeSandbox({ context });
 
-      sandboxClient = await getSandboxClient(
-        {
-          sandboxId,
-          sourceType: ChatSourceTypeEnum.skillEdit,
-          sourceId: skillId,
-          userId: ChatSourceTypeEnum.skillEdit,
-          chatId: EDIT_DEBUG_SANDBOX_CHAT_ID
-        },
-        { allowCreate: false, restoreArchived: false }
-      );
+      sandboxClient = await getRunningSandboxClient({
+        sandboxId,
+        sourceType: ChatSourceTypeEnum.skillEdit,
+        sourceId: skillId,
+        userId: ChatSourceTypeEnum.skillEdit,
+        chatId: EDIT_DEBUG_SANDBOX_CHAT_ID
+      });
 
       const workDirectory = context.runtimeProfile.workDirectory;
       const [gitignore, skillMd] = await sandboxClient.provider.readFiles([

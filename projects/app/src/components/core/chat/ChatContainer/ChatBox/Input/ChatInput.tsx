@@ -1,12 +1,18 @@
 import type { FlexProps, BoxProps } from '@chakra-ui/react';
 import { Box, Flex, Textarea, useBoolean } from '@chakra-ui/react';
-import React, { useRef, useCallback, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { type ChatBoxInputFormType, type ChatBoxInputType, type SendPromptFnType } from '../type';
-import { ChatInputDefaultHeight, ChatTypeEnum, textareaMinH } from '../constants';
+import {
+  ChatInputDefaultHeight,
+  ChatTypeEnum,
+  getChatInputContainerHeight,
+  textareaMinH,
+  WorkflowBuilderChatInputDefaultHeight
+} from '../constants';
 import { useFieldArray, useWatch, type UseFormReturn } from 'react-hook-form';
 import { ChatBoxContext } from '../Provider';
 import dynamic from 'next/dynamic';
@@ -18,15 +24,34 @@ import FilePreview from '../../components/FilePreview';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { getFileUploadId } from '../utils/uploadTask';
 import { isChatFileAllowedBySelectConfig } from '../utils/file';
-import ComplianceTip from '@/components/common/ComplianceTip/index';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import VoiceInput, { type VoiceInputComponentRef } from './VoiceInput';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import type { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  applyInputGuide,
+  getCompletionKeyAction,
+  getNextCompletionIndex,
+  getCompletionContext,
+  getEditedCompletionContext,
+  insertNewline,
+  isCompletionContextCurrent,
+  isSameCompletionContext,
+  type CompletionContext
+} from '../utils/inputGuide';
 
 const InputGuideBox = dynamic(() => import('./InputGuideBox'));
+const INPUT_GUIDE_ID = 'chat-input-guide';
 const PLACEHOLDER_APP_NAME_TOKEN = '__APP_NAME__';
+const completionNavigationKeys = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown'
+]);
 
 type ChatInputProps = BoxProps & {
   lastInteractive?: WorkflowInteractiveResponseType;
@@ -36,8 +61,10 @@ type ChatInputProps = BoxProps & {
   enableVoiceInput: boolean;
   disableSend?: boolean;
   TextareaDom: React.MutableRefObject<HTMLTextAreaElement | null>;
+  textareaRef: React.RefCallback<HTMLTextAreaElement>;
   resetInputVal: (val: ChatBoxInputType) => void;
   chatForm: UseFormReturn<ChatBoxInputFormType>;
+  workflowBuilderStyle?: boolean;
 };
 
 const ChatInput = ({
@@ -48,8 +75,10 @@ const ChatInput = ({
   enableVoiceInput,
   disableSend,
   TextareaDom,
+  textareaRef,
   resetInputVal,
   chatForm,
+  workflowBuilderStyle = false,
   ...props
 }: ChatInputProps) => {
   const { t } = useTranslation();
@@ -64,6 +93,11 @@ const ChatInput = ({
   });
 
   const [focusing, { on: onFocus, off: offFocus }] = useBoolean();
+  const [completionContext, setCompletionContext] = useState<CompletionContext>();
+  const [completionOptions, setCompletionOptions] = useState<string[]>([]);
+  const [activeCompletionIndex, setActiveCompletionIndex] = useState(0);
+  const completionInputValueRef = useRef(inputValue);
+  const [matchText, setMatchText] = useState('');
 
   // Check voice input state
   const [mobilePreSpeak, setMobilePreSpeak] = useState(false);
@@ -123,11 +157,11 @@ const ChatInput = ({
     showSelectAudio,
     showSelectCustomFileExtension,
     cancelUploadFile,
-    clearFiles,
     hasFileUploading
   } = useFileUpload({
     fileSelectConfig,
     fileCtrl,
+    getValues: chatForm.getValues,
     outLinkAuthData,
     sourceTarget,
     chatId
@@ -154,6 +188,83 @@ const ChatInput = ({
   const isDefaultInputHeight =
     !mobilePreSpeak && !inputValue && fileList.length === 0 && !canUseInputGuide;
 
+  const resetCompletionOptions = useCallback(() => {
+    setCompletionOptions([]);
+    setMatchText('');
+    setActiveCompletionIndex(0);
+  }, []);
+
+  const resetCompletionContext = useCallback(() => {
+    setCompletionContext(undefined);
+    resetCompletionOptions();
+  }, [resetCompletionOptions]);
+
+  useEffect(() => {
+    return chatForm.watch((values, { name }) => {
+      if (name !== 'input') return;
+      const value = values.input ?? '';
+      if (value === completionInputValueRef.current) return;
+
+      // 非 textarea 来源的表单写入属于外部扰动，旧补全上下文必须失效。
+      completionInputValueRef.current = value;
+      resetCompletionContext();
+    }).unsubscribe;
+  }, [chatForm, resetCompletionContext]);
+
+  const handleCompletionOptionsChange = useCallback((options: string[], matchText: string) => {
+    setMatchText(matchText);
+    setCompletionOptions((current) =>
+      current.length === options.length && current.every((item, index) => item === options[index])
+        ? current
+        : options
+    );
+    setActiveCompletionIndex((current) => Math.min(current, Math.max(options.length - 1, 0)));
+  }, []);
+
+  const acceptCompletion = useCallback(
+    (guide: string, matchText: string) => {
+      if (!completionContext) return;
+      if (completionInputValueRef.current !== inputValue) {
+        resetCompletionContext();
+        return;
+      }
+      const textarea = TextareaDom.current;
+      const cursor = textarea?.selectionStart ?? inputValue.length;
+      if (
+        !isCompletionContextCurrent({
+          context: completionContext,
+          value: inputValue,
+          cursor,
+          matchText
+        })
+      ) {
+        resetCompletionContext();
+        return;
+      }
+
+      const result = applyInputGuide({
+        context: completionContext,
+        value: inputValue,
+        cursor,
+        guide,
+        matchText
+      });
+
+      resetCompletionContext();
+      setValue('input', result.value, {
+        shouldDirty: true,
+        shouldTouch: true
+      });
+      completionInputValueRef.current = result.value;
+
+      requestAnimationFrame(() => {
+        textarea?.focus();
+        textarea?.setSelectionRange(result.cursor, result.cursor);
+      });
+    },
+    [completionContext, inputValue, resetCompletionContext, setValue, TextareaDom]
+  );
+
   // Upload files
   useRequest(uploadFiles, {
     manual: false,
@@ -166,15 +277,15 @@ const ChatInput = ({
     async (val: string = inputValue) => {
       if (!canSendMessage) return;
 
+      resetCompletionContext();
       onSendMessage({
         text: val.trim(),
         files: fileList,
         interactive: lastInteractive,
         clearInput: true
       });
-      clearFiles();
     },
-    [inputValue, lastInteractive, canSendMessage, fileList, onSendMessage, clearFiles]
+    [inputValue, lastInteractive, canSendMessage, fileList, onSendMessage, resetCompletionContext]
   );
   const { runAsync: handleStop, loading: isStopping } = useRequest(async () => {
     try {
@@ -193,7 +304,7 @@ const ChatInput = ({
         <Flex w={'100%'} position={'relative'}>
           {/* Prompt Container */}
           <Textarea
-            ref={TextareaDom}
+            ref={textareaRef}
             py={0}
             mx={0}
             px={0}
@@ -230,8 +341,20 @@ const ChatInput = ({
               letterSpacing: 'inherit'
             }}
             value={inputValue}
+            role={'combobox'}
+            aria-autocomplete={'list'}
+            aria-controls={completionContext ? INPUT_GUIDE_ID : undefined}
+            aria-activedescendant={
+              completionContext && completionOptions.length
+                ? `${INPUT_GUIDE_ID}-${Math.min(
+                    activeCompletionIndex,
+                    completionOptions.length - 1
+                  )}`
+                : undefined
+            }
             onChange={(e) => {
               const textarea = e.target;
+              const value = textarea.value;
               textarea.style.height = textareaMinH;
               const maxHeight = 128;
               const newHeight = Math.min(textarea.scrollHeight, maxHeight);
@@ -244,26 +367,116 @@ const ChatInput = ({
                 textarea.style.overflowY = 'hidden';
               }
 
-              setValue('input', textarea.value, {
+              setValue('input', value, {
                 shouldDirty: true,
                 shouldTouch: true
               });
+              completionInputValueRef.current = value;
+
+              // 根据输入事件建立或刷新引导补全上下文。
+              const inputType =
+                e.nativeEvent instanceof InputEvent ? e.nativeEvent.inputType : undefined;
+              const isInsertion = inputType
+                ? inputType.startsWith('insert')
+                : value.length > inputValue.length;
+              setCompletionContext(
+                getEditedCompletionContext({
+                  context: completionContext,
+                  before: inputValue,
+                  after: value,
+                  cursor: textarea.selectionStart,
+                  isInsertion
+                })
+              );
+              resetCompletionOptions();
             }}
+            onKeyUp={(e) => {
+              if (!completionContext || !completionNavigationKeys.has(e.key)) return;
+              const textarea = e.currentTarget;
+              const nextContext = getCompletionContext({
+                anchor: completionContext.anchor,
+                value: textarea.value,
+                cursor: textarea.selectionStart
+              });
+              setCompletionContext(nextContext);
+              if (!isSameCompletionContext(completionContext, nextContext)) {
+                resetCompletionOptions();
+              }
+            }}
+            onPointerDown={resetCompletionContext}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
               // enter send.(pc or iframe && enter and unPress shift)
               const isEnter = e.key === 'Enter';
               const textarea = e.currentTarget;
+              // 上下键只切换候选；左右键仍交给 textarea 原生处理光标。
+              const completionAction = getCompletionKeyAction({
+                key: e.key,
+                hasContext: !!completionContext,
+                hasOptions: completionOptions.length > 0,
+                shiftKey: e.shiftKey,
+                ctrlKey: e.ctrlKey,
+                altKey: e.altKey
+              });
+              if (completionAction) {
+                if (completionAction === 'previous' || completionAction === 'next') {
+                  setActiveCompletionIndex(
+                    getNextCompletionIndex({
+                      index: activeCompletionIndex,
+                      length: completionOptions.length,
+                      direction: completionAction === 'next' ? 1 : -1
+                    })
+                  );
+                  e.preventDefault();
+                  return;
+                }
+                if (completionAction === 'close') {
+                  resetCompletionContext();
+                  e.preventDefault();
+                  return;
+                }
+                if (completionAction === 'accept') {
+                  acceptCompletion(
+                    completionOptions[
+                      Math.min(activeCompletionIndex, completionOptions.length - 1)
+                    ],
+                    matchText
+                  );
+                  e.preventDefault();
+                  return;
+                }
+              }
+
               if (isEnter && (e.ctrlKey || e.altKey)) {
                 // Add a new line
-                const index = textarea.selectionStart;
-                const val = textarea.value;
-                textarea.value = `${val.slice(0, index)}\n${val.slice(index)}`;
-                textarea.selectionStart = index + 1;
-                textarea.selectionEnd = index + 1;
+                const { value, cursor } = insertNewline({
+                  value: textarea.value,
+                  cursor: textarea.selectionStart
+                });
+                setValue('input', value, {
+                  shouldDirty: true,
+                  shouldTouch: true
+                });
+                completionInputValueRef.current = value;
 
                 textarea.style.height = textareaMinH;
                 textarea.style.height = `${textarea.scrollHeight}px`;
 
+                setCompletionContext(
+                  completionContext &&
+                    getCompletionContext({
+                      anchor: completionContext.anchor,
+                      value,
+                      cursor
+                    })
+                );
+                resetCompletionOptions();
+
+                requestAnimationFrame(() => {
+                  textarea.setSelectionRange(cursor, cursor);
+                });
+                e.preventDefault();
                 return;
               }
 
@@ -333,7 +546,7 @@ const ChatInput = ({
     ),
     [
       fileList.length,
-      TextareaDom,
+      textareaRef,
       dialogTips,
       appNamePlaceholderParts.prefix,
       appNamePlaceholderParts.suffix,
@@ -343,6 +556,13 @@ const ChatInput = ({
       onFocus,
       offFocus,
       setValue,
+      completionContext,
+      resetCompletionContext,
+      resetCompletionOptions,
+      completionOptions,
+      activeCompletionIndex,
+      matchText,
+      acceptCompletion,
       handleSend,
       canUploadFile,
       isFileTypeAllowed,
@@ -481,11 +701,24 @@ const ChatInput = ({
     handleStop
   ]);
 
-  const activeStyles: FlexProps = {
-    boxShadow: '0px 5px 20px -4px rgba(19, 51, 107, 0.13)',
-    border: '1px solid',
-    borderColor: 'myGray.250'
-  };
+  const activeStyles: FlexProps = workflowBuilderStyle
+    ? {
+        boxShadow: '0px 5px 20px -4px rgba(19, 51, 107, 0.13)',
+        border: '1px solid transparent',
+        borderRadius: '16px',
+        background:
+          'linear-gradient(#FFFFFF, #FFFFFF) padding-box, linear-gradient(112deg, #FF4BCB 0%, #FF9F43 27%, #E8EBF0 52%, #3370FF 78%, #42D7FF 100%) border-box'
+      }
+    : {
+        boxShadow: '0px 5px 20px -4px rgba(19, 51, 107, 0.13)',
+        border: '1px solid',
+        borderColor: 'myGray.250'
+      };
+  const chatInputMinHeight = (() => {
+    if (mobilePreSpeak) return '48px';
+    if (workflowBuilderStyle) return WorkflowBuilderChatInputDefaultHeight;
+    return ChatInputDefaultHeight;
+  })();
 
   return (
     <Box
@@ -527,36 +760,34 @@ const ChatInput = ({
       {/* Real Chat Input */}
       <Flex
         direction={'column'}
-        h={isDefaultInputHeight ? ChatInputDefaultHeight : undefined}
-        minH={mobilePreSpeak ? '48px' : ChatInputDefaultHeight}
+        h={getChatInputContainerHeight({ isDefaultInputHeight, workflowBuilderStyle })}
+        minH={chatInputMinHeight}
         p={mobilePreSpeak ? [0, 4] : 4}
         mb={0}
         position={'relative'}
-        borderRadius={['xl', 'xxl']}
+        borderRadius={workflowBuilderStyle ? '16px' : ['xl', 'xxl']}
         bg={'white'}
-        overflow={mobilePreSpeak ? 'hidden' : 'display'}
+        overflow={mobilePreSpeak ? 'hidden' : 'visible'}
         {...(focusing
           ? activeStyles
           : {
-              _hover: activeStyles,
+              _hover: workflowBuilderStyle ? undefined : activeStyles,
               border: '1px solid',
-              borderColor: 'myGray.200',
+              borderColor: workflowBuilderStyle ? '#E8EBF0' : 'myGray.200',
               boxShadow: `0px 5px 16px -4px rgba(19, 51, 107, 0.08)`
             })}
         onClick={() => TextareaDom?.current?.focus()}
       >
         <Box flex={1}>
           {/* Chat input guide box */}
-          {canUseInputGuide && (
+          {canUseInputGuide && completionContext && (
             <InputGuideBox
+              id={INPUT_GUIDE_ID}
               sourceTarget={sourceTarget}
-              text={inputValue}
-              onSelect={(e) => {
-                setValue('input', e, {
-                  shouldDirty: true,
-                  shouldTouch: true
-                });
-              }}
+              text={completionContext.userQuery}
+              activeIndex={activeCompletionIndex}
+              onOptionsChange={handleCompletionOptionsChange}
+              onSelect={acceptCompletion}
               onSend={(e) => {
                 handleSend(e);
               }}
@@ -584,7 +815,6 @@ const ChatInput = ({
                   autoTTSResponse,
                   clearInput: true
                 });
-                clearFiles();
               }}
               resetInputVal={(val) => {
                 setMobilePreSpeak(false);
@@ -603,7 +833,6 @@ const ChatInput = ({
 
         {!mobilePreSpeak && <Box>{RenderButtonGroup}</Box>}
       </Flex>
-      <ComplianceTip type={'chat'} pt={4} pb={0} />
     </Box>
   );
 };

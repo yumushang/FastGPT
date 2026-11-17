@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useMemo, useRef, useEffect } from 'react';
 import type { BoxProps } from '@chakra-ui/react';
 import { Box, Card, Flex, Portal } from '@chakra-ui/react';
 import { format } from 'date-fns';
@@ -6,34 +6,46 @@ import { DayPicker, type Matcher } from 'react-day-picker';
 import 'react-day-picker/dist/style.css';
 import { zhCN } from 'date-fns/locale/zh-CN';
 import MyIcon from '../Icon';
+import { useCloseOnFlowNodeDragAreaPointerDown } from '../../../hooks/useCloseOnFlowNodeDragAreaPointerDown';
 
-const DateTimePicker = ({
-  onChange,
-  popPosition = 'bottom',
-  defaultDate,
-  selectedDateTime,
-  disabled,
-  isDisabled,
-  ...props
-}: {
+export * from './SingleDateTimePicker';
+
+type DateTimePickerProps = {
   onChange?: (dateTime: Date | undefined) => void;
   popPosition?: 'bottom' | 'top';
   defaultDate?: Date;
   selectedDateTime?: Date;
   disabled?: Matcher[];
   isDisabled?: boolean;
-} & Omit<BoxProps, 'onChange'>) => {
+  'data-testid'?: string;
+} & Omit<BoxProps, 'onChange'>;
+
+/**
+ * 日期选择器组件
+ *
+ * 支持受控模式（传入 selectedDateTime）与非受控模式（传入 defaultDate 或未传入 selectedDateTime）。
+ * - 受控模式下（'selectedDateTime' in rawProps）：以 selectedDateTime 为单一真实数据源，
+ *   当外部将其重置为 undefined 时，如实展示为空，不会回退至内部状态。
+ * - 非受控模式下：内部维护选中日期，支持 defaultDate 初始化，用户选择后更新内部状态。
+ */
+const DateTimePicker = (rawProps: DateTimePickerProps) => {
+  const isControlled = 'selectedDateTime' in rawProps;
+  const {
+    onChange,
+    popPosition = 'bottom',
+    defaultDate,
+    selectedDateTime,
+    disabled,
+    isDisabled,
+    ...props
+  } = rawProps;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(
-    selectedDateTime || defaultDate
-  );
+  const [internalSelectedDate, setInternalSelectedDate] = useState<Date | undefined>(defaultDate);
+  const selectedDate = isControlled ? selectedDateTime : internalSelectedDate;
   const [showSelected, setShowSelected] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
-
-  useEffect(() => {
-    setSelectedDate(selectedDateTime);
-  }, [selectedDateTime]);
 
   useEffect(() => {
     if (!showSelected) return;
@@ -81,21 +93,23 @@ const DateTimePicker = ({
     };
   }, [showSelected, popPosition]);
 
-  // 点击外部关闭
+  const handleClick = useCallback((e: Event) => {
+    if (
+      containerRef.current?.contains(e.target as Node) ||
+      popoverRef.current?.contains(e.target as Node)
+    ) {
+      return;
+    }
+    setShowSelected(false);
+  }, []);
+
+  useCloseOnFlowNodeDragAreaPointerDown(containerRef, handleClick, showSelected);
+
   useEffect(() => {
     if (!showSelected) return;
-    const handleClick = (e: MouseEvent) => {
-      if (
-        containerRef.current?.contains(e.target as Node) ||
-        popoverRef.current?.contains(e.target as Node)
-      ) {
-        return;
-      }
-      setShowSelected(false);
-    };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showSelected]);
+  }, [showSelected, handleClick]);
 
   const formatSelected = useMemo(() => {
     if (selectedDate) {
@@ -169,7 +183,9 @@ const DateTimePicker = ({
                 selected={selectedDate}
                 disabled={disabled}
                 onSelect={(date) => {
-                  setSelectedDate(date);
+                  if (!isControlled) {
+                    setInternalSelectedDate(date);
+                  }
                   onChange?.(date);
                   setShowSelected(false);
                 }}

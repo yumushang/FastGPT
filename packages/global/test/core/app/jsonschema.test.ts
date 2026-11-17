@@ -14,10 +14,13 @@ import {
   nodeInputs2JsonSchema,
   nodeOutputs2JsonSchema,
   parseToolParamJsonSchema,
-  str2OpenApiSchema
+  str2OpenApiSchema,
+  JsonSchemaPropertiesItemSchema,
+  JSONSchemaInputTypeSchema
 } from '@fastgpt/global/core/app/jsonschema';
 import { bundleOpenAPISchema } from '@fastgpt/global/common/string/swagger';
-import { WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
+import { NodeInputKeyEnum, WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
+import { DatasetSearchModule } from '@fastgpt/global/core/workflow/template/system/datasetSearch';
 import {
   FlowNodeInputItemTypeSchema,
   InputConfigInputTypeEnum
@@ -91,6 +94,29 @@ describe('parseToolParamJsonSchema', () => {
 });
 
 describe('jsonSchema2NodeInput', () => {
+  it.each(['mcp', 'http', 'systemTool'] as const)(
+    'applies the %s input default without overriding explicit flags',
+    (schemaType) => {
+      const inputs = jsonSchema2NodeInput({
+        schemaType,
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            implicit: { type: 'string' },
+            manual: { type: 'string', isToolParam: false },
+            generated: { type: 'string', isToolParam: true }
+          }
+        }
+      });
+
+      expect(inputs.map(({ defaultToAgentGenerated }) => defaultToAgentGenerated)).toEqual([
+        schemaType === 'mcp' ? true : undefined,
+        false,
+        true
+      ]);
+    }
+  );
+
   const omitPreservedSchema = (inputs: FlowNodeInputItemType[]) =>
     inputs.map(({ customJsonSchema: _customJsonSchema, ...input }) => input);
 
@@ -115,6 +141,55 @@ describe('jsonSchema2NodeInput', () => {
       pattern: '^[a-z]+$',
       minLength: 3,
       maxLength: 20
+    });
+  });
+
+  it('uses schema descriptions for system tool inputs and localized x-i18n text', () => {
+    const legacy = jsonSchema2NodeInput({
+      schemaType: 'systemTool',
+      jsonSchema: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', title: '查询', description: '旧说明' }
+        }
+      }
+    });
+    const localized = jsonSchema2NodeInput({
+      schemaType: 'systemTool',
+      lang: 'en',
+      jsonSchema: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: {
+            type: 'string',
+            title: '旧标题',
+            description: '旧描述',
+            'x-i18n': {
+              title: { en: 'Query', 'zh-CN': '查询' },
+              description: { en: 'Search text', 'zh-CN': '检索文本' },
+              placeholder: { en: 'Enter query', 'zh-CN': '输入查询' }
+            }
+          }
+        }
+      }
+    });
+
+    expect(legacy[0]).toMatchObject({
+      key: 'query',
+      label: '查询',
+      description: '旧说明',
+      toolDescription: '旧说明',
+      required: true
+    });
+    expect(localized[0]).toMatchObject({
+      key: 'query',
+      label: 'Query',
+      description: 'Search text',
+      placeholder: 'Enter query',
+      toolDescription: 'Search text',
+      required: true
     });
   });
 
@@ -220,6 +295,51 @@ describe('jsonSchema2NodeInput', () => {
     });
   });
 
+  it('should initialize strict enum inputs from the schema default', () => {
+    const result = jsonSchema2NodeInput({
+      schemaType: 'mcp',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['fast', 'full'], default: 'full' },
+          level: { type: 'number', enum: [1, 2, 3], default: 3 },
+          enabled: { type: 'boolean', enum: [true, false], default: false },
+          sources: {
+            type: 'array',
+            items: { type: 'string', enum: ['zhihu', 'weibo', 'juejin'] },
+            default: ['weibo', 'juejin']
+          },
+          objectSources: {
+            type: 'array',
+            items: { type: 'object', enum: [{ id: 'zhihu' }, { id: 'weibo' }] },
+            default: [{ id: 'weibo' }]
+          },
+          unknown: { type: 'string', enum: ['a', 'b'], default: 'c' }
+        }
+      }
+    });
+
+    expect(result[0]).toMatchObject({
+      value: 'full',
+      defaultValue: 'full',
+      renderTypeList: [FlowNodeInputTypeEnum.select, FlowNodeInputTypeEnum.reference]
+    });
+    expect(result[1]).toMatchObject({ value: 3, defaultValue: 3 });
+    expect(result[2]).toMatchObject({ value: false, defaultValue: false });
+    expect(result[3]).toMatchObject({
+      value: ['weibo', 'juejin'],
+      defaultValue: ['weibo', 'juejin'],
+      renderTypeList: [FlowNodeInputTypeEnum.multipleSelect, FlowNodeInputTypeEnum.reference]
+    });
+    expect(result[4]).toMatchObject({
+      value: [{ id: 'weibo' }],
+      defaultValue: [{ id: 'weibo' }],
+      renderTypeList: [FlowNodeInputTypeEnum.JSONEditor, FlowNodeInputTypeEnum.reference]
+    });
+    // default 不在枚举内时回退到第一个枚举值，避免选择器出现不存在的选项
+    expect(result[5]).toMatchObject({ value: 'a', defaultValue: 'c' });
+  });
+
   it('should map isToolParam from input schema properties to NodeIO defaults', () => {
     const result = jsonSchema2NodeInput({
       schemaType: 'systemTool',
@@ -229,7 +349,6 @@ describe('jsonSchema2NodeInput', () => {
           query: {
             type: 'string',
             description: 'Search query',
-            toolDescription: 'Query generated by agent',
             isToolParam: true
           }
         },
@@ -239,7 +358,7 @@ describe('jsonSchema2NodeInput', () => {
 
     expect(result[0]).toMatchObject({
       key: 'query',
-      toolDescription: 'Query generated by agent',
+      toolDescription: 'Search query',
       defaultToAgentGenerated: true,
       required: true,
       renderTypeList: ['input', 'reference']
@@ -402,6 +521,7 @@ describe('jsonSchema2NodeInput', () => {
     const expectResponse = [
       {
         key: 'name',
+        defaultToAgentGenerated: true,
         label: 'name',
         valueType: 'string',
         description: 'User name',
@@ -411,6 +531,7 @@ describe('jsonSchema2NodeInput', () => {
       },
       {
         key: 'age',
+        defaultToAgentGenerated: true,
         label: 'age',
         valueType: 'number',
         toolDescription: 'age',
@@ -421,6 +542,7 @@ describe('jsonSchema2NodeInput', () => {
       },
       {
         key: 'withoutDesc',
+        defaultToAgentGenerated: true,
         label: 'withoutDesc',
         valueType: 'string',
         toolDescription: 'withoutDesc',
@@ -455,6 +577,7 @@ describe('jsonSchema2NodeInput', () => {
     expect(omitPreservedSchema(result)).toEqual([
       {
         key: 'sources',
+        defaultToAgentGenerated: true,
         label: '热榜来源',
         valueType: WorkflowIOValueTypeEnum.arrayString,
         description: '选择热榜来源网站（可多选）',
@@ -856,6 +979,32 @@ describe('jsonSchema2NodeOutput', () => {
     expect(result[0].description).toBe('Data object');
   });
 
+  it('uses localized x-i18n title and description for outputs', () => {
+    const result = jsonSchema2NodeOutput({
+      lang: 'en',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          result: {
+            type: 'string',
+            title: '旧标题',
+            description: '旧描述',
+            'x-i18n': {
+              title: { en: 'Result', 'zh-CN': '结果' },
+              description: { en: 'Search results', 'zh-CN': '检索结果' }
+            }
+          }
+        }
+      }
+    });
+
+    expect(result[0]).toMatchObject({
+      id: 'result',
+      label: 'Result',
+      description: 'Search results'
+    });
+  });
+
   it('should handle array types correctly', () => {
     const jsonSchema: JSONSchemaOutputType = {
       type: 'object',
@@ -888,6 +1037,23 @@ describe('jsonSchema2NodeOutput', () => {
 });
 
 describe('nodeInputs2JsonSchema', () => {
+  it('should keep dataset search agent-generated schema as a string array', () => {
+    const searchInput = DatasetSearchModule.inputs.find(
+      (input) => input.key === NodeInputKeyEnum.datasetSearchInput
+    );
+
+    const result = nodeInputs2JsonSchema({
+      inputs: searchInput ? [searchInput] : []
+    });
+
+    expect(result.properties?.datasetSearchInput).toMatchObject({
+      type: 'array',
+      items: { type: 'string' },
+      title: 'workflow:search_query',
+      description: 'workflow:content_to_search'
+    });
+  });
+
   it.each([
     ['tool description', 'Tool description', 'UI description', 'Field label', 'Tool description'],
     ['UI description', undefined, 'UI description', 'Field label', 'UI description'],
@@ -950,6 +1116,55 @@ describe('nodeInputs2JsonSchema', () => {
       schemaOnly: { type: 'string' }
     });
     expect(result.required).toEqual(['query', 'schemaOnly']);
+  });
+
+  it('removes plugin x-i18n metadata from model parameter schemas', () => {
+    const result = buildModelVisibleToolJsonSchema({
+      toolParams: [
+        {
+          key: 'query',
+          label: 'Query',
+          valueType: WorkflowIOValueTypeEnum.string,
+          renderTypeList: [FlowNodeInputTypeEnum.agentGenerated]
+        }
+      ],
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            'x-i18n': { title: { en: 'Query', 'zh-CN': '查询' } }
+          }
+        },
+        required: ['query']
+      }
+    });
+
+    expect(result.properties?.query).toEqual({ type: 'string' });
+  });
+
+  it('preserves schema properties named after Object prototype members', () => {
+    const keys = ['constructor', 'toString', 'hasOwnProperty'];
+    const toolParams = keys.map((key) => ({
+      key,
+      label: key,
+      valueType: WorkflowIOValueTypeEnum.string,
+      renderTypeList: [FlowNodeInputTypeEnum.agentGenerated]
+    }));
+    const result = buildModelVisibleToolJsonSchema({
+      inputs: toolParams,
+      toolParams,
+      jsonSchema: {
+        type: 'object',
+        properties: Object.fromEntries(keys.map((key) => [key, { type: 'string' }])),
+        required: keys
+      }
+    });
+
+    expect(result.properties).toEqual(
+      Object.fromEntries(keys.map((key) => [key, { type: 'string' }]))
+    );
+    expect(result.required).toEqual(keys);
   });
 
   it('should preserve a custom property schema and use the input required switch', () => {
@@ -1291,6 +1506,7 @@ describe('nodeInputs2JsonSchema', () => {
         max: 10,
         precision: 2,
         description: 'UI description',
+        toolDescription: 'Tool description',
         canEdit: false,
         defaultValue: 2
       }
@@ -1424,6 +1640,47 @@ describe('nodeInputs2JsonSchema', () => {
       valueType: WorkflowIOValueTypeEnum.number,
       defaultValue: 7,
       renderTypeList: [FlowNodeInputTypeEnum.hidden]
+    });
+  });
+
+  it('should keep off inputs exposed to third-party callers with metadata preserved', () => {
+    const inputs = [
+      {
+        key: 'offInput',
+        label: 'Off',
+        valueType: WorkflowIOValueTypeEnum.number,
+        defaultValue: 3,
+        required: true,
+        renderTypeList: [FlowNodeInputTypeEnum.off]
+      }
+    ] as FlowNodeInputItemType[];
+
+    const jsonSchema = nodeInputs2JsonSchema({
+      inputs,
+      includeNodeMetadata: true,
+      filterInternalInputs: true
+    });
+    const restored = jsonSchema2NodeInput({
+      jsonSchema,
+      schemaType: 'systemTool'
+    });
+
+    // 与 hidden 不同：off 只是不渲染，第三方入参 schema 仍需暴露
+    expect(jsonSchema.properties?.offInput).toMatchObject({
+      type: 'number',
+      default: 3,
+      'x-fastgpt-node-input': {
+        valueType: WorkflowIOValueTypeEnum.number,
+        defaultValue: 3,
+        renderTypeList: [FlowNodeInputTypeEnum.off]
+      }
+    });
+    expect(jsonSchema.required).toEqual(['offInput']);
+    expect(restored[0]).toMatchObject({
+      key: 'offInput',
+      valueType: WorkflowIOValueTypeEnum.number,
+      defaultValue: 3,
+      renderTypeList: [FlowNodeInputTypeEnum.off]
     });
   });
 });
@@ -1620,6 +1877,33 @@ describe('jsonSchema2SecretInput', () => {
         ]
       }
     ]);
+  });
+  it('uses localized x-i18n text and placeholder for secrets', () => {
+    const result = jsonSchema2SecretInput({
+      lang: 'en',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          apiKey: {
+            type: 'string',
+            title: '旧密钥',
+            description: '旧说明',
+            'x-i18n': {
+              title: { en: 'API key', 'zh-CN': 'API 密钥' },
+              description: { en: 'Access token', 'zh-CN': '访问令牌' },
+              placeholder: { en: 'Enter token', 'zh-CN': '输入令牌' }
+            }
+          }
+        }
+      }
+    });
+
+    expect(result?.[0]).toMatchObject({
+      key: 'apiKey',
+      label: 'API key',
+      description: 'Access token',
+      placeholder: 'Enter token'
+    });
   });
 });
 
@@ -2077,5 +2361,43 @@ describe('bundleOpenAPISchema', () => {
         }
       })
     ).rejects.toThrow('Unable to resolve $ref pointer');
+  });
+});
+
+describe('JSONSchema property required support', () => {
+  it('should accept boolean required on property schema (OpenAPI 2.0 / legacy MCP compatibility)', () => {
+    const parsed = JsonSchemaPropertiesItemSchema.parse({
+      type: 'string',
+      description: 'task identifier',
+      required: true
+    });
+    expect(parsed.required).toBe(true);
+  });
+
+  it('should parse MCP tool inputSchema with property-level boolean required', () => {
+    const schema = JSONSchemaInputTypeSchema.parse({
+      type: 'object',
+      properties: {
+        task_id: {
+          type: 'string',
+          description: 'task id',
+          required: true
+        },
+        optional_flag: {
+          type: 'boolean',
+          required: false
+        }
+      }
+    });
+    expect(schema.properties?.task_id.required).toBe(true);
+
+    const inputs = jsonSchema2NodeInput({
+      jsonSchema: schema,
+      schemaType: 'mcp'
+    });
+    const taskIdInput = inputs.find((i) => i.key === 'task_id');
+    const optionalInput = inputs.find((i) => i.key === 'optional_flag');
+    expect(taskIdInput?.required).toBe(true);
+    expect(optionalInput?.required).toBeFalsy();
   });
 });

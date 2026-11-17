@@ -1,4 +1,4 @@
-import AWS from '@aws-sdk/client-s3';
+import * as AWS from '@aws-sdk/client-s3';
 import type { IAwsS3CompatibleStorageOptions, IStorage } from '../interface';
 import type * as Storage from '../types';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -10,12 +10,14 @@ import { AWS_S3_COMPATIBLE_VENDORS, DEFAULT_PRESIGNED_URL_EXPIRED_SECONDS } from
 import {
   bindAbortSignalToReadable,
   encodeObjectKeyPath,
+  formatHttpByteRangeHeader,
   throwIfStorageAborted,
   throwIfStorageDownloadAborted
 } from '../utils';
 import {
   assertStorageObjectKey,
   assertStorageObjectKeys,
+  assertStorageDownloadRange,
   assertStorageObjectPrefix,
   assertRequiredStorageObjectPrefix,
   assertMultipartContentLength,
@@ -280,14 +282,16 @@ export class AwsS3StorageAdapter implements IStorage {
   async downloadObject(
     params: Storage.DownloadObjectParams
   ): Promise<Storage.DownloadObjectResult> {
-    const { key, abortSignal } = params;
+    const { key, range, abortSignal } = params;
     assertStorageObjectKey(key);
+    assertStorageDownloadRange(range);
     throwIfStorageDownloadAborted(abortSignal);
 
     const result = await this.client.send(
       new AWS.GetObjectCommand({
         Bucket: this.options.bucket,
-        Key: key
+        Key: key,
+        ...(range ? { Range: formatHttpByteRangeHeader(range) } : {})
       }),
       { abortSignal }
     );

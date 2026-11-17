@@ -1,16 +1,20 @@
+import { getTeamModelHandle } from '../../../ai/model/catalog/service';
 /* Abandoned */
 
 import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 
-import type { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
+import { type NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
+
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import { getDefaultEmbeddingModelData, getLLMModelData } from '../../../../core/ai/model';
-import { formatModelChars2Points } from '../../../../support/wallet/usage/utils';
-import { queryExtension } from '../../../../core/ai/functions/queryExtension';
-import { getHistories } from '../utils';
+
 import { hashStr } from '@fastgpt/global/common/string/tools';
+import { MODERATION_BLOCKED_ERROR_MESSAGE } from '@fastgpt/global/core/plugin/moderation/constants';
+import { queryExtension } from '../../../../core/ai/functions/queryExtension';
+import { checkOutputTextModeration } from '../../../plugin/moderation/output';
+import { formatModelChars2Points } from '../../../../support/wallet/usage/utils';
 import type { DispatchNodeResultType, ModuleDispatchProps } from '../../types/runtime';
+import { loadWorkflowModelResource } from '../../resource/service';
+import { getHistories, getNodeErrResponse } from '../utils';
 
 type Props = ModuleDispatchProps<{
   [NodeInputKeyEnum.aiModelId]?: string;
@@ -25,19 +29,26 @@ type Response = DispatchNodeResultType<{
 }>;
 
 /** @deprecated 保留用于兼容已保存的问题优化节点。 */
-export const dispatchQueryExtension = async ({
-  histories,
-  node,
-  usagePush,
-  runningUserInfo,
-  params: { modelId, model, systemPrompt, history, userChatInput }
-}: Props): Promise<Response> => {
+export const dispatchQueryExtension = async (props: Props): Promise<Response> => {
+  const {
+    histories,
+    node,
+    usagePush,
+    runningUserInfo,
+    params: { modelId, model, systemPrompt, history, userChatInput }
+  } = props;
   if (!userChatInput) {
     return Promise.reject('Question is empty');
   }
-
-  const queryExtensionModel = getLLMModelData({ modelId, model });
-  const embeddingModel = getDefaultEmbeddingModelData();
+  const modelHandle = await getTeamModelHandle({ teamId: props.runningAppInfo.teamId });
+  const queryExtensionModel = await loadWorkflowModelResource({
+    appTeamId: props.runningAppInfo.teamId,
+    userInfo: runningUserInfo,
+    modelId,
+    model,
+    modelHandle
+  });
+  const embeddingModel = modelHandle.getDefaultModelData('embedding');
   const chatHistories = getHistories(history, histories);
 
   const { extensionQueries, inputTokens, outputTokens, embeddingTokens } = await queryExtension({
@@ -48,7 +59,6 @@ export const dispatchQueryExtension = async ({
     embeddingModel,
     teamId: runningUserInfo.teamId
   });
-
   extensionQueries.unshift(userChatInput);
 
   const { totalPoints: llmPoints, modelId: llmModelId } = formatModelChars2Points({
@@ -89,9 +99,29 @@ export const dispatchQueryExtension = async ({
     return true;
   });
 
+  const textOutput = JSON.stringify(filterSameQueries);
+  const outputCheck = await checkOutputTextModeration({
+    text: textOutput,
+    targetField: 'queryExtension',
+    context: {
+      teamId: runningUserInfo.teamId,
+      tmbId: runningUserInfo.tmbId,
+      appId: props.runningAppInfo.sourceId,
+      chatId: props.chatId,
+      responseChatItemId: props.responseChatItemId,
+      nodeId: node.nodeId,
+      nodeName: node.name
+    }
+  });
+  if (!outputCheck.isPass) {
+    return getNodeErrResponse({
+      error: outputCheck.blockErrorMessage || MODERATION_BLOCKED_ERROR_MESSAGE
+    });
+  }
+
   return {
     data: {
-      [NodeOutputKeyEnum.text]: JSON.stringify(filterSameQueries)
+      [NodeOutputKeyEnum.text]: textOutput
     },
     [DispatchNodeResponseKeyEnum.nodeResponse]: {
       totalPoints,
@@ -100,7 +130,7 @@ export const dispatchQueryExtension = async ({
       outputTokens,
       embeddingTokens,
       query: userChatInput,
-      textOutput: JSON.stringify(filterSameQueries)
+      textOutput
     }
   };
 };

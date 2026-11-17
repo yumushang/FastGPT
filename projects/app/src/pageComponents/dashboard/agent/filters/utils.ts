@@ -1,5 +1,10 @@
-import { AppListSortEnum, AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import {
+  AppListSortEnum,
+  AppListSortSchema,
+  AppTypeEnum
+} from '@fastgpt/global/core/app/constants';
 import { DatasetTypeEnum } from '@fastgpt/global/core/dataset/constants';
+import type { ListAppV2BodyType } from '@fastgpt/global/openapi/core/app/common/api';
 import { toMultiSelectFilterQuery } from '@fastgpt/web/components/common/TagFilter';
 import z from 'zod';
 
@@ -21,7 +26,7 @@ const CreatorFilterSchema = z
  */
 export const AppListFilterSchema = z.object({
   type: z.union([z.literal('all'), z.enum(AppTypeEnum)]).default('all'),
-  sort: z.enum(AppListSortEnum).default(AppListSortEnum.updateTimeDesc),
+  sort: AppListSortSchema.default(AppListSortEnum.updateTimeDesc),
   creator: CreatorFilterSchema
 });
 
@@ -29,7 +34,7 @@ export type AppListFilterType = z.infer<typeof AppListFilterSchema>;
 export type AppListFilterScene = 'agent' | 'tool';
 
 export const ResourceListFilterSchema = z.object({
-  sort: z.enum(AppListSortEnum).default(AppListSortEnum.updateTimeDesc),
+  sort: AppListSortSchema.default(AppListSortEnum.updateTimeDesc),
   creator: CreatorFilterSchema
 });
 export type ResourceListFilterType = z.infer<typeof ResourceListFilterSchema>;
@@ -109,9 +114,40 @@ export const resolveSceneListType = (
   return allowed.some((item) => item === type) ? type : 'all';
 };
 
-/** 转成列表接口的 tmbIds：全部不传，已选含空数组。 */
+/** 转成列表接口的 tmbIds：全部或未选任何项不传，其余传所选项。 */
 export const toListTmbIds = (creator?: AppListFilterType['creator']): string[] | undefined =>
   toMultiSelectFilterQuery(creator ? { mode: creator.mode, values: creator.tmbIds } : undefined);
+
+/** Preserve the creator selection when building the paginated app list request. */
+export const buildAppListRequest = ({
+  parentId,
+  type,
+  searchKey,
+  offset,
+  pageSize,
+  sort,
+  tmbIds,
+  withRelatedAppCount
+}: Pick<
+  Extract<ListAppV2BodyType, { appIds?: never }>,
+  | 'parentId'
+  | 'type'
+  | 'searchKey'
+  | 'offset'
+  | 'pageSize'
+  | 'sort'
+  | 'tmbIds'
+  | 'withRelatedAppCount'
+>) => ({
+  parentId,
+  type,
+  searchKey,
+  offset,
+  pageSize,
+  ...(sort ? { sort } : {}),
+  ...(tmbIds !== undefined ? { tmbIds } : {}),
+  ...(withRelatedAppCount !== undefined ? { withRelatedAppCount } : {})
+});
 
 /** 卡片时间与排序依据保持一致：最近更新显示更新时间，创建时间排序显示创建时间。 */
 export const getResourceListDisplayTime = ({
@@ -124,23 +160,32 @@ export const getResourceListDisplayTime = ({
   updateTime: Date;
 }) => (sort === AppListSortEnum.updateTimeDesc ? updateTime : createTime);
 
+type ResourceListActiveFilterProps = {
+  searchKey: string;
+  type?: string;
+  creatorMode: AppListFilterType['creator']['mode'];
+  applyToolbarFilters: boolean;
+};
+
 /**
- * 工作台列表是否处于「筛选后可能为空」的状态。
- * 排序不算筛选：改排序不会把列表筛空，空态仍应走首次创建。
- * 移动端工具栏筛选项不可见时，只看搜索。
+ * 判断资源列表是否存在会改变结果集的筛选条件。
+ * 排序只改变顺序，不影响空结果状态；移动端未展示的筛选条件也不参与判断。
  */
-export const hasAppListActiveFilter = ({
+export const hasResourceListActiveFilter = ({
   searchKey,
   type,
   creatorMode,
   applyToolbarFilters
-}: {
+}: ResourceListActiveFilterProps) => {
+  if (searchKey.trim()) return true;
+  if (!applyToolbarFilters) return false;
+  return type !== undefined && type !== 'all' ? true : creatorMode === 'selected';
+};
+
+/** 判断 Agent 列表是否处于可能返回空结果的筛选状态。 */
+export const hasAppListActiveFilter = (props: {
   searchKey: string;
   type: AppListFilterType['type'];
   creatorMode: AppListFilterType['creator']['mode'];
   applyToolbarFilters: boolean;
-}) => {
-  if (searchKey.trim()) return true;
-  if (!applyToolbarFilters) return false;
-  return type !== 'all' || creatorMode === 'selected';
-};
+}) => hasResourceListActiveFilter(props);

@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   Sandbox,
+  SandboxApiException,
   SandboxManager,
   type SandboxInfo as SdkSandboxInfo,
   type ServerStreamEvent,
   type WriteEntry
 } from '@alibaba-group/opensandbox';
+import { createExecdClient, FilesystemAdapter } from '@alibaba-group/opensandbox/internal';
 import { OpenSandboxAdapter, type OpenSandboxConnectionConfig } from '@/adapters/opensandbox';
 import { SandboxNotFoundError, SandboxStateError } from '@/errors';
 
@@ -25,10 +27,17 @@ const sdkInfo = (state = 'Running', id = 'sandbox-1'): SdkSandboxInfo =>
     expiresAt: null
   }) as SdkSandboxInfo;
 
+const notFoundError = () =>
+  new SandboxApiException({
+    message: 'Sandbox not found',
+    statusCode: 404
+  });
+
 const createSdkSandbox = (
   props: {
     id?: string;
     info?: Array<SdkSandboxInfo | Error>;
+    files?: Map<string, string>;
   } = {}
 ) => {
   const id = props.id ?? 'sandbox-1';
@@ -51,6 +60,21 @@ const createSdkSandbox = (
     yield new TextEncoder().encode('stream');
   });
   const writeFiles = vi.fn(async (_entries: WriteEntry[]) => undefined);
+  const files = props.files ?? new Map<string, string>();
+  const replaceContentsDetailed = vi.fn(
+    async (entries: Parameters<Sandbox['files']['replaceContentsDetailed']>[0]) => {
+      // 模拟 SDK 的路径键请求体：同一请求中重复路径只保留最后一条编辑。
+      const editsByPath = new Map(entries.map((entry) => [entry.path, entry]));
+      return [...editsByPath.values()]
+        .map(({ path, oldContent, newContent }) => {
+          const parts = (files.get(path) ?? '').split(oldContent);
+          const replacedCount = parts.length - 1;
+          if (replacedCount > 0) files.set(path, parts.join(newContent));
+          return { path, replacedCount };
+        })
+        .reverse();
+    }
+  );
   const getFileInfo = vi.fn(async () => ({}));
   const commandInterrupt = vi.fn(async (_sessionId: string) => undefined);
   const commandRunStream = vi.fn((_command: string, _options?: unknown, _signal?: AbortSignal) =>
@@ -73,6 +97,7 @@ const createSdkSandbox = (
       readBytes,
       readBytesStream,
       writeFiles,
+      replaceContentsDetailed,
       getFileInfo
     }
   } as unknown as Sandbox;
@@ -83,6 +108,7 @@ const createSdkSandbox = (
     readBytes,
     readBytesStream,
     writeFiles,
+    replaceContentsDetailed,
     getFileInfo,
     commandInterrupt,
     commandRunStream
@@ -100,8 +126,23 @@ const bindSandbox = (adapter: OpenSandboxAdapter, sandbox: Sandbox): void => {
   target.lifecycle.boundSandbox = sandbox;
 };
 
-const mockManager = (items: SdkSandboxInfo[] = [], info: SdkSandboxInfo = sdkInfo('Deleted')) => {
-  const getSandboxInfo = vi.fn(async () => info);
+const mockManager = (
+  items: SdkSandboxInfo[] = [],
+  info: SdkSandboxInfo | Array<SdkSandboxInfo | Error> = sdkInfo('Deleted')
+) => {
+  const sequence = Array.isArray(info) ? info : [info];
+  const getSandboxInfo = vi.fn<() => Promise<SdkSandboxInfo>>();
+  for (const value of sequence) {
+    getSandboxInfo.mockImplementationOnce(async () => {
+      if (value instanceof Error) throw value;
+      return value;
+    });
+  }
+  const fallback = sequence.at(-1) ?? sdkInfo('Deleted');
+  getSandboxInfo.mockImplementation(async () => {
+    if (fallback instanceof Error) throw fallback;
+    return fallback;
+  });
   const killSandbox = vi.fn(async () => undefined);
   const manager = {
     listSandboxInfos: vi.fn(async () => ({ items })),
@@ -165,6 +206,60 @@ describe('OpenSandboxAdapter', () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
+  it.each(['Allocated', 'Pending'])(
+    'waits for provider state %s to reach Running instead of failing',
+    async (state) => {
+      vi.useFakeTimers();
+      try {
+        const adapter = new OpenSandboxAdapter(CONNECTION);
+        const bound = createSdkSandbox({
+          info: [sdkInfo(state), sdkInfo(state), sdkInfo('Running')]
+        });
+        bindSandbox(adapter, bound.sandbox);
+
+        const ensureRunning = adapter.ensureRunning();
+        await vi.advanceTimersByTimeAsync(2_000);
+        await ensureRunning;
+
+        expect(adapter.status.state).toBe('Running');
+        expect(bound.getInfo).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('waits for an allocated session resource discovered by metadata before connecting', async () => {
+    vi.useFakeTimers();
+    try {
+      // 直接指定轮询序列，避免 helper 默认排队的 Deleted 响应先于 Allocated 生效。
+      mockManager([sdkInfo('Allocated')], [sdkInfo('Allocated'), sdkInfo('Running')]);
+      const bound = createSdkSandbox();
+      const connect = vi.spyOn(Sandbox, 'connect').mockResolvedValue(bound.sandbox);
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+
+      const ensureRunning = adapter.ensureRunning();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await ensureRunning;
+
+      expect(connect).toHaveBeenCalledWith(expect.objectContaining({ sandboxId: 'sandbox-1' }));
+      expect(adapter.status.state).toBe('Running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['Failed', 'Unknown', 'Terminated'])(
+    'keeps terminal provider state %s fatal',
+    async (state) => {
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+      const bound = createSdkSandbox({ info: [sdkInfo(state)] });
+      bindSandbox(adapter, bound.sandbox);
+
+      await expect(adapter.ensureRunning()).rejects.toThrow('Sandbox error');
+    }
+  );
+
   it('resumes the reusable paused resource found by session metadata', async () => {
     mockManager([sdkInfo('Paused')]);
     const resumed = createSdkSandbox();
@@ -186,28 +281,86 @@ describe('OpenSandboxAdapter', () => {
     );
   });
 
-  it('deletes a bound sandbox on stop and releases its client', async () => {
+  it.each(['Paused', 'Pausing', 'Creating', 'Deleting', 'Stopping'])(
+    'connect-only rejects %s without resuming or creating',
+    async (state) => {
+      mockManager([sdkInfo(state)]);
+      const resume = vi.spyOn(Sandbox, 'resume');
+      const create = vi.spyOn(Sandbox, 'create');
+      const connect = vi.spyOn(Sandbox, 'connect');
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+      await expect(adapter.connectRunning()).rejects.toBeInstanceOf(SandboxStateError);
+      expect(resume).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    }
+  );
+  it('connect-only binds an existing running sandbox', async () => {
+    mockManager([sdkInfo()]);
+    const bound = createSdkSandbox();
+    vi.spyOn(Sandbox, 'connect').mockResolvedValue(bound.sandbox);
     const adapter = new OpenSandboxAdapter(CONNECTION);
-    const bound = createSdkSandbox({ info: [sdkInfo('Deleted')] });
-    bindSandbox(adapter, bound.sandbox);
-
-    await adapter.stop();
-
-    expect(bound.sandbox.kill).toHaveBeenCalledTimes(1);
-    expect(bound.sandbox.close).toHaveBeenCalledTimes(1);
-    expect(adapter.status.state).toBe('UnExist');
-    expect(adapter.id).toBeUndefined();
+    await adapter.connectRunning();
+    await adapter.connectRunning();
+    expect(adapter.id).toBe('sandbox-1');
+    expect(Sandbox.connect).toHaveBeenCalledTimes(1);
+  });
+  it('connect-only reports a missing session without creating', async () => {
+    mockManager();
+    const create = vi.spyOn(Sandbox, 'create');
+    await expect(new OpenSandboxAdapter(CONNECTION).connectRunning()).rejects.toBeInstanceOf(
+      SandboxNotFoundError
+    );
+    expect(create).not.toHaveBeenCalled();
   });
 
-  it('deletes an unbound sandbox found by session metadata on stop', async () => {
-    const manager = mockManager([sdkInfo('Running')], sdkInfo('Deleted'));
-    const adapter = new OpenSandboxAdapter(CONNECTION);
+  it('deletes every visible physical resource for a stable session', async () => {
+    const { killSandbox } = mockManager([
+      sdkInfo('Running', 'first'),
+      sdkInfo('Running', 'second')
+    ]);
+    await new OpenSandboxAdapter(CONNECTION).delete();
+    expect(killSandbox.mock.calls).toEqual([['first'], ['second']]);
+  });
 
-    await adapter.stop();
+  it('deletes a bound sandbox on stop across Stopping cleanup until 404 and releases its client', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+      const bound = createSdkSandbox({ info: [sdkInfo('Stopping'), notFoundError()] });
+      bindSandbox(adapter, bound.sandbox);
 
-    expect(manager.killSandbox).toHaveBeenCalledWith('sandbox-1');
-    expect(manager.getSandboxInfo).toHaveBeenCalledWith('sandbox-1');
-    expect(adapter.status.state).toBe('UnExist');
+      const stopPromise = adapter.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stopPromise;
+
+      expect(bound.sandbox.kill).toHaveBeenCalledTimes(1);
+      expect(bound.getInfo).toHaveBeenCalledTimes(2);
+      expect(bound.sandbox.close).toHaveBeenCalledTimes(1);
+      expect(adapter.status.state).toBe('UnExist');
+      expect(adapter.id).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('deletes an unbound sandbox found by session metadata on stop across Stopping cleanup until 404', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = mockManager([sdkInfo('Running')], [sdkInfo('Stopping'), notFoundError()]);
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+
+      const stopPromise = adapter.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stopPromise;
+
+      expect(manager.killSandbox).toHaveBeenCalledWith('sandbox-1');
+      expect(manager.getSandboxInfo).toHaveBeenCalledTimes(2);
+      expect(manager.getSandboxInfo).toHaveBeenCalledWith('sandbox-1');
+      expect(adapter.status.state).toBe('UnExist');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('close releases the local client without changing the remote lifecycle', async () => {
@@ -222,27 +375,224 @@ describe('OpenSandboxAdapter', () => {
     expect(bound.sandbox.kill).not.toHaveBeenCalled();
   });
 
-  it('uses native range and streaming reads while reporting invalid ranges per file', async () => {
+  it('uses native file and streaming reads', async () => {
     const adapter = new OpenSandboxAdapter(CONNECTION);
     const bound = createSdkSandbox();
     bindSandbox(adapter, bound.sandbox);
 
-    await adapter.readFiles(['file.txt'], { offset: 1, length: 3 });
+    await adapter.readFiles(['file.txt']);
     const chunks: Uint8Array[] = [];
     for await (const chunk of adapter.readFileStream('file.txt')) chunks.push(chunk);
-    const [invalidResult] = await adapter.readFiles(['file.txt'], { length: -1 });
 
-    expect(bound.readBytes).toHaveBeenCalledWith('/workspace/file.txt', {
-      offset: 1,
-      limit: 3
-    });
+    expect(bound.readBytes).toHaveBeenCalledWith('/workspace/file.txt');
     expect(bound.readBytesStream).toHaveBeenCalledWith('/workspace/file.txt');
     expect(new TextDecoder().decode(chunks[0])).toBe('stream');
-    expect(invalidResult).toMatchObject({
-      path: '/workspace/file.txt',
-      error: expect.any(TypeError)
-    });
     expect(bound.readBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { oldContent: 'use(x)', replacedCount: 1, expectedUse: 'use(y)' },
+    { oldContent: 'missing', replacedCount: 0, expectedUse: 'use(x)' }
+  ])(
+    'keeps per-entry counts when a later edit replaces $replacedCount occurrences',
+    async ({ oldContent, replacedCount, expectedUse }) => {
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+      const files = new Map([
+        ['/workspace/app.py', 'import x\nuse(x)\nimport x\n'],
+        ['/workspace/util.py', 'a = 1\n']
+      ]);
+      const bound = createSdkSandbox({ files });
+      bindSandbox(adapter, bound.sandbox);
+
+      await expect(
+        adapter.replaceContent([
+          { path: 'app.py', oldContent: 'import x', newContent: 'import y' },
+          { path: '/workspace/app.py', oldContent, newContent: 'use(y)' },
+          { path: 'util.py', oldContent: 'a = 1', newContent: 'a = 2' }
+        ])
+      ).resolves.toEqual([
+        { path: '/workspace/app.py', status: 'replaced', replacedCount: 2 },
+        {
+          path: '/workspace/app.py',
+          ...(replacedCount === 0 ? { status: 'unmatched' } : { status: 'replaced', replacedCount })
+        },
+        { path: '/workspace/util.py', status: 'replaced', replacedCount: 1 }
+      ]);
+
+      expect(files.get('/workspace/app.py')).toBe(`import y\n${expectedUse}\nimport y\n`);
+      expect(files.get('/workspace/util.py')).toBe('a = 2\n');
+      expect(bound.replaceContentsDetailed).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([false, true])(
+    'keeps missing counts unknown after edits land (partial response: %s)',
+    async (partial) => {
+      const adapter = new OpenSandboxAdapter(CONNECTION);
+      const files = new Map([
+        ['/workspace/app.py', 'old'],
+        ['/workspace/util.py', 'old']
+      ]);
+      const bound = createSdkSandbox({ files });
+      const replace = bound.replaceContentsDetailed.getMockImplementation()!;
+      bound.replaceContentsDetailed.mockImplementation(async (entries) => {
+        const results = await replace(entries);
+        return partial ? results.filter((result) => result.path === '/workspace/util.py') : [];
+      });
+      bindSandbox(adapter, bound.sandbox);
+
+      await expect(
+        adapter.replaceContent([
+          { path: 'app.py', oldContent: 'old', newContent: 'new' },
+          { path: 'util.py', oldContent: 'old', newContent: 'new' },
+          { path: '/workspace/app.py', oldContent: 'new', newContent: 'final' }
+        ])
+      ).resolves.toEqual([
+        { path: '/workspace/app.py', status: 'unknown' },
+        {
+          path: '/workspace/util.py',
+          ...(partial ? { status: 'replaced', replacedCount: 1 } : { status: 'unknown' })
+        },
+        { path: '/workspace/app.py', status: 'unknown' }
+      ]);
+
+      expect(files.get('/workspace/app.py')).toBe('final');
+      expect(files.get('/workspace/util.py')).toBe('new');
+    }
+  );
+
+  it('returns no results and sends no request for no edits', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const bound = createSdkSandbox();
+    bindSandbox(adapter, bound.sandbox);
+
+    await expect(adapter.replaceContent([])).resolves.toEqual([]);
+    expect(bound.replaceContentsDetailed).not.toHaveBeenCalled();
+  });
+
+  it('reports unmatched edits even when another file in the batch was edited', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const bound = createSdkSandbox();
+    bound.replaceContentsDetailed.mockResolvedValue([
+      { path: '/workspace/a.txt', replacedCount: 2 },
+      { path: '/workspace/b.txt', replacedCount: 0 },
+      { path: '/workspace/c.txt', replacedCount: 0 }
+    ]);
+    bindSandbox(adapter, bound.sandbox);
+
+    const result = adapter.replaceContent([
+      { path: 'a.txt', oldContent: 'old', newContent: 'new' },
+      { path: 'b.txt', oldContent: 'missing', newContent: 'new' },
+      { path: 'c.txt', oldContent: 'missing', newContent: 'new' }
+    ]);
+
+    await expect(result).resolves.toEqual([
+      { path: '/workspace/a.txt', status: 'replaced', replacedCount: 2 },
+      { path: '/workspace/b.txt', status: 'unmatched' },
+      { path: '/workspace/c.txt', status: 'unmatched' }
+    ]);
+    expect(bound.replaceContentsDetailed).toHaveBeenCalledWith([
+      { path: '/workspace/a.txt', oldContent: 'old', newContent: 'new' },
+      { path: '/workspace/b.txt', oldContent: 'missing', newContent: 'new' },
+      { path: '/workspace/c.txt', oldContent: 'missing', newContent: 'new' }
+    ]);
+  });
+
+  it('reports a zero-match response from a verbose request through the real SDK', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const bound = createSdkSandbox();
+    const requests: Request[] = [];
+    const mockFetch: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      const url = new URL(request.url);
+      // 与 execd 一致：没有 verbose 时，HTTP 200 不携带替换次数。
+      return url.searchParams.get('verbose') === 'true'
+        ? Response.json({ '/workspace/a.txt': { replacedCount: 0 } })
+        : new Response(null, { status: 200 });
+    };
+    const options = { baseUrl: 'http://sandbox.test', fetch: mockFetch };
+    Object.defineProperty(bound.sandbox, 'files', {
+      value: new FilesystemAdapter(createExecdClient(options), options)
+    });
+    bindSandbox(adapter, bound.sandbox);
+
+    await expect(
+      adapter.replaceContent([{ path: 'a.txt', oldContent: 'missing', newContent: 'new' }])
+    ).resolves.toEqual([{ path: '/workspace/a.txt', status: 'unmatched' }]);
+
+    expect(requests).toHaveLength(1);
+    const [request] = requests;
+    const url = new URL(request.url);
+    expect(url.pathname).toBe('/files/replace');
+    expect(url.searchParams.get('verbose')).toBe('true');
+    const body: unknown = await request.json();
+    expect(body).toStrictEqual({ '/workspace/a.txt': { old: 'missing', new: 'new' } });
+  });
+
+  it('stops later batches and reports skipped entries after an unmatched edit', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const files = new Map([['/workspace/a.txt', 'new']]);
+    const bound = createSdkSandbox({ files });
+    // 同批次 b 的计数缺失，只表示未知，不能和后续尚未执行的条目混淆。
+    bound.replaceContentsDetailed.mockResolvedValue([
+      { path: '/workspace/a.txt', replacedCount: 0 }
+    ]);
+    bindSandbox(adapter, bound.sandbox);
+
+    const results = await adapter.replaceContent([
+      { path: 'a.txt', oldContent: 'missing', newContent: 'new' },
+      { path: 'b.txt', oldContent: 'old', newContent: 'new' },
+      { path: '/workspace/a.txt', oldContent: 'new', newContent: 'later' },
+      { path: 'a.txt', oldContent: 'later', newContent: 'final' }
+    ]);
+
+    expect(results.slice(0, 2)).toEqual([
+      { path: '/workspace/a.txt', status: 'unmatched' },
+      { path: '/workspace/b.txt', status: 'unknown' }
+    ]);
+    expect(results.slice(2)).toEqual([
+      { path: '/workspace/a.txt', status: 'skipped' },
+      { path: '/workspace/a.txt', status: 'skipped' }
+    ]);
+    expect(files.get('/workspace/a.txt')).toBe('new');
+    expect(bound.replaceContentsDetailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts empty replacement details from servers without verbose support', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const bound = createSdkSandbox();
+    bound.replaceContentsDetailed.mockResolvedValue([]);
+    bindSandbox(adapter, bound.sandbox);
+
+    await expect(
+      adapter.replaceContent([
+        { path: 'a.txt', oldContent: 'old', newContent: 'new' },
+        { path: '/workspace/a.txt', oldContent: 'new', newContent: 'later' }
+      ])
+    ).resolves.toEqual([
+      { path: '/workspace/a.txt', status: 'unknown' },
+      { path: '/workspace/a.txt', status: 'unknown' }
+    ]);
+
+    expect(bound.replaceContentsDetailed).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates replacement request failures without sending later batches', async () => {
+    const adapter = new OpenSandboxAdapter(CONNECTION);
+    const bound = createSdkSandbox();
+    const error = new Error('Replace contents failed');
+    bound.replaceContentsDetailed.mockRejectedValue(error);
+    bindSandbox(adapter, bound.sandbox);
+
+    await expect(
+      adapter.replaceContent([
+        { path: 'a.txt', oldContent: 'old', newContent: 'new' },
+        { path: '/workspace/a.txt', oldContent: 'new', newContent: 'later' }
+      ])
+    ).rejects.toBe(error);
+
+    expect(bound.replaceContentsDetailed).toHaveBeenCalledTimes(1);
   });
 
   it('converts POSIX modes at the SDK boundary', async () => {
@@ -304,7 +654,9 @@ describe('OpenSandboxAdapter', () => {
     const onComplete = vi.fn();
 
     await adapter.executeStream('echo hello', {
-      onStdout: (message) => chunks.push(message.text),
+      onStdout: (message) => {
+        chunks.push(message.text);
+      },
       onComplete
     });
 

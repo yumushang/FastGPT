@@ -1,16 +1,24 @@
 import FormData from 'form-data';
+import path from 'node:path';
 import type { ReadFileResponse } from '../../../worker/readFile/type';
+import { UserError } from '@fastgpt/global/common/error/utils';
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
+import type { IultmzhFileParseConfigType } from '@fastgpt/global/core/dataset/type';
 import { axios } from '../../api/axios';
 import { parseMarkdownBase64Images } from '@fastgpt/global/common/string/markdown';
 import { createPdfParseUsage } from '../../../support/wallet/usage/controller';
 import { useDoc2xServer } from '../../../thirdProvider/doc2x';
 import { useTextinServer } from '../../../thirdProvider/textin';
 import { useSomarkServer } from '../../../thirdProvider/somark';
+import { parseFromSangfor, useSangforParse } from '../../../thirdProvider/sangfor';
+import { appendIultmzhFileParseFields } from '../../../thirdProvider/sangfor/parseConfig';
 import { readRawContentFromBuffer, readRawContentFromSource } from '../../../worker/function';
 import { getLogger, LogCategories } from '../../logger';
+import { logInstanceConfigRead } from '../../system/migrationCoverageLog';
 import { getImageBuffer } from '../image/utils';
 import { uploadParsedPdfImage } from './image';
 import { getBackendFileOperationTimeoutMs } from '../parseTimeout';
+import { getSystemInstanceConfig } from '../../system/systemInstanceConfig/runtime';
 import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import type { FileSource } from './source';
@@ -32,6 +40,7 @@ export const readFileContentByBuffer = async ({
   buffer,
   encoding,
   customPdfParse = false,
+  sangforFileParseConfig,
   usageId,
   getFormatText = true,
   imageKeyOptions,
@@ -45,6 +54,7 @@ export const readFileContentByBuffer = async ({
   encoding: string;
 
   customPdfParse?: boolean;
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   usageId?: string;
   getFormatText?: boolean;
   imageKeyOptions?: {
@@ -61,6 +71,7 @@ export const readFileContentByBuffer = async ({
     buffer,
     encoding,
     customPdfParse,
+    sangforFileParseConfig,
     usageId,
     getFormatText,
     imageKeyOptions,
@@ -76,15 +87,18 @@ export const readFileContentBySource = async ({
   tmbId,
   source,
   customPdfParse = false,
+  sangforFileParseConfig,
   usageId,
   getFormatText = true,
   imageKeyOptions,
-  onPdfParseUsage
+  onPdfParseUsage,
+  forceSystemParse
 }: {
   teamId: string;
   tmbId: string;
   source: FileSource;
   customPdfParse?: boolean;
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   usageId?: string;
   getFormatText?: boolean;
   imageKeyOptions?: {
@@ -92,6 +106,8 @@ export const readFileContentBySource = async ({
     expiredTime?: Date;
   };
   onPdfParseUsage?: (usage: ChatNodeUsageType) => void;
+  /** 置 true 时忽略 sangfor 外部解析路由（结构化导入等需要内置解析产物的链路使用）。 */
+  forceSystemParse?: boolean;
 }): Promise<Pick<ReadFileResponse, 'rawText' | 'tableInfo' | 'sourceMetadata'>> =>
   readFileContent({
     teamId,
@@ -100,10 +116,12 @@ export const readFileContentBySource = async ({
     source,
     encoding: source.metadata.encoding ?? '',
     customPdfParse,
+    sangforFileParseConfig,
     usageId,
     getFormatText,
     imageKeyOptions,
-    onPdfParseUsage
+    onPdfParseUsage,
+    forceSystemParse
   });
 
 const readFileContent = async ({
@@ -114,10 +132,12 @@ const readFileContent = async ({
   source,
   encoding: initialEncoding,
   customPdfParse,
+  sangforFileParseConfig,
   usageId,
   getFormatText,
   imageKeyOptions,
-  onPdfParseUsage
+  onPdfParseUsage,
+  forceSystemParse
 }: {
   teamId: string;
   tmbId: string;
@@ -126,6 +146,7 @@ const readFileContent = async ({
   source?: FileSource;
   encoding: string;
   customPdfParse: boolean;
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   usageId?: string;
   getFormatText: boolean;
   imageKeyOptions?: {
@@ -133,6 +154,7 @@ const readFileContent = async ({
     expiredTime?: Date;
   };
   onPdfParseUsage?: (usage: ChatNodeUsageType) => void;
+  forceSystemParse?: boolean;
 }): Promise<Pick<ReadFileResponse, 'rawText' | 'tableInfo' | 'sourceMetadata'>> => {
   if (!initialBuffer && !source) {
     throw new Error('File content or source is required');
@@ -208,7 +230,7 @@ const readFileContent = async ({
     if (onPdfParseUsage) {
       onPdfParseUsage({
         moduleName: i18nT('account_usage:pdf_enhanced_parse'),
-        totalPoints: pages * (global.systemEnv?.customPdfParse?.price || 0),
+        totalPoints: pages * getSystemInstanceConfig().providers.documentParse.customPdf.price,
         pages
       });
       return;
@@ -222,18 +244,30 @@ const readFileContent = async ({
     });
   };
   const parsePdfFromCustomService = async (): Promise<ReadFileResponse> => {
-    const url = global.systemEnv.customPdfParse?.url;
-    const token = global.systemEnv.customPdfParse?.key;
+    const url = getSystemInstanceConfig().providers.documentParse.customPdf?.url;
+    const token = getSystemInstanceConfig().providers.documentParse.customPdf?.key;
     if (!url) return systemParse();
 
-    const { buffer, extension: materializedExtension } = await getMaterializedFile();
+    const { buffer, extension: materializedExtension, metadata } = await getMaterializedFile();
+    // 保留来源文件名主体并清理空白和 multipart 特殊字符；统一使用物化格式的小写后缀，兼容旧解析服务。
+    const filename = (() => {
+      const originalFilename = metadata?.filename?.trim().replace(/[\\/"\r\n]/g, '_');
+      if (!originalFilename) return `file.${materializedExtension}`;
+
+      const filenameExtension = path.extname(originalFilename);
+      const filenameWithoutExtension = filenameExtension
+        ? originalFilename.slice(0, -filenameExtension.length)
+        : originalFilename.replace(/\.$/, '');
+      return `${filenameWithoutExtension}.${materializedExtension}`;
+    })();
     const start = Date.now();
-    logger.info('Start parsing file via external service', { extension });
+    logger.info('Start parsing file via external service', { extension, filename });
 
     const data = new FormData();
     data.append('file', buffer, {
-      filename: `file.${materializedExtension}`
+      filename
     });
+    appendIultmzhFileParseFields(data, sangforFileParseConfig);
     const { data: response } = await axios.post<{
       pages: number;
       markdown: string;
@@ -252,6 +286,7 @@ const readFileContent = async ({
 
     logger.info('External file parsing completed', {
       extension,
+      filename,
       durationMs: Date.now() - start
     });
 
@@ -265,7 +300,7 @@ const readFileContent = async ({
     };
   };
   const parsePdfFromSomark = async (): Promise<ReadFileResponse> => {
-    const apiKey = global.systemEnv.customPdfParse?.somarkApiKey;
+    const apiKey = getSystemInstanceConfig().providers.documentParse.customPdf?.somarkApiKey;
     if (!apiKey) return systemParse();
 
     const { buffer } = await getMaterializedFile();
@@ -281,8 +316,9 @@ const readFileContent = async ({
   };
   // Textin api
   const parsePdfFromTextin = async (): Promise<ReadFileResponse> => {
-    const appId = global.systemEnv.customPdfParse?.textinAppId;
-    const secretCode = global.systemEnv.customPdfParse?.textinSecretCode;
+    const appId = getSystemInstanceConfig().providers.documentParse.customPdf?.textinAppId;
+    const secretCode =
+      getSystemInstanceConfig().providers.documentParse.customPdf?.textinSecretCode;
     if (!appId || !secretCode) return systemParse();
 
     const { buffer } = await getMaterializedFile();
@@ -318,7 +354,7 @@ const readFileContent = async ({
   };
   // Doc2x api
   const parsePdfFromDoc2x = async (): Promise<ReadFileResponse> => {
-    const doc2xKey = global.systemEnv.customPdfParse?.doc2xKey;
+    const doc2xKey = getSystemInstanceConfig().providers.documentParse.customPdf?.doc2xKey;
     if (!doc2xKey) return systemParse();
 
     const { buffer } = await getMaterializedFile();
@@ -349,26 +385,108 @@ const readFileContent = async ({
       formatText: text
     };
   };
+  // Sangfor service
+  const parseDocumentFromSangfor = async (): Promise<ReadFileResponse> => {
+    const { buffer, extension: materializedExtension } = await getMaterializedFile();
+    const { text, pages } = await parseFromSangfor({
+      fileBuffer: buffer,
+      extension: materializedExtension,
+      imageKeyOptions,
+      sangforFileParseConfig
+    });
+
+    reportPdfParseUsage(pages);
+
+    return {
+      rawText: text,
+      formatText: text
+    };
+  };
   // Custom read file service
   const pdfParseFn = async (): Promise<ReadFileResponse> => {
     if (!customPdfParse) return systemParse();
-    if (global.systemEnv.customPdfParse?.url) return parsePdfFromCustomService();
-    if (global.systemEnv.customPdfParse?.somarkApiKey) return parsePdfFromSomark();
-    if (global.systemEnv.customPdfParse?.textinAppId) return parsePdfFromTextin();
-    if (global.systemEnv.customPdfParse?.doc2xKey) return parsePdfFromDoc2x();
 
-    return systemParse();
+    // 旧运行时按 custom → somark → textin → doc2x 的固定顺序挑第一个已配置凭据，
+    // 管理员切换 provider 后仍会被旧凭据抢占。这里改为按选中的 provider 分派；
+    // 运行期只使用实例配置中的 provider 和凭据，不读取历史 ENV。
+    const documentParse = getSystemInstanceConfig().providers.documentParse;
+    const provider = documentParse.provider;
+
+    logInstanceConfigRead({
+      callsite: 'runtime.common.file.read.pdfParseFn',
+      source: 'instance-config',
+      fields: [
+        { path: 'providers.documentParse.provider', value: provider },
+        {
+          path: 'providers.documentParse.customPdf.url',
+          value: documentParse.customPdf.url
+        },
+        {
+          path: 'providers.documentParse.customPdf.key',
+          value: documentParse.customPdf.key
+        },
+        {
+          path: 'providers.documentParse.customPdf.somarkApiKey',
+          value: documentParse.customPdf.somarkApiKey
+        },
+        {
+          path: 'providers.documentParse.customPdf.textinAppId',
+          value: documentParse.customPdf.textinAppId
+        },
+        {
+          path: 'providers.documentParse.customPdf.textinSecretCode',
+          value: documentParse.customPdf.textinSecretCode
+        },
+        {
+          path: 'providers.documentParse.customPdf.doc2xKey',
+          value: documentParse.customPdf.doc2xKey
+        }
+      ]
+    });
+
+    switch (provider) {
+      case 'customPdf':
+      case 'custom':
+        return parsePdfFromCustomService();
+      case 'somark':
+        return parsePdfFromSomark();
+      case 'textin':
+      case 'textln':
+        return parsePdfFromTextin();
+      case 'doc2x':
+        return parsePdfFromDoc2x();
+      case 'sangfor':
+      case 'none':
+      default:
+        // sangfor 只接管命中的扩展名；其余格式和显式 none 都走系统解析，
+        // 不再按旧 customPdfParse 凭据链回落，避免跨 Provider 使用凭据。
+        return systemParse();
+    }
   };
 
   const start = Date.now();
   logger.debug('Start parsing file', { extension });
 
+  const shouldUseIultmzH = !forceSystemParse && useSangforParse(extension);
+
   const parseResult = await (async () => {
+    if (shouldUseIultmzH) return await parseDocumentFromSangfor();
+
     if (extension === 'pdf') {
       return await pdfParseFn();
     }
     return await systemParse();
-  })();
+  })().catch((error) => {
+    // 统一兜底（未知失败落通用「文档解析失败」诊断码）仅覆盖 sangfor 路径。
+    // 其余格式（含 OFD）保持错误原样透出，避免抹掉 docx「请转 PDF」等原有提示；
+    // 映射为诊断码的错误（message = statusText）在响应层经 ERROR_RESPONSE[message]
+    // 还原为正确的 code 与 i18n 文案。
+    if (!shouldUseIultmzH) throw error;
+
+    if (error instanceof UserError) throw error;
+
+    throw new UserError(CommonErrEnum.pdfParseFailed);
+  });
   const { rawText, formatText, tableInfo } = parseResult;
   const sourceMetadata =
     parseResult.sourceMetadata ??

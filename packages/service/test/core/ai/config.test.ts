@@ -1,102 +1,55 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const originalEnv = {
-  AIPROXY_API_ENDPOINT: process.env.AIPROXY_API_ENDPOINT,
-  AIPROXY_API_TOKEN: process.env.AIPROXY_API_TOKEN,
-  OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
-  CHAT_API_KEY: process.env.CHAT_API_KEY
-};
-
 const importConfig = async () => {
   vi.resetModules();
   return import('@fastgpt/service/core/ai/config');
 };
-
-describe('AI config defaults', () => {
-  afterEach(() => {
-    vi.stubEnv('AIPROXY_API_ENDPOINT', originalEnv.AIPROXY_API_ENDPOINT);
-    vi.stubEnv('AIPROXY_API_TOKEN', originalEnv.AIPROXY_API_TOKEN);
-    vi.stubEnv('OPENAI_BASE_URL', originalEnv.OPENAI_BASE_URL);
-    vi.stubEnv('CHAT_API_KEY', originalEnv.CHAT_API_KEY);
+beforeEach(() => {
+  vi.stubEnv('AIPROXY_API_ENDPOINT', 'http://aiproxy:3000');
+  vi.stubEnv('AIPROXY_API_TOKEN', 'aiproxy-token');
+});
+afterEach(() => vi.unstubAllEnvs());
+describe('AI config instance source', () => {
+  it('uses the ENV endpoint and token', async () => {
+    const { getOpenaiBaseUrl, getOpenaiBaseKey, getAxiosConfig } = await importConfig();
+    expect(getOpenaiBaseUrl()).toBe('http://aiproxy:3000/v1');
+    expect(getOpenaiBaseKey()).toBe('aiproxy-token');
+    expect(getAxiosConfig()).toEqual({
+      baseUrl: 'http://aiproxy:3000/v1',
+      authorization: 'Bearer aiproxy-token'
+    });
+    vi.stubEnv('AIPROXY_API_ENDPOINT', 'https://new-proxy.example.com');
+    vi.resetModules();
+    const reloaded = await importConfig();
+    expect(reloaded.getOpenaiBaseUrl()).toBe('https://new-proxy.example.com/v1');
   });
-
-  it('falls back to OpenAI config when AI Proxy is not explicitly configured', async () => {
-    vi.stubEnv('AIPROXY_API_ENDPOINT', '');
+  it('falls back when a configured endpoint has no token', async () => {
     vi.stubEnv('AIPROXY_API_TOKEN', '');
-    vi.stubEnv('OPENAI_BASE_URL', 'https://example.com/v1');
-    vi.stubEnv('CHAT_API_KEY', 'sk-chat');
+    const { getAiProxyBaseUrl, getOpenaiBaseUrl, getOpenaiBaseKey } = await importConfig();
 
-    const { openaiBaseUrl, openaiBaseKey } = await importConfig();
-
-    expect(openaiBaseUrl).toBe('https://example.com/v1');
-    expect(openaiBaseKey).toBe('sk-chat');
+    expect(getAiProxyBaseUrl()).toBeUndefined();
+    expect(getOpenaiBaseUrl()).toBe('https://api.openai.com/v1');
+    expect(getOpenaiBaseKey()).toBe('');
   });
 
-  it('uses AI Proxy only when the endpoint is explicitly configured', async () => {
-    vi.stubEnv('AIPROXY_API_ENDPOINT', 'http://aiproxy:3000');
-    vi.stubEnv('AIPROXY_API_TOKEN', 'aiproxy-token');
-    vi.stubEnv('OPENAI_BASE_URL', 'https://example.com/v1');
-    vi.stubEnv('CHAT_API_KEY', 'sk-chat');
+  it('does not send a proxy token without an endpoint', async () => {
+    vi.stubEnv('AIPROXY_API_ENDPOINT', undefined);
+    vi.stubEnv('AIPROXY_API_TOKEN', 'private-proxy-token');
+    const { getOpenaiBaseUrl, getOpenaiBaseKey, getAxiosConfig } = await importConfig();
 
-    const { openaiBaseUrl, openaiBaseKey } = await importConfig();
-
-    expect(openaiBaseUrl).toBe('http://aiproxy:3000/v1');
-    expect(openaiBaseKey).toBe('aiproxy-token');
+    expect(getOpenaiBaseUrl()).toBe('https://api.openai.com/v1');
+    expect(getOpenaiBaseKey()).toBe('');
+    expect(getAxiosConfig().authorization).toBe('Bearer ');
+    expect(getAxiosConfig().authorization).not.toContain('private-proxy-token');
   });
 
-  it('normalizes trailing slashes from AI Proxy endpoint', async () => {
+  it('normalizes ENV proxy addresses before building request URLs', async () => {
     vi.stubEnv('AIPROXY_API_ENDPOINT', 'http://aiproxy:3000///');
-    vi.stubEnv('AIPROXY_API_TOKEN', 'aiproxy-token');
-    vi.stubEnv('OPENAI_BASE_URL', 'https://example.com/v1');
-    vi.stubEnv('CHAT_API_KEY', 'sk-chat');
-
-    const { openaiBaseUrl, openaiBaseKey } = await importConfig();
-
-    expect(openaiBaseUrl).toBe('http://aiproxy:3000/v1');
-    expect(openaiBaseKey).toBe('aiproxy-token');
-  });
-
-  it('falls back to chat API key when AI Proxy endpoint has no token', async () => {
-    vi.stubEnv('AIPROXY_API_ENDPOINT', 'http://aiproxy:3000');
-    vi.stubEnv('AIPROXY_API_TOKEN', undefined);
-    vi.stubEnv('OPENAI_BASE_URL', 'https://example.com/v1');
-    vi.stubEnv('CHAT_API_KEY', 'sk-chat');
-
-    const { openaiBaseUrl, openaiBaseKey } = await importConfig();
-
-    expect(openaiBaseUrl).toBe('http://aiproxy:3000/v1');
-    expect(openaiBaseKey).toBe('sk-chat');
-  });
-
-  it('ignores AI Proxy token when endpoint is not configured', async () => {
-    vi.stubEnv('AIPROXY_API_ENDPOINT', '');
-    vi.stubEnv('AIPROXY_API_TOKEN', 'aiproxy-token');
-    vi.stubEnv('OPENAI_BASE_URL', 'https://example.com/v1');
-    vi.stubEnv('CHAT_API_KEY', 'sk-chat');
-
-    const { openaiBaseUrl, openaiBaseKey } = await importConfig();
-
-    expect(openaiBaseUrl).toBe('https://example.com/v1');
-    expect(openaiBaseKey).toBe('sk-chat');
+    const { getOpenaiBaseUrl } = await importConfig();
+    expect(getOpenaiBaseUrl()).toBe('http://aiproxy:3000/v1');
   });
 });
-
 describe('AI config user OpenAI account', () => {
-  const originalSystemEnv = global.systemEnv;
-
-  beforeEach(() => {
-    global.systemEnv = {
-      ...(global.systemEnv || {}),
-      oneapiUrl: 'https://system.example.com/v1',
-      chatApiKey: 'system-key'
-    } as any;
-  });
-
-  afterEach(() => {
-    global.systemEnv = originalSystemEnv;
-  });
-
-  it('should ignore user baseUrl when user key is missing', async () => {
+  it('uses AIProxy when the user key is missing, when the user key is missing', async () => {
     const { getAIApi, getAxiosConfig } = await importConfig();
 
     expect(
@@ -106,8 +59,8 @@ describe('AI config user OpenAI account', () => {
         } as any
       })
     ).toEqual({
-      baseUrl: 'https://system.example.com/v1',
-      authorization: 'Bearer system-key'
+      baseUrl: 'http://aiproxy:3000/v1',
+      authorization: 'Bearer aiproxy-token'
     });
     expect(
       getAIApi({
@@ -117,7 +70,7 @@ describe('AI config user OpenAI account', () => {
       }).requestMeta
     ).toEqual({
       usedUserOpenAIKey: false,
-      baseUrl: 'https://system.example.com/v1'
+      baseUrl: 'http://aiproxy:3000/v1'
     });
   });
 
@@ -171,5 +124,32 @@ describe('AI config user OpenAI account', () => {
       usedUserOpenAIKey: true,
       baseUrl: 'https://user.example.com/v1'
     });
+  });
+
+  it('omits AI Proxy scope headers and selects SSRF-protected axios only for team custom endpoints', async () => {
+    const [{ getAiproxyScopeHeaders, getModelRequestClient, openaiBaseUrl }, axiosModule] =
+      await Promise.all([importConfig(), import('@fastgpt/service/common/api/axios')]);
+
+    expect(
+      getAiproxyScopeHeaders(
+        {
+          scope: 'team',
+          tmbId: 'tmb-1',
+          requestUrl: 'https://custom.example.com/v1'
+        } as any,
+        openaiBaseUrl
+      )
+    ).toEqual({});
+
+    expect(
+      getModelRequestClient({
+        scope: 'team',
+        requestUrl: 'https://api.example.com/v1'
+      })
+    ).toBe(axiosModule.axios);
+    expect(getModelRequestClient({ scope: 'team' })).toBe(axiosModule.axiosWithoutSSRF);
+    expect(
+      getModelRequestClient({ scope: 'system', requestUrl: 'https://api.example.com/v1' })
+    ).toBe(axiosModule.axiosWithoutSSRF);
   });
 });

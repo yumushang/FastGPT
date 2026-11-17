@@ -4,8 +4,9 @@ import MyBox from '../../../common/MyBox';
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { useTranslation } from 'next-i18next';
 import MyIcon from '../../../common/Icon';
-import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
+import { selectPluginText } from '@fastgpt/global/common/i18n/utils';
 import { PluginStatusEnum, type PluginStatusType } from '@fastgpt/global/core/plugin/type';
+import type { PluginTextType } from '@fastgpt/global/core/plugin/type';
 import DebugToolTag from './DebugToolTag';
 import SystemToolTag from './SystemToolTag';
 import { normalizeToolCardTags } from './utils';
@@ -15,8 +16,8 @@ const marketplaceOfficialSource = 'official';
 
 export type ToolCardItemType = {
   id: string;
-  name: string;
-  description?: string;
+  name: PluginTextType;
+  description?: PluginTextType;
   icon?: string;
   author?: string;
   tags?: string[] | null;
@@ -29,6 +30,7 @@ export type ToolCardItemType = {
   etag?: string;
   downloadCount?: number;
   associatedPluginId?: string;
+  type?: 'tool' | 'moderation';
   source?: string;
   registrySource?: 'system' | 'team';
   isDebug?: boolean;
@@ -139,7 +141,7 @@ const ToolCard = ({
     if (mode === 'marketplace') return null;
 
     const pluginStatusMap: Partial<
-      Record<PluginStatusType, { label: string; color: string; icon?: string } | null>
+      Record<PluginStatusType, { label: string; color: string } | null>
     > = {
       [PluginStatusEnum.Offline]: {
         label: t('common:error.tool_not_exist'),
@@ -171,18 +173,22 @@ const ToolCard = ({
   return (
     <MyBox
       key={item.id}
+      h={'full'}
       {...(isMarketplaceVariant
         ? {
             px: '17px',
             pt: '17px',
             pb: '13px',
+            h: '178px',
             minH: '178px',
+            maxH: '178px',
             border: '1px solid',
             borderColor: '#DFE2EA'
           }
         : {
-            p: 4,
+            pt: 5,
             pb: 3,
+            px: 5,
             border: 'base'
           })}
       bg={'white'}
@@ -242,7 +248,7 @@ const ToolCard = ({
             flex={'0 1 auto'}
             className={'textEllipsis'}
           >
-            {parseI18nString(item.name, i18n.language)}
+            {selectPluginText(item.name, i18n.language)}
           </Box>
           {shouldShowRegistrySourceBadge && item.registrySource === 'system' && <SystemToolTag />}
         </Flex>
@@ -302,7 +308,6 @@ const ToolCard = ({
             color={statusLabel.color}
             gap={1}
           >
-            {statusLabel.icon && <MyIcon name={statusLabel.icon as any} w={4} />}
             {statusLabel.label}
           </Flex>
         )}
@@ -318,9 +323,8 @@ const ToolCard = ({
         lineHeight={isMarketplaceVariant ? '19.2px' : undefined}
         color={isMarketplaceVariant ? '#667085' : 'myGray.500'}
       >
-        <Box className={'textEllipsis2'}>
-          {parseI18nString(item.description || '', i18n.language) ||
-            t('app:templateMarket.no_intro')}
+        <Box className={'textEllipsis2'} noOfLines={2}>
+          {selectPluginText(item.description, i18n.language) || t('app:templateMarket.no_intro')}
         </Box>
       </Box>
       <Flex

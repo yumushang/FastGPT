@@ -3,23 +3,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockResolveFormData,
   mockClearDiskTempFiles,
-  mockAuthDataset,
+  mockAuthDatasetCollectionCreate,
   mockCheckDatasetIndexLimit,
   mockUpload,
   mockGetDatasetFileSource,
   mockCleanupPendingDatasetFile,
   mockParseDatasetImportFile,
-  mockCreateCollectionAndInsertData
+  mockCreateCollectionAndInsertData,
+  mockGetDatasetModelAuthContext,
+  modelAuthContext
 } = vi.hoisted(() => ({
   mockResolveFormData: vi.fn(),
   mockClearDiskTempFiles: vi.fn(),
-  mockAuthDataset: vi.fn(),
+  mockAuthDatasetCollectionCreate: vi.fn(),
   mockCheckDatasetIndexLimit: vi.fn(),
   mockUpload: vi.fn(),
   mockGetDatasetFileSource: vi.fn(),
   mockCleanupPendingDatasetFile: vi.fn(),
   mockParseDatasetImportFile: vi.fn(),
-  mockCreateCollectionAndInsertData: vi.fn()
+  mockCreateCollectionAndInsertData: vi.fn(),
+  mockGetDatasetModelAuthContext: vi.fn(),
+  modelAuthContext: { modelHandle: {}, authorizedIds: new Set<string>() }
 }));
 
 vi.mock('@/service/middleware/entry', () => ({
@@ -34,7 +38,7 @@ vi.mock('@fastgpt/service/common/file/multer', () => ({
 }));
 
 vi.mock('@fastgpt/service/support/permission/dataset/auth', () => ({
-  authDataset: mockAuthDataset
+  authDatasetCollectionCreate: mockAuthDatasetCollectionCreate
 }));
 
 vi.mock('@fastgpt/service/support/permission/teamLimit', () => ({
@@ -55,6 +59,10 @@ vi.mock('@fastgpt/service/core/dataset/importFile', () => ({
 
 vi.mock('@fastgpt/service/core/dataset/collection/controller', () => ({
   createCollectionAndInsertData: mockCreateCollectionAndInsertData
+}));
+
+vi.mock('@fastgpt/service/core/dataset/model', () => ({
+  getDatasetModelAuthContext: mockGetDatasetModelAuthContext
 }));
 
 vi.mock('@fastgpt/global/common/i18n/utils', () => ({
@@ -91,7 +99,7 @@ describe('dataset multipart file source lifecycle', () => {
     vi.clearAllMocks();
     source.materialize.mockReset();
     mockResolveFormData.mockResolvedValue({
-      data: { datasetId },
+      data: { datasetId, tags: [{ tag: 'score', value: 10 }] },
       fileMetadata: {
         path: '/tmp/source.csv',
         originalname: 'source.csv',
@@ -99,11 +107,13 @@ describe('dataset multipart file source lifecycle', () => {
       },
       getReadStream: vi.fn(() => 'local-upload-stream')
     });
-    mockAuthDataset.mockResolvedValue({
+    mockAuthDatasetCollectionCreate.mockResolvedValue({
       teamId: 'team-id',
       tmbId: 'tmb-id',
+      isRoot: false,
       dataset: { _id: datasetId }
     });
+    mockGetDatasetModelAuthContext.mockResolvedValue(modelAuthContext);
     mockUpload.mockResolvedValue(fileId);
     mockGetDatasetFileSource.mockResolvedValue(source);
     mockCleanupPendingDatasetFile.mockResolvedValue(undefined);
@@ -140,8 +150,32 @@ describe('dataset multipart file source lifecycle', () => {
         mockParseDatasetImportFile.mock.invocationCallOrder[0]
       );
       expect(mockCleanupPendingDatasetFile).not.toHaveBeenCalled();
+      expect(mockCreateCollectionAndInsertData).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelAuthContext,
+          createCollectionParams: expect.objectContaining({
+            tags: [{ tag: 'score', value: 10 }]
+          })
+        })
+      );
     }
   );
+
+  it.each([
+    ['template', templateHandler],
+    ['backup', backupHandler],
+    ['local file', localFileHandler]
+  ])('rejects unauthorized embedding before uploading %s', async (_, handler) => {
+    const error = new Error('embedding model is not authorized');
+    mockGetDatasetModelAuthContext.mockRejectedValueOnce(error);
+
+    await expect(handler({} as never)).rejects.toBe(error);
+
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(mockGetDatasetFileSource).not.toHaveBeenCalled();
+    expect(mockParseDatasetImportFile).not.toHaveBeenCalled();
+    expect(mockCreateCollectionAndInsertData).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['template', templateHandler, 'dataset:template_file_invalid'],

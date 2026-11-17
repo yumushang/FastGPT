@@ -3,11 +3,12 @@ import { createContext } from 'use-context-selector';
 import type { EditTeamFormDataType } from './EditInfoModal';
 import dynamic from 'next/dynamic';
 import { getTeamList, getTeamMemberCount, putSwitchTeam } from '@/web/support/user/team/api';
+import { putAdminSwitchTeam } from '@/web/admin/team/api';
 import { TeamMemberStatusEnum } from '@fastgpt/global/support/user/team/constant';
 import { useUserStore } from '@/web/support/user/useUserStore';
 import type { TeamTmbItemType } from '@fastgpt/global/support/user/team/type';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { useRouter } from 'next/router';
 import { useChatStore } from '@/web/core/chat/context/useChatStore';
 import { accountCancellationActiveStatuses } from '@fastgpt/global/support/user/account/cancellation/constants';
@@ -44,7 +45,7 @@ export const TeamContext = createContext<TeamModalContextType>({
 });
 
 export const TeamModalContextProvider = ({ children }: { children: ReactNode }) => {
-  const { t } = useClientTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
 
   const [editTeamData, setEditTeamData] = useState<EditTeamFormDataType>();
@@ -67,13 +68,20 @@ export const TeamModalContextProvider = ({ children }: { children: ReactNode }) 
 
   const { runAsync: onSwitchTeam, loading: isSwitchingTeam } = useRequest(
     async (teamId: string) => {
+      const isRoot = userInfo?.username === 'root';
       const targetTeam = myTeams.find((team) => team.teamId === teamId);
-      await putSwitchTeam(teamId);
+      if (isRoot) {
+        await putAdminSwitchTeam({ teamId });
+      } else {
+        await putSwitchTeam(teamId);
+      }
       resetChatCache();
-      const isAccountCancellationPending = accountCancellationActiveStatuses.includes(
-        targetTeam?.accountCancellation
-          ?.status as (typeof accountCancellationActiveStatuses)[number]
-      );
+      const isAccountCancellationPending =
+        !isRoot &&
+        accountCancellationActiveStatuses.includes(
+          targetTeam?.accountCancellation
+            ?.status as (typeof accountCancellationActiveStatuses)[number]
+        );
       if (isAccountCancellationPending) {
         await router.replace('/account/cancel');
       } else if (router.pathname === '/account/cancel') {

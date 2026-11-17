@@ -1,54 +1,53 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import { getModelQuoteTokenLimit } from '@/web/core/ai/model/selection';
 import {
   Box,
+  Button,
   Flex,
   Grid,
-  type BoxProps,
-  useDisclosure,
-  Button,
   HStack,
-  Switch
+  Switch,
+  useDisclosure,
+  type BoxProps
 } from '@chakra-ui/react';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
 import { useTranslation } from 'next-i18next';
-
-import dynamic from 'next/dynamic';
-import Avatar from '@fastgpt/web/components/common/Avatar';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
-import SearchParamsTip from '@/components/core/dataset/SearchParamsTip';
+import React, { useCallback, useMemo } from 'react';
 import SettingLLMModel from '@/components/core/ai/SettingLLMModel';
-import { TTSTypeEnum } from '@/web/core/app/constants';
-import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
-import ToolSelect from '../FormComponent/ToolSelector/ToolSelect';
-import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
-import { cardStyles } from '../../constants';
-import { SmallAddIcon } from '@chakra-ui/icons';
-import MyIconButton from '@fastgpt/web/components/common/Icon/button';
-import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
-import { useSkillManager } from './hooks/useSkillManager';
-import { AGENT_SANDBOX_TOOLSET_ID, SANDBOX_ICON } from '@fastgpt/global/core/ai/sandbox/tools';
-import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
-import SandboxConfigButton from '../../components/SandboxConfigButton';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { useUserStore } from '@/web/support/user/useUserStore';
-import MyTag from '@fastgpt/web/components/common/Tag/index';
-import { useAgentSkillSelect } from './hooks/useAgentSkillSelect';
-import { RechargeModal } from '@/components/support/wallet/NotSufficientModal';
 import DatasetCard from '@/components/core/app/DatasetCard';
-import { useContextSelector } from 'use-context-selector';
-import { AppContext } from '@/pageComponents/app/detail/context';
+import { AgentSkillCardList } from '@/components/core/app/SkillCard';
 import { useWelcomeTextFoldState } from '@/components/core/app/useAppEditorUIState';
-import {
-  findClientModelByReference,
-  resolveClientModelReferenceId
-} from '@/web/core/ai/model/modelReference';
+import SearchParamsTip from '@/components/core/dataset/SearchParamsTip';
+import { RechargeModal } from '@/components/support/wallet/NotSufficientModal';
+import { AppContext } from '@/pageComponents/app/detail/context';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useModelDetail } from '@/web/core/ai/model/useModelDetail';
+import { TTSTypeEnum } from '@/web/core/app/constants';
+import { useUserStore } from '@/web/support/user/useUserStore';
+import { SmallAddIcon } from '@chakra-ui/icons';
+import { SANDBOX_ICON } from '@fastgpt/global/core/ai/sandbox/tools';
+import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
+import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
+import MyTag from '@fastgpt/web/components/common/Tag/index';
+import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
+import dynamic from 'next/dynamic';
+import { useContextSelector } from 'use-context-selector';
+import SandboxConfigButton from '../../components/SandboxConfigButton';
+import { cardStyles } from '../../constants';
+import ToolSelect from '../FormComponent/ToolSelector/ToolSelect';
+import { useAppDatasetTagFilter } from '../FormComponent/useAppDatasetTagFilter';
+import { useInitializeQueryExtensionModel } from '../FormComponent/useInitializeQueryExtensionModel';
+import { useAgentSkillSelect } from './hooks/useAgentSkillSelect';
+import { useSkillManager } from './hooks/useSkillManager';
 
 const DatasetSelectModal = dynamic(() => import('@/components/core/app/DatasetSelectModal'));
 const DatasetParamsModal = dynamic(() => import('@/components/core/app/DatasetParamsModal'));
 const SkillSelectModal = dynamic(() => import('../FormComponent/ToolSelector/SkillSelectModal'));
 const WhisperConfig = dynamic(() => import('@/components/core/app/WhisperConfig'));
+const TTSSelect = dynamic(() => import('@/components/core/app/TTSSelect'));
+const QGConfig = dynamic(() => import('@/components/core/app/QGConfig'));
 const WelcomeTextConfig = dynamic(() => import('@/components/core/app/WelcomeTextConfig'));
 const WelcomeQuestionsConfig = dynamic(
   () => import('@/components/core/app/WelcomeQuestionsConfig')
@@ -77,6 +76,10 @@ const EditForm = ({
   const appId = useContextSelector(AppContext, (v) => v.appId);
 
   const selectDatasets = useMemo(() => appForm?.dataset?.datasets, [appForm]);
+  const { datasetIds, formatVariables, tagFilterReferenceList } = useAppDatasetTagFilter({
+    appForm,
+    setAppForm
+  });
   const { isWelcomeTextFolded, toggleWelcomeTextFold } = useWelcomeTextFoldState(appId);
 
   const {
@@ -92,25 +95,26 @@ const EditForm = ({
     isOpenRecharge,
     onCloseRecharge
   } = useAgentSkillSelect({
-    appForm,
+    selectedAgentSkills: appForm.selectedAgentSkills ?? [],
+    useAgentSandbox: Boolean(appForm.aiSettings.useAgentSandbox),
     showSandbox,
     enableSandbox,
-    setAppForm
-  });
-
-  const { skillOption, selectedSkills, onClickSkill, onRemoveSkill, SkillModal } = useSkillManager({
-    selectedTools: appForm.selectedTools,
-    selectedAgentSkills,
-    onDeleteTool: (id, source) => {
+    onUpdateSkills: (update, enableSandbox) =>
       setAppForm((state) => ({
         ...state,
-        selectedTools:
-          state.selectedTools?.filter(
-            (item) =>
-              getToolIdentityKey(item.pluginId, item.source) !== getToolIdentityKey(id, source)
-          ) || []
-      }));
-    },
+        selectedAgentSkills: update(state.selectedAgentSkills ?? []),
+        aiSettings: { ...state.aiSettings, ...(enableSandbox ? { useAgentSandbox: true } : {}) }
+      })),
+    onUpdateSandbox: (checked) =>
+      setAppForm((state) => ({
+        ...state,
+        aiSettings: { ...state.aiSettings, useAgentSandbox: checked }
+      }))
+  });
+
+  const skillManager = useSkillManager({
+    selectedTools: appForm.selectedTools,
+    selectedAgentSkills,
     onUpdateOrAddTool: (tool) => {
       setAppForm((state) => {
         const toolKey = getToolIdentityKey(tool.pluginId, tool.source);
@@ -135,6 +139,8 @@ const EditForm = ({
       });
     },
     onAddAgentSkill,
+    onEnableSandbox: () => onChangeAgentSandbox(true),
+    currentAppId: appId,
     canUploadFile: !!(
       appForm.chatConfig.fileSelectConfig?.canSelectFile ||
       appForm.chatConfig.fileSelectConfig?.canSelectImg ||
@@ -153,6 +159,7 @@ const EditForm = ({
       onOpenKbSelect();
     }
   });
+  const { skillOption, selectedSkills, onClickSkill } = skillManager;
 
   const {
     isOpen: isOpenDatasetSelect,
@@ -165,84 +172,15 @@ const EditForm = ({
     onClose: onCloseDatasetParams
   } = useDisclosure();
 
-  const { llmModelList, reRankModelList } = useUserModelLists();
-
-  useEffect(() => {
-    setAppForm((state) => {
-      const modelId = resolveClientModelReferenceId({
-        models: llmModelList,
-        reference: state.aiSettings
-      });
-      const rerankModelId = resolveClientModelReferenceId({
-        models: reRankModelList,
-        reference: {
-          modelId: state.dataset.rerankModelId,
-          model: state.dataset.rerankModel
-        }
-      });
-      const datasetSearchExtensionModelId = resolveClientModelReferenceId({
-        models: llmModelList,
-        reference: {
-          modelId: state.dataset.datasetSearchExtensionModelId,
-          model: state.dataset.datasetSearchExtensionModel
-        }
-      });
-      if (
-        modelId === state.aiSettings.modelId &&
-        rerankModelId === state.dataset.rerankModelId &&
-        datasetSearchExtensionModelId === state.dataset.datasetSearchExtensionModelId
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        aiSettings: {
-          ...state.aiSettings,
-          modelId
-        },
-        dataset: {
-          ...state.dataset,
-          rerankModelId,
-          datasetSearchExtensionModelId
-        }
-      };
-    });
-  }, [llmModelList, reRankModelList, setAppForm]);
-  const selectedModel =
-    findClientModelByReference({
-      models: llmModelList,
-      reference: appForm.aiSettings
-    }) ??
-    (appForm.aiSettings.modelId === undefined && !appForm.aiSettings.model
-      ? llmModelList[0]
-      : undefined);
-  const promptSkillOption = useMemo(
-    () => ({
-      ...skillOption,
-      onSelect: async (id: string) => {
-        const option = await skillOption.onSelect?.(id);
-        if (!option?.onClick) return option;
-
-        return {
-          ...option,
-          onClick: async (toolId: string) => {
-            const result = await option.onClick?.(toolId);
-
-            // AgentV2 提示词 @虚拟机 时，同步打开下方虚拟机开关。
-            if (result?.id === AGENT_SANDBOX_TOOLSET_ID && !appForm.aiSettings.useAgentSandbox) {
-              onChangeAgentSandbox(true);
-            }
-
-            return result;
-          }
-        };
-      }
-    }),
-    [appForm.aiSettings.useAgentSandbox, onChangeAgentSandbox, skillOption]
-  );
+  useInitializeQueryExtensionModel({ appId, appForm, setAppForm });
+  const { model: configuredModel } = useModelDetail({
+    ...appForm.aiSettings,
+    modelType: ModelTypeEnum.llm
+  });
+  const selectedModel = configuredModel;
   const tokenLimit = useMemo(() => {
-    return selectedModel?.config.quoteMaxToken ?? 3000;
-  }, [selectedModel?.config.quoteMaxToken]);
+    return getModelQuoteTokenLimit(configuredModel);
+  }, [configuredModel]);
 
   const updateWelcomeText = useCallback(
     (value: string) => {
@@ -281,86 +219,86 @@ const EditForm = ({
     <>
       <Box mt={4} {...cardStyles} boxShadow={'3.5'}>
         {/* ai */}
-        {selectedModel && (
-          <Box {...BoxStyles}>
-            <Flex alignItems={'center'}>
-              <MyIcon name={'core/app/simpleMode/ai'} w={'20px'} />
-              <FormLabel ml={2} flex={1}>
-                {t('app:ai_settings')}
-              </FormLabel>
-            </Flex>
-            <Flex alignItems={'center'} mt={5}>
-              <FormLabel w={['60px', '100px']}>{t('common:core.ai.Model')}</FormLabel>
-              <Box flex={'1 0 0'}>
-                <SettingLLMModel
-                  bg="myGray.50"
-                  defaultData={{
-                    modelId:
-                      appForm.aiSettings.modelId !== undefined
-                        ? appForm.aiSettings.modelId
-                        : appForm.aiSettings.model || undefined,
-                    // temperature: appForm.aiSettings.temperature,
-                    // maxToken: appForm.aiSettings.maxToken,
-                    // maxHistories: appForm.aiSettings.maxHistories,
-                    aiChatReasoning: appForm.aiSettings.aiChatReasoning ?? true,
-                    aiChatReasoningEffort: appForm.aiSettings.aiChatReasoningEffort
-                    // aiChatTopP: appForm.aiSettings.aiChatTopP,
-                    // aiChatStopSign: appForm.aiSettings.aiChatStopSign,
-                    // aiChatResponseFormat: appForm.aiSettings.aiChatResponseFormat,
-                    // aiChatJsonSchema: appForm.aiSettings.aiChatJsonSchema
-                  }}
-                  showMaxToken={false}
-                  showTemperature={false}
-                  showTopP={false}
-                  showStopSign={false}
-                  showResponseFormat={false}
-                  showMultimodalConfig={false}
-                  onChange={({ modelId, maxHistories = 6, ...data }) => {
-                    setAppForm((state) => ({
-                      ...state,
-                      aiSettings: {
-                        ...state.aiSettings,
-                        ...data,
-                        modelId,
-                        model: undefined,
-                        maxHistories
-                      }
-                    }));
-                  }}
-                />
-              </Box>
-            </Flex>
+        <Box {...BoxStyles}>
+          <Flex alignItems={'center'}>
+            <MyIcon name={'core/app/simpleMode/ai'} w={'20px'} />
+            <FormLabel ml={2} flex={1}>
+              {t('app:ai_settings')}
+            </FormLabel>
+          </Flex>
+          <Flex alignItems={'center'} mt={5}>
+            <FormLabel w={['60px', '100px']}>{t('common:core.ai.Model')}</FormLabel>
+            <Box flex={'1 1 0'} minW={0}>
+              <SettingLLMModel
+                appId={appId || undefined}
+                bg="myGray.50"
+                defaultData={{
+                  modelId:
+                    appForm.aiSettings.modelId !== undefined
+                      ? appForm.aiSettings.modelId
+                      : appForm.aiSettings.model || undefined,
+                  // temperature: appForm.aiSettings.temperature,
+                  // maxToken: appForm.aiSettings.maxToken,
+                  // maxHistories: appForm.aiSettings.maxHistories,
+                  aiChatReasoning: appForm.aiSettings.aiChatReasoning ?? true,
+                  aiChatReasoningEffort: appForm.aiSettings.aiChatReasoningEffort
+                  // aiChatTopP: appForm.aiSettings.aiChatTopP,
+                  // aiChatStopSign: appForm.aiSettings.aiChatStopSign,
+                  // aiChatResponseFormat: appForm.aiSettings.aiChatResponseFormat,
+                  // aiChatJsonSchema: appForm.aiSettings.aiChatJsonSchema
+                }}
+                showMaxToken={false}
+                showTemperature={false}
+                showTopP={false}
+                showStopSign={false}
+                showResponseFormat={false}
+                showMultimodalConfig={false}
+                onChange={({ modelId, maxHistories = 6, ...data }) => {
+                  setAppForm((state) => ({
+                    ...state,
+                    aiSettings: {
+                      ...state.aiSettings,
+                      ...data,
+                      modelId,
+                      model: undefined,
+                      maxHistories
+                    }
+                  }));
+                }}
+              />
+            </Box>
+          </Flex>
 
-            {/* Prompt */}
-            <Box mt={4}>
-              <HStack w={'100%'}>
-                <FormLabel>{t('common:core.ai.Prompt')}</FormLabel>
-              </HStack>
-              <Box mt={2}>
-                <PromptEditor
-                  minH={160}
-                  bg={'myGray.50'}
-                  title={t('common:core.ai.Prompt')}
-                  isRichText={true}
-                  skillOption={promptSkillOption}
-                  selectedSkills={selectedSkills}
-                  onClickSkill={onClickSkill}
-                  onRemoveSkill={onRemoveSkill}
-                  value={appForm.aiSettings.systemPrompt}
-                  onChange={(e) => {
-                    setAppForm((state) => ({
-                      ...state,
-                      aiSettings: {
-                        ...state.aiSettings,
-                        systemPrompt: e
-                      }
-                    }));
-                  }}
-                />
-              </Box>
+          {/* Prompt */}
+          <Box mt={4}>
+            <HStack w={'100%'}>
+              <FormLabel>{t('common:core.ai.Prompt')}</FormLabel>
+            </HStack>
+            <Box mt={2}>
+              <PromptEditor
+                minH={160}
+                bg={'myGray.50'}
+                title={t('common:core.ai.Prompt')}
+                isRichText={true}
+                placeholder={t('workflow:agent.prompt_placeholder')}
+                variableLabels={formatVariables}
+                skillOption={skillOption}
+                selectedSkills={selectedSkills}
+                onClickSkill={onClickSkill}
+                value={appForm.aiSettings.systemPrompt}
+                onChange={(e) => {
+                  setAppForm((state) => ({
+                    ...state,
+                    aiSettings: {
+                      ...state.aiSettings,
+                      systemPrompt: e
+                    }
+                  }));
+                }}
+              />
             </Box>
           </Box>
-        )}
+        </Box>
 
         {/* Sandbox (虚拟机) */}
         <Box {...BoxStyles}>
@@ -425,74 +363,7 @@ const EditForm = ({
             gridTemplateColumns={'repeat(2, minmax(0, 1fr))'}
             gridGap={[2, 4]}
           >
-            {selectedAgentSkills.map((item) => {
-              const isDeleted = !!item.isDeleted;
-
-              return (
-                <MyTooltip
-                  key={item.skillId}
-                  label={isDeleted ? t('skill:skill_deleted_click_remove_tip') : item.description}
-                >
-                  <Flex
-                    overflow={'hidden'}
-                    alignItems={'center'}
-                    p={2.5}
-                    bg={'white'}
-                    boxShadow={'0 4px 8px -2px rgba(16,24,40,.1),0 2px 4px -2px rgba(16,24,40,.06)'}
-                    borderRadius={'md'}
-                    border={'base'}
-                    borderColor={isDeleted ? 'red.600' : undefined}
-                    userSelect={'none'}
-                    _hover={{
-                      borderColor: isDeleted ? 'red.600' : 'primary.300',
-                      '.delete': {
-                        display: 'flex'
-                      },
-                      '.hoverStyle': {
-                        display: 'flex'
-                      },
-                      '.unHoverStyle': {
-                        display: 'none'
-                      }
-                    }}
-                  >
-                    {item.avatar ? (
-                      <Avatar src={item.avatar} w={'1.5rem'} h={'1.5rem'} borderRadius={'sm'} />
-                    ) : (
-                      <MyIcon name={'core/skill/default'} w={'1.5rem'} h={'1.5rem'} />
-                    )}
-                    <Box
-                      flex={'1 0 0'}
-                      ml={2}
-                      className={'textEllipsis'}
-                      fontSize={'sm'}
-                      color={'myGray.900'}
-                    >
-                      {item.name}
-                    </Box>
-                    {isDeleted && (
-                      <MyTag colorSchema="red" type="fill" className="unHoverStyle">
-                        <MyIcon name={'common/error'} w={'14px'} mr={1} />
-                        <Box color={'red.600'} maxW={'120px'} className="textEllipsis">
-                          {t('skill:skill_deleted')}
-                        </Box>
-                      </MyTag>
-                    )}
-                    <Box className="hoverStyle" display={['flex', 'none']} ml={0.5}>
-                      <MyIconButton
-                        icon="delete"
-                        hoverBg="red.50"
-                        hoverColor="red.600"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRemoveAgentSkill(item.skillId);
-                        }}
-                      />
-                    </Box>
-                  </Flex>
-                </MyTooltip>
-              );
-            })}
+            <AgentSkillCardList skills={selectedAgentSkills} onDelete={onRemoveAgentSkill} />
           </Grid>
 
           {isOpenSkillSelect && (
@@ -506,42 +377,31 @@ const EditForm = ({
         </Box>
 
         {/* tool choice */}
-        {selectedModel && (
-          <Box {...BoxStyles}>
-            <ToolSelect
-              selectedModel={selectedModel}
-              selectedTools={appForm.selectedTools}
-              fileSelectConfig={appForm.chatConfig.fileSelectConfig}
-              onAddTool={(e) => {
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools: [e, ...(state.selectedTools || [])]
-                }));
-              }}
-              onUpdateTool={(e) => {
-                const toolKey = getToolIdentityKey(e.pluginId, e.source);
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools:
-                    state.selectedTools?.map((item) =>
-                      getToolIdentityKey(item.pluginId, item.source) === toolKey ? e : item
-                    ) || []
-                }));
-              }}
-              onRemoveTool={(id, source) => {
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools:
-                    state.selectedTools?.filter(
-                      (item) =>
-                        getToolIdentityKey(item.pluginId, item.source) !==
-                        getToolIdentityKey(id, source)
-                    ) || []
-                }));
-              }}
-            />
-          </Box>
-        )}
+        <Box {...BoxStyles}>
+          <ToolSelect
+            selectedModel={selectedModel}
+            selectedTools={appForm.selectedTools}
+            fileSelectConfig={appForm.chatConfig.fileSelectConfig}
+            onAddTool={(e) => {
+              setAppForm((state) => ({
+                ...state,
+                selectedTools: [e, ...(state.selectedTools || [])]
+              }));
+            }}
+            onConfigTool={skillManager.onOpenConfigTool}
+            onRemoveTool={(id, source) => {
+              setAppForm((state) => ({
+                ...state,
+                selectedTools:
+                  state.selectedTools?.filter(
+                    (item) =>
+                      getToolIdentityKey(item.pluginId, item.source) !==
+                      getToolIdentityKey(id, source)
+                  ) || []
+              }));
+            }}
+          />
+        </Box>
 
         {/* dataset */}
         <Box {...BoxStyles}>
@@ -606,6 +466,8 @@ const EditForm = ({
                   appForm.dataset.datasetSearchExtensionModelId ||
                   appForm.dataset.datasetSearchExtensionModel
                 }
+                showTagFilter={!!feConfigs?.isPlus}
+                collectionFilterMatch={appForm.dataset.collectionFilterMatch}
               />
             </Box>
           )}
@@ -683,7 +545,7 @@ const EditForm = ({
         </Box>
 
         {/* tts */}
-        {/* <Box {...BoxStyles}>
+        <Box {...BoxStyles}>
           <TTSSelect
             value={appForm.chatConfig.ttsConfig}
             onChange={(e) => {
@@ -696,7 +558,7 @@ const EditForm = ({
               }));
             }}
           />
-        </Box> */}
+        </Box>
 
         {/* whisper */}
         <Box {...BoxStyles}>
@@ -716,8 +578,9 @@ const EditForm = ({
         </Box>
 
         {/* question guide */}
-        {/* <Box {...BoxStyles}>
+        <Box {...BoxStyles}>
           <QGConfig
+            appId={appId || undefined}
             value={appForm.chatConfig.questionGuide}
             onChange={(e) => {
               setAppForm((state) => ({
@@ -729,7 +592,7 @@ const EditForm = ({
               }));
             }}
           />
-        </Box> */}
+        </Box>
 
         {/* question tips */}
         {/* <Box {...BoxStyles}>
@@ -756,7 +619,7 @@ const EditForm = ({
             name: item.name,
             avatar: item.avatar,
             vectorModel: item.vectorModel,
-            isDeleted: item.isDeleted
+            error: item.error
           }))}
           onClose={onCloseKbSelect}
           onChange={(e) => {
@@ -773,7 +636,11 @@ const EditForm = ({
       {isOpenDatasetParams && (
         <DatasetParamsModal
           {...appForm.dataset}
+          appId={appId || undefined}
           maxTokens={tokenLimit}
+          showTagFilter={!!feConfigs?.isPlus}
+          datasetIds={datasetIds}
+          tagFilterReferenceList={tagFilterReferenceList}
           onClose={onCloseDatasetParams}
           onSuccess={(e) => {
             setAppForm((state) => ({
@@ -788,7 +655,7 @@ const EditForm = ({
       )}
       <ConfirmModal />
       {isOpenRecharge && <RechargeModal onClose={onCloseRecharge} onPaySuccess={onCloseRecharge} />}
-      <SkillModal />
+      {skillManager.toolConfigModal}
     </>
   );
 };

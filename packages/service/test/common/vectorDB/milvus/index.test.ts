@@ -12,6 +12,7 @@ const mockDescribeCollection = vi.fn();
 const mockDescribeIndex = vi.fn();
 const mockGetVersion = vi.fn();
 const mockInsert = vi.fn();
+const mockUpsert = vi.fn();
 const mockDelete = vi.fn();
 const mockSearch = vi.fn();
 const mockQuery = vi.fn();
@@ -26,6 +27,7 @@ vi.mock('@zilliz/milvus2-sdk-node', () => ({
   LoadState: { LoadStateNotExist: 'LoadStateNotExist', LoadStateNotLoad: 'LoadStateNotLoad' },
   FunctionType: { BM25: 'BM25' },
   ErrorCode: { SUCCESS: 'Success' },
+  ConsistencyLevelEnum: { Strong: 'Strong' },
   MilvusClient: class {
     connectPromise = Promise.resolve();
     listDatabases = vi.fn(async () => ({ db_names: ['fastgpt'] }));
@@ -39,6 +41,7 @@ vi.mock('@zilliz/milvus2-sdk-node', () => ({
     describeIndex = mockDescribeIndex;
     getVersion = mockGetVersion;
     insert = mockInsert;
+    upsert = mockUpsert;
     delete = mockDelete;
     search = mockSearch;
     query = mockQuery;
@@ -93,8 +96,76 @@ beforeEach(() => {
     IDs: { str_id: { data: ['1'] } }
   });
   mockDelete.mockReset().mockResolvedValue({ status: { error_code: 'Success' } });
+  mockUpsert.mockReset().mockResolvedValue({ status: { error_code: 'Success' } });
   mockSearch.mockReset().mockResolvedValue({ results: [] });
   mockQuery.mockReset().mockResolvedValue({ data: [] });
+});
+
+describe('MilvusCtrl.refreshCreateTime', () => {
+  const row = {
+    id: '123',
+    vector: [0.1, 0.2],
+    text: '原文',
+    teamId: 'team',
+    datasetId: 'dataset',
+    collectionId: 'collection'
+  };
+  beforeEach(() => {
+    mockQuery.mockResolvedValue({ status: { error_code: 'Success' }, data: [row] });
+  });
+
+  it('preserves vectors and BM25 input text while refreshing time', async () => {
+    const started = Date.now();
+    await new MilvusCtrl().refreshCreateTime({ teamId: 'team', idList: ['123', '456'] });
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filter: 'teamId == "team" and id in [123,456]',
+        consistency_level: 'Strong',
+        limit: 2
+      })
+    );
+    const { data } = mockUpsert.mock.calls[0][0];
+    expect(data).toHaveLength(1);
+    expect(data[0]).toEqual({ ...row, createTime: expect.any(Number) });
+    expect(data[0].createTime).toBeGreaterThanOrEqual(started);
+  });
+
+  it('does not query an empty list or recreate missing vectors', async () => {
+    const ctrl = new MilvusCtrl();
+    await ctrl.refreshCreateTime({ teamId: 'team', idList: [] });
+    expect(mockQuery).not.toHaveBeenCalled();
+    mockQuery.mockResolvedValue({ status: { error_code: 'Success' }, data: [] });
+    await ctrl.refreshCreateTime({ teamId: 'team', idList: ['123'] });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed vector IDs before constructing a filter', async () => {
+    await expect(
+      new MilvusCtrl().refreshCreateTime({ teamId: 'team', idList: ['1] or true'] })
+    ).rejects.toThrow('Invalid Milvus vector ID');
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('propagates query status failures even when the SDK resolves', async () => {
+    mockQuery.mockResolvedValue({
+      status: { error_code: 'UnexpectedError', reason: 'offline' },
+      data: []
+    });
+    await expect(
+      new MilvusCtrl().refreshCreateTime({ teamId: 'team', idList: ['123'] })
+    ).rejects.toThrow('query failed');
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: { error_code: 'UnexpectedError', reason: 'offline' } },
+    { status: { error_code: 'Success' }, err_index: [0] }
+  ])('rejects failed or partially failed upserts', async (result) => {
+    mockUpsert.mockResolvedValue(result);
+    await expect(
+      new MilvusCtrl().refreshCreateTime({ teamId: 'team', idList: ['123'] })
+    ).rejects.toThrow('rejected 1/1');
+  });
 });
 
 describe('MilvusCtrl', () => {
@@ -108,6 +179,13 @@ describe('MilvusCtrl', () => {
     expect(v2.collection_name).toBe('modeldata_v2');
     expect(v2.functions).toHaveLength(1);
     expect(v2.fields.map((f: any) => f.name)).toContain('sparse');
+    expect(v2.index_params).toContainEqual(
+      expect.objectContaining({
+        field_name: 'vector',
+        index_type: 'HNSW',
+        params: { efConstruction: 256, M: 32 }
+      })
+    );
   });
 
   // 被测函数: MilvusCtrl.init  等级: 3-High
@@ -300,22 +378,32 @@ describe('MilvusCtrl', () => {
 
   // 被测函数: MilvusCtrl.embRecall  等级: 3-High
   // (正常场景) 期望: SDK 2.6 的 client.search 使用 data: [vector](非 vector 字段)
-  it('TC-8.6 embRecall uses SDK 2.6 data field', async () => {
-    const ctrl = new MilvusCtrl();
-    await ctrl.embRecall({
-      teamId: 't',
-      datasetIds: ['d'],
-      vector: [0.1, 0.2],
-      limit: 10,
-      forbidCollectionIdList: []
-    });
-    const arg = mockSearch.mock.calls[0][0];
-    expect(arg.data).toEqual([[0.1, 0.2]]);
-    // 单表有 dense vector + sparse 两个 ANN 字段:anns_field 必须显式指 dense,SDK 缺省取 schema 第一个
-    expect(arg.anns_field).toBe('vector');
-    // 主键不自动回填:output_fields 必须含 id,否则结果行解析不出 id
-    expect(arg.output_fields).toEqual(['id', 'collectionId']);
-  });
+  it.each([
+    { hnswEfSearch: 200, limit: 10 },
+    { hnswEfSearch: 100, limit: 10 },
+    { hnswEfSearch: 400, limit: 10 },
+    { hnswEfSearch: 100, limit: 300 }
+  ])(
+    'TC-8.6 embRecall uses SDK 2.6 data and HNSW search parameters: %j',
+    async ({ hnswEfSearch, limit }) => {
+      const ctrl = new MilvusCtrl();
+      await ctrl.embRecall({
+        teamId: 't',
+        datasetIds: ['d'],
+        vector: [0.1, 0.2],
+        limit,
+        hnswEfSearch,
+        forbidCollectionIdList: []
+      });
+      const arg = mockSearch.mock.calls[0][0];
+      expect(arg.data).toEqual([[0.1, 0.2]]);
+      expect(arg.params).toEqual({ ef: hnswEfSearch });
+      // 单表有 dense vector + sparse 两个 ANN 字段:anns_field 必须显式指 dense,SDK 缺省取 schema 第一个
+      expect(arg.anns_field).toBe('vector');
+      // 主键不自动回填:output_fields 必须含 id,否则结果行解析不出 id
+      expect(arg.output_fields).toEqual(['id', 'collectionId']);
+    }
+  );
 
   // 被测函数: MilvusCtrl.getVectorDataByTime  等级: 3-High
   // (正常场景) 期望: client.query 的 output_fields 不含 dataId, 返回行不含 dataId, 目标集合 modeldata_v2

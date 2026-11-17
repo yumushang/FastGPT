@@ -21,9 +21,9 @@ import {
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import {
   encodeHttpToolSetNodesForStorage,
-  encodeMcpToolSetNodesForStorage,
-  decodeToolSetNodesFromStorage
+  encodeMcpToolSetNodesForStorage
 } from '@fastgpt/service/core/app/jsonSchemaStorage';
+import { getAppDraftWorkflow } from '@fastgpt/service/core/app/version/controller';
 
 async function handler(req: ApiRequestProps<CopyAppBodyType>): Promise<CopyAppResponseType> {
   const { appId: sourceAppId } = parseApiInput({
@@ -31,14 +31,15 @@ async function handler(req: ApiRequestProps<CopyAppBodyType>): Promise<CopyAppRe
     bodySchema: CopyAppBodySchema
   }).body;
 
-  const { app, teamId } = await authApp({
+  const { app } = await authApp({
     req,
     authToken: true,
     per: WritePermissionVal,
     appId: sourceAppId
   });
+  const teamId = String(app.teamId);
 
-  const { tmbId } = app.parentId
+  const { tmbId, isRoot } = app.parentId
     ? await authApp({ req, appId: app.parentId, per: WritePermissionVal, authToken: true })
     : await authUserPer({ req, authToken: true, per: TeamAppCreatePermissionVal });
 
@@ -51,12 +52,13 @@ async function handler(req: ApiRequestProps<CopyAppBodyType>): Promise<CopyAppRe
       session
     });
 
-    const storageModules = (() => {
+    const draftWorkflow = await getAppDraftWorkflow(app._id, app);
+    const storageNodes = (() => {
       if (app.type === AppTypeEnum.mcpToolSet) {
-        return encodeMcpToolSetNodesForStorage(app.modules);
+        return encodeMcpToolSetNodesForStorage(draftWorkflow.nodes);
       }
       if (app.type === AppTypeEnum.httpToolSet) {
-        return encodeHttpToolSetNodesForStorage(app.modules);
+        return encodeHttpToolSetNodesForStorage(draftWorkflow.nodes);
       }
       // 普通应用必须写入 onCreateApp 清洗后的 workflow，不能用原始存储数据绕过模型校验。
       return undefined;
@@ -67,12 +69,13 @@ async function handler(req: ApiRequestProps<CopyAppBodyType>): Promise<CopyAppRe
       intro: app.intro,
       avatar,
       type: app.type,
-      modules: decodeToolSetNodesFromStorage(app.modules),
-      storageModules,
-      edges: app.edges,
-      chatConfig: app.chatConfig,
-      teamId: app.teamId,
+      nodes: draftWorkflow.nodes,
+      storageNodes,
+      edges: draftWorkflow.edges,
+      chatConfig: draftWorkflow.chatConfig,
+      teamId,
       tmbId,
+      isRoot,
       pluginData: app.pluginData,
       session
     });

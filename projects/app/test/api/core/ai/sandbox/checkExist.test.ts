@@ -53,15 +53,18 @@ describe('sandbox checkExist API', () => {
     mocks.resolveSandboxSessionAvailability.mockResolvedValue({ available: true });
   });
 
-  it('keeps existing instance visibility when Sandbox is unavailable', async () => {
+  it.each([
+    SandboxUnavailableReasonEnum.teamPlanUnavailable,
+    SandboxUnavailableReasonEnum.systemDisabled
+  ])('keeps existing instance visibility when Sandbox is unavailable: %s', async (reason) => {
     mocks.resolveSandboxSessionAvailability.mockResolvedValueOnce({
       available: false,
-      reason: SandboxUnavailableReasonEnum.teamPlanUnavailable
+      reason
     });
 
     await expect(handler({ body: { appId, chatId: 'chat-1' } } as any)).resolves.toEqual({
       exists: true,
-      unavailableReason: SandboxUnavailableReasonEnum.teamPlanUnavailable
+      unavailableReason: reason
     });
     expect(mocks.checkSandboxSessionExist).toHaveBeenCalledOnce();
   });
@@ -73,5 +76,38 @@ describe('sandbox checkExist API', () => {
       exists: false
     });
     expect(mocks.checkSandboxSessionExist).toHaveBeenCalledOnce();
+  });
+
+  it('uses the authenticated workflow builder identity to locate its sandbox', async () => {
+    mocks.authSandboxSession.mockResolvedValueOnce({
+      uid: 'member-1',
+      teamId: 'team-1',
+      sourceType: ChatSourceTypeEnum.workflowBuilder,
+      sourceId: appId
+    });
+    mocks.buildSandboxClientQueryFromChatSource.mockReturnValueOnce({
+      sandboxId: 'builder-sandbox-1',
+      sourceType: ChatSourceTypeEnum.workflowBuilder,
+      sourceId: appId,
+      userId: 'member-1',
+      chatId: 'chat-1'
+    });
+
+    await expect(
+      handler({
+        body: {
+          appId,
+          sourceType: ChatSourceTypeEnum.workflowBuilder,
+          chatId: 'chat-1'
+        }
+      } as any)
+    ).resolves.toEqual({ exists: true });
+
+    expect(mocks.buildSandboxClientQueryFromChatSource).toHaveBeenCalledWith({
+      sourceType: ChatSourceTypeEnum.workflowBuilder,
+      sourceId: appId,
+      userId: 'member-1',
+      chatId: 'chat-1'
+    });
   });
 });

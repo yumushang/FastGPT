@@ -7,8 +7,11 @@ import {
 import { closeRedisRuntime, configureRedisRuntime } from '@fastgpt/dal/redis/runtime';
 
 const createClient = () => ({
+  call: vi.fn(),
   del: vi.fn(),
+  eval: vi.fn(),
   get: vi.fn(),
+  mget: vi.fn(),
   hgetall: vi.fn(),
   info: vi.fn(),
   multi: vi.fn(),
@@ -84,6 +87,61 @@ describe('RedisCacheAdapter', () => {
     expect(getCommandClient).not.toHaveBeenCalled();
     await expect(adapter.get(key)).resolves.toBe('value');
     expect(getCommandClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads multiple string keys in one request and preserves misses and ordering', async () => {
+    client.mget.mockResolvedValue(['token', null]);
+    const adapter = new RedisCacheAdapter({ getCommandClient: () => client as any });
+    await expect(adapter.getMany([key, asRedisLogicalKey('cache:missing')])).resolves.toEqual([
+      'token',
+      null
+    ]);
+    expect(client.mget).toHaveBeenCalledExactlyOnceWith(
+      'fastgpt:cache:string',
+      'fastgpt:cache:missing'
+    );
+  });
+
+  it('does not resolve a Redis connection for an empty batch', async () => {
+    const getCommandClient = vi.fn(() => client as any);
+    const adapter = new RedisCacheAdapter({ getCommandClient });
+    await expect(adapter.getMany([])).resolves.toEqual([]);
+    expect(getCommandClient).not.toHaveBeenCalled();
+  });
+
+  it.each([null, [], [42]])('rejects malformed MGET replies: %j', async (reply) => {
+    client.mget.mockResolvedValue(reply);
+    const adapter = new RedisCacheAdapter({ getCommandClient: () => client as any });
+    await expect(adapter.getMany([key])).rejects.toMatchObject({
+      code: 'REDIS_INVALID_RESPONSE',
+      operation: 'string.getMany'
+    });
+  });
+
+  it('atomically reads and deletes a value with GETDEL', async () => {
+    client.call.mockResolvedValue('ticket-payload');
+    const adapter = new RedisCacheAdapter({ getCommandClient: () => client as any });
+
+    await expect(adapter.getAndDelete(asRedisLogicalKey('cache:ticket'))).resolves.toBe(
+      'ticket-payload'
+    );
+    expect(client.call).toHaveBeenCalledWith('GETDEL', 'fastgpt:cache:ticket');
+    expect(client.eval).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the adapter-owned atomic script when GETDEL is unavailable', async () => {
+    client.call.mockRejectedValueOnce(new Error('ERR unknown command GETDEL'));
+    client.eval.mockResolvedValue('ticket-payload');
+    const adapter = new RedisCacheAdapter({ getCommandClient: () => client as any });
+
+    await expect(adapter.getAndDelete(asRedisLogicalKey('cache:ticket'))).resolves.toBe(
+      'ticket-payload'
+    );
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.stringContaining('redis.call("get", KEYS[1])'),
+      1,
+      'fastgpt:cache:ticket'
+    );
   });
 
   it('reads and parses Redis memory info through a typed operation', async () => {

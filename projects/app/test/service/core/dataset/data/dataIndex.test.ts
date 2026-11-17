@@ -1,6 +1,41 @@
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
+// 消费点已接管实例配置（94ae033d7）：DATASET_SYNONYM_ENABLED / MULTIPLE_DATA_TO_BASE64 等
+// 改为快照叶子 ?? serviceEnv。预置"域存在、叶子缺省"种子快照以走 serviceEnv 兜底分支。
+(global as any).systemInstanceConfig = {
+  site: {},
+  auth: {},
+  security: {},
+  feature: {},
+  commercial: {},
+  resource: {},
+  performance: {
+    workflow: {},
+    parse: {},
+    dataset: {},
+    chat: {},
+    streamResume: {},
+    tracking: {},
+    task: {},
+    channel: {}
+  },
+  storage: {},
+  vector: {},
+  providers: {
+    documentParse: { customPdf: {}, sangfor: {} },
+    dataSource: {},
+    externalProviderWorkflowVariables: []
+  },
+  subservice: {
+    plugin: {},
+    codeSandbox: {},
+    aiProxy: {},
+    mcp: {},
+    agentSandbox: { provider: '', common: {}, sealosdevbox: {}, opensandbox: {}, proxy: {} }
+  }
+};
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from '@fastgpt/service/common/mongo';
-import { getEmbeddingModelData } from '@fastgpt/service/core/ai/model';
 import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection/schema';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
 import { MongoDataset } from '@fastgpt/service/core/dataset/schema';
@@ -61,7 +96,7 @@ const embeddingModel = {
     weight: 100
   }
 } as any;
-const originalMultipleDataToBase64 = serviceEnv.MULTIPLE_DATA_TO_BASE64;
+const originalMultipleDataToBase64 = getTestInstanceConfig().feature.multipleDataToBase64;
 const originalDatasetSynonymEnabled = serviceEnv.DATASET_SYNONYM_ENABLED;
 const tokenHeavyText = Array.from({ length: 30 }, (_, index) => `𠮷${index}`).join('');
 const largeTokenHeavyText = Array.from(
@@ -155,7 +190,7 @@ const createData = async (
 describe('DatasetDataIndexOperation', () => {
   beforeEach(() => {
     serviceEnv.DATASET_SYNONYM_ENABLED = true;
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = true;
+    getTestInstanceConfig().feature.multipleDataToBase64 = true;
     resetVectorMocks();
     mockGetVectors.mockClear();
     mockGetDatasetBase64Image.mockClear();
@@ -163,7 +198,6 @@ describe('DatasetDataIndexOperation', () => {
     mockCountPromptTokens.mockImplementation(async (text: string) =>
       countPromptTokensInWorker(text)
     );
-    vi.mocked(getEmbeddingModelData).mockReturnValue(embeddingModel);
     mockGetVectors.mockImplementation(async ({ inputs }) =>
       createMockVectorsResponse(inputs.map((input) => input.input))
     );
@@ -174,7 +208,7 @@ describe('DatasetDataIndexOperation', () => {
   });
 
   afterEach(() => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = originalMultipleDataToBase64;
+    getTestInstanceConfig().feature.multipleDataToBase64 = originalMultipleDataToBase64;
     serviceEnv.DATASET_SYNONYM_ENABLED = originalDatasetSynonymEnabled;
   });
 
@@ -847,7 +881,7 @@ describe('DatasetDataIndexOperation', () => {
           { type: DatasetDataIndexTypeEnum.custom, text: 'text index' },
           {
             type: DatasetDataIndexTypeEnum.imageEmbedding,
-            text: 'dataset/team/collection/image.png'
+            text: 'dataset/dataset_id/collection/image.png'
           }
         ]
       });
@@ -865,7 +899,10 @@ describe('DatasetDataIndexOperation', () => {
         expect.objectContaining({
           inputs: [
             { type: 'text', input: 'text index' },
-            { type: 'image', input: 'data:image/png;base64,dataset/team/collection/image.png' }
+            {
+              type: 'image',
+              input: 'data:image/png;base64,dataset/dataset_id/collection/image.png'
+            }
           ]
         })
       );
@@ -873,10 +910,42 @@ describe('DatasetDataIndexOperation', () => {
         { type: DatasetDataIndexTypeEnum.custom, text: 'text index', dataId: 'text_vector_id' },
         {
           type: DatasetDataIndexTypeEnum.imageEmbedding,
-          text: 'dataset/team/collection/image.png',
+          text: 'dataset/dataset_id/collection/image.png',
           dataId: 'image_vector_id'
         }
       ]);
+    });
+
+    it('should skip image embedding vector insertion when key belongs to another dataset', async () => {
+      const operation = new DatasetDataIndexOperation({
+        ...embeddingModel,
+        config: { ...embeddingModel.config, vision: true }
+      });
+      mockVectorInsert.mockResolvedValueOnce({ insertIds: ['text_vector_id'] });
+      const patchResult = operation.buildPatch({
+        currentIndexes: [],
+        nextIndexes: [
+          { type: DatasetDataIndexTypeEnum.custom, text: 'text index' },
+          {
+            type: DatasetDataIndexTypeEnum.imageEmbedding,
+            text: 'dataset/foreign_dataset_id/image.png'
+          }
+        ]
+      });
+
+      const tokens = await operation.insertVectorForPatch({
+        patchResult,
+        teamId: 'team_id',
+        datasetId: 'dataset_id',
+        collectionId: 'collection_id'
+      });
+
+      expect(tokens).toBeGreaterThan(0);
+      expect(mockGetVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputs: [{ type: 'text', input: 'text index' }]
+        })
+      );
     });
   });
 
@@ -948,7 +1017,7 @@ describe('DatasetDataIndexOperation', () => {
     it('should skip vector delete when id list is empty', async () => {
       const operation = new DatasetDataIndexOperation(embeddingModel);
 
-      await operation.deleteVectors({ teamId: 'team_id', idList: [] });
+      await operation.deleteVectors({ teamId: 'team_id', datasetId: 'dataset_id', idList: [] });
 
       expect(mockVectorDelete).not.toHaveBeenCalled();
     });

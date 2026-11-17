@@ -1,16 +1,56 @@
-import { it, expect } from 'vitest'; // 必须显式导入
+import { it, expect, vi } from 'vitest'; // 必须显式导入
 import {
   getMaxPrefixByLength,
   getMaxSuffixByLength,
   splitText2Chunks
 } from '@fastgpt/service/common/string/textSplitter';
 import { countPromptTokensInWorker } from '@fastgpt/service/worker/countGptMessagesTokens/count';
+import * as tokenCounter from '@fastgpt/service/worker/countGptMessagesTokens/count';
 import fs from 'fs';
 
 const simpleChunks = (chunks: string[]) => {
   return chunks.map((chunk) => chunk.replace(/\s+/g, ''));
 };
 const getValidLength = (text: string) => text.replaceAll(/[\s\n]/g, '').length;
+
+it('token count cache evicts the oldest 100 entries after reaching 10000 entries', () => {
+  const countTokens = vi.spyOn(tokenCounter, 'countPromptTokensInWorker');
+  const uniqueTexts = Array.from({ length: 10000 }, (_, i) => `cache entry ${i}`);
+  const texts = [
+    ...uniqueTexts,
+    uniqueTexts[98],
+    uniqueTexts[99],
+    uniqueTexts[9999],
+    uniqueTexts[0]
+  ];
+
+  try {
+    const result = splitText2Chunks({
+      text: texts.join('::cache-separator::'),
+      chunkSize: 512,
+      maxSize: 512,
+      customReg: ['::cache-separator::'],
+      lengthUnit: 'token'
+    });
+
+    expect(result.chunks).toEqual(texts);
+    const countedTexts = countTokens.mock.calls.map(([text]) => text);
+    // 空文本也占一个缓存位：到达上限后会被淘汰，随后重新计数并缓存 0。
+    expect(countedTexts.filter((text) => text === '')).toHaveLength(2);
+    expect(countedTexts.filter((text) => text === uniqueTexts[0])).toHaveLength(2);
+    // 首批淘汰包含空文本和第 0～98 项，第 99 项及近期文本仍命中。
+    expect(countedTexts.filter((text) => text === uniqueTexts[98])).toHaveLength(2);
+    expect(countedTexts.filter((text) => text === uniqueTexts[99])).toHaveLength(1);
+    expect(countedTexts.filter((text) => text === uniqueTexts[9999])).toHaveLength(1);
+
+    // 缓存不会跨切分调用复用。
+    countTokens.mockClear();
+    splitText2Chunks({ text: uniqueTexts[9999], chunkSize: 512, lengthUnit: 'token' });
+    expect(countTokens).toHaveBeenCalledWith(uniqueTexts[9999]);
+  } finally {
+    countTokens.mockRestore();
+  }
+});
 
 // 简单的嵌套测试
 it(`Test splitText2Chunks 1`, () => {
@@ -961,28 +1001,28 @@ it(`Test splitText2Chunks 13 - Table split with empty lastText`, () => {
 | 合并营业收入 | 亿元 | 146.03 | 153.72 | 178.61 | 187.68 | 203.30 | 222.68 |
 | 同比 | % | 13.86% | 5.27% | 16.19% | 5.08% | 8.33% | 9.53% |
 | 毛利率 | % | 47.62% | 48.80% | 47.29% | 44.53% | 45.50% | 46.46% |
-|   |   |   |   |   |   |   |   |
-| 分产品 |   |   |   |   |   |   |   |
+| | | | | | | | |
+| 分产品 | | | | | | | |
 | 一、医药工业分部 | 亿元 | 88.76 | 98.40 | 110.79 | 113.42 | 123.59 | 138.44 |
 | 同比 | % | 15.99% | 10.86% | 12.59% | 2.38% | 8.96% | 12.02% |
 | 毛利率 | % | 48.13% | 48.95% | 46.96% | 42.50% | 43.63% | 44.32% |
-| 分细分产品: |   |   |   |   |   |   |   |
+| 分细分产品: | | | | | | | |
 | 1、母公司生产：心脑血管类(安宫、清心、大活络等) | 亿元 | 36.29 | 40.63 | 43.88 | 43.88 | 47.39 | 52.13 |
 | 同比 | % | 20.80% | 11.97% | 8.00% | 0.00% | 8.00% | 10.00% |
 | 毛利率 | $ \% $ | 59.96% | 61.20% | 57.62% | 47.00% | 50.00% | 52.00% |
-|   |   |   |   |   |   |   |   |
-| 2、补益类(六味、金匮、五子衍宗) |   | 14.56 | 15.67 | 17.30 | 18.68 | 20.55 | 23.02 |
+| | | | | | | | |
+| 2、补益类(六味、金匮、五子衍宗) | | 14.56 | 15.67 | 17.30 | 18.68 | 20.55 | 23.02 |
 | 同比 | % | 2.86% | 7.62% | 10.40% | 8.00% | 10.00% | 12.00% |
 | 毛利率 | $ \% $ | 42.45% | 43.00% | 37.39% | 37.50% | 37.50% | 37.50% |
-|   |   |   |   |   |   |   |   |
-| 3、妇科类(乌鸡白凤丸、坤宝丸) |   | 3.80 | 3.48 | 3.77 | 3.96 | 4.15 | 4.36 |
+| | | | | | | | |
+| 3、妇科类(乌鸡白凤丸、坤宝丸) | | 3.80 | 3.48 | 3.77 | 3.96 | 4.15 | 4.36 |
 | 同比 | % | 23.83% | -8.38% | 8.28% | 5.00% | 5.00% | 5.00% |
 | 毛利率 | % | 40.16% | 38.12% | 42.38% | 42.00% | 42.00% | 42.00% |
-|   |   |   |   |   |   |   |   |
+| | | | | | | | |
 | 4、清热类(感冒清热颗粒、牛黄解毒) | 亿元 | 5.24 | 5.29 | 6.14 | 5.22 | 5.64 | 6.20 |
 | 同比 | % | 5.19% | 0.86% | 16.07% | -15.00% | 8.00% | 10.00% |
 | 毛利率 | $ \% $ | 36.09% | 34.39% | 34.97% | 35.00% | 35.00% | 35.00% |
-|   |   |   |   |   |   |   |   |
+| | | | | | | | |
 | 5、其他中药品种 | 亿元 | 28.87 | 33.33 | 39.70 | 41.69 | 45.85 | 52.73 |
 | 同比 | % | 18.90% | 15.45% | 19.11% | 5.00% | 10.00% | 15.00% |`,
 
@@ -990,11 +1030,11 @@ it(`Test splitText2Chunks 13 - Table split with empty lastText`, () => {
 | 同仁堂经营拆分： | 单位 | 2021A | 2022A | 2023A | 2024E | 2025E | 2026E |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 毛利率 | $ \% $ | 39.36% | 40.25% | 41.65% | 41.00% | 41.00% | 41.00% |
-|   |   |   |   |   |   |   |   |
+| | | | | | | | |
 | 二、商业分部(同仁堂商业) | 亿元 | 82.41 | 84.80 | 102.5 | 111.7 | 121.7 | 132.7 |
 | 同比 | % | 12.64% | 2.90% | 20.83% | 9.00% | 9.00% | 9.00% |
 | 毛利率 | % | 31.51% | 30.95% | 31.11% | 31.00% | 31.00% | 31.00% |
-|   |   |   |   |   |   |   |   |
+| | | | | | | | |
 | 三、分部间抵消 | 亿元 | -25.14 | (29.48) | (34.64) | (37.43) | (42.02) | (48.45) |
 | 同比 | % | 17.32% | 17.27% | 17.50% | 8.06% | 12.26% | 15.31% |
 | 毛利率 | % | -3.39% | -2.05% | -1.61% | -2.0% | -2.0% | -2.0% |
@@ -1123,21 +1163,59 @@ it(`Test splitText2Chunks 16 - token mode table chunks should include header wit
   expect(chunks.every((chunk) => countPromptTokensInWorker(chunk) <= chunkSize)).toBe(true);
 });
 
-it(`Test splitText2Chunks 17 - token mode table should fail when header has no content budget`, () => {
+it(`Test splitText2Chunks 17 - token mode table degrades when header has no content budget`, () => {
   const text = `| id | payload |
 | --- | --- |
 | 1 | a |
 `;
 
-  expect(() =>
-    splitText2Chunks({
-      text,
-      chunkSize: 5,
-      maxSize: 5,
-      overlapRatio: 0,
-      lengthUnit: 'token'
-    })
-  ).toThrow('Markdown table header exceeds token chunk size');
+  const { chunks } = splitText2Chunks({
+    text,
+    chunkSize: 5,
+    maxSize: 5,
+    overlapRatio: 0,
+    lengthUnit: 'token'
+  });
+
+  // 表头（含分隔行）本身已超出 chunk 预算：不再抛错，退化为不带表头的按长度切分。
+  // 正文必须完整保留（拼接后不含表头，但包含全部数据行内容）。
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(chunks.every((chunk) => countPromptTokensInWorker(chunk) <= 5)).toBe(true);
+  expect(chunks.map((chunk) => chunk.replace(/\s/g, '')).join('')).toContain('|1|a|');
+  // 表头仅作为“无法拼回”的上下文，不再产出只有表头的空语义分块
+  expect(chunks.some((chunk) => chunk.includes('payload'))).toBe(false);
+});
+
+it(`Test splitText2Chunks 18 - wide table header exceeding chunk size keeps all rows`, () => {
+  // 贴近线上场景：宽表（20 列）表头本身就超出 chunk 预算，此前会直接抛错导致整个文件解析失败
+  const columnCount = 20;
+  const header = `| ${Array.from({ length: columnCount }, (_, i) => `column_${i}`).join(' | ')} |`;
+  const separator = `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`;
+  const rows = Array.from(
+    { length: 8 },
+    (_, r) => `| ${Array.from({ length: columnCount }, (_, c) => `r${r}c${c}`).join(' | ')} |`
+  );
+  const text = [header, separator, ...rows].join('\n');
+
+  const chunkSize = 64;
+  // 前提：表头确实超出预算（否则本用例覆盖不到降级分支）
+  expect(countPromptTokensInWorker(`${header}\n${separator}\n`)).toBeGreaterThan(chunkSize);
+
+  const { chunks } = splitText2Chunks({
+    text,
+    chunkSize,
+    maxSize: chunkSize,
+    overlapRatio: 0,
+    lengthUnit: 'token'
+  });
+
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(chunks.every((chunk) => countPromptTokensInWorker(chunk) <= chunkSize)).toBe(true);
+  // 所有数据行内容完整保留，不因表头超限而丢数据
+  const joined = chunks.map((chunk) => chunk.replace(/\s/g, '')).join('');
+  for (const row of rows) {
+    expect(joined).toContain(row.replace(/\s/g, ''));
+  }
 });
 
 it(`Test getMaxPrefixByLength - returns the longest prefix within custom length limit`, () => {

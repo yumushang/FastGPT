@@ -1,13 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
+import { SandboxErrEnum } from '@fastgpt/global/common/error/code/sandbox';
+import { getErrText, UserConfigError } from '@fastgpt/global/common/error/utils';
 import { ChatRoleEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import type { AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { getRunningSandboxId } from '@fastgpt/service/core/ai/sandbox/utils/id';
 import { dispatchRunTools } from '@fastgpt/service/core/workflow/dispatch/ai/toolcall';
+import { buildAgentLoopCoreRequestMessages } from '@fastgpt/service/core/workflow/dispatch/ai/agentLoopCore/application/context/messages';
+import {
+  createNodeSummary,
+  createWorkflowRuntimeSummary
+} from '@fastgpt/service/core/workflow/dispatch/utils/summary';
 import { checkTeamSandboxPermission } from '@fastgpt/service/support/permission/teamLimit';
-import { createRuntimeNodeResponseSummary } from '@fastgpt/service/core/workflow/dispatch/utils';
-import { SandboxErrEnum } from '@fastgpt/global/common/error/code/sandbox';
-import { getErrText } from '@fastgpt/global/common/error/utils';
-import { getRunningSandboxId } from '@fastgpt/service/core/ai/sandbox/interface/runtime';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { runWithContext } from '@fastgpt/service/core/workflow/utils/context';
 
 const {
   getLLMModelDataMock,
@@ -15,18 +22,35 @@ const {
   runToolCallMock,
   useToolMessagesMock,
   useToolNodeListMock,
-  ensureAppSandboxRuntimeReadyMock
+  ensureAppSandboxRuntimeReadyMock,
+  markChatSandboxEnabledMock
 } = vi.hoisted(() => ({
   getLLMModelDataMock: vi.fn(),
   getSandboxClientMock: vi.fn(),
   runToolCallMock: vi.fn(),
   useToolMessagesMock: vi.fn(),
   useToolNodeListMock: vi.fn(),
-  ensureAppSandboxRuntimeReadyMock: vi.fn()
+  ensureAppSandboxRuntimeReadyMock: vi.fn(),
+  markChatSandboxEnabledMock: vi.fn()
 }));
 
-vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getLLMModelData: getLLMModelDataMock
+vi.mock('@fastgpt/service/core/chat/sandbox/service', () => ({
+  markChatSandboxEnabled: markChatSandboxEnabledMock
+}));
+
+vi.mock('@fastgpt/service/core/ai/model/catalog/service', () => ({
+  getSystemModelHandle: async () => ({
+    getModelData: getLLMModelDataMock,
+    getLLMModelData: getLLMModelDataMock
+  }),
+  getTeamModelHandle: async () => ({
+    getModelData: getLLMModelDataMock,
+    getLLMModelData: getLLMModelDataMock
+  })
+}));
+vi.mock('@fastgpt/service/support/permission/model/auth', () => ({
+  assertAuthModels: vi.fn(async () => ({ handle: {}, models: [] })),
+  getAuthorizedModelIds: vi.fn(async () => new Set())
 }));
 
 vi.mock('@fastgpt/service/core/workflow/dispatch/ai/toolcall/toolCall', () => ({
@@ -45,22 +69,22 @@ vi.mock('@fastgpt/service/support/permission/teamLimit', () => ({
   checkTeamSandboxPermission: vi.fn()
 }));
 
-vi.mock('@fastgpt/service/core/ai/sandbox/interface/toolCall', () => ({
+vi.mock('@fastgpt/service/core/ai/sandbox/application/toolCall', () => ({
   prepareSandboxToolRuntime: getSandboxClientMock
 }));
 
-vi.mock('@fastgpt/service/core/ai/sandbox/interface/runtime', async (importOriginal) => {
+vi.mock('@fastgpt/service/core/ai/sandbox/application/runtime/upgrade', async (importOriginal) => {
   const original =
-    await importOriginal<typeof import('@fastgpt/service/core/ai/sandbox/interface/runtime')>();
+    await importOriginal<
+      typeof import('@fastgpt/service/core/ai/sandbox/application/runtime/upgrade')
+    >();
 
-  return {
-    ...original,
-    ensureAppSandboxRuntimeReady: ensureAppSandboxRuntimeReadyMock
-  };
+  return { ...original, ensureAppSandboxRuntimeReady: ensureAppSandboxRuntimeReadyMock };
 });
 
 const createProps = (overrides: Record<string, any> = {}) =>
   ({
+    nodeSummary: createNodeSummary(),
     node: {
       nodeId: 'toolcall_node',
       flowNodeType: FlowNodeTypeEnum.toolCall,
@@ -123,12 +147,45 @@ const createProps = (overrides: Record<string, any> = {}) =>
     ...overrides
   }) as any;
 
-describe('dispatchRunTools file context', () => {
+describe('dispatchRunTools', () => {
+  it('uses root sandbox identity and team permission while keeping the child app identity', async () => {
+    const props = createProps();
+    props.params.useAgentSandbox = true;
+    props.runningAppInfo.sourceId = 'child';
+    props.runningAppInfo.teamId = 'child-team';
+    const result = await runWithContext(
+      {
+        mcpClientMemory: {},
+        sandboxContext: {
+          sourceType: ChatSourceTypeEnum.app,
+          sourceId: 'root',
+          teamId: 'root-team',
+          userId: 'root-user',
+          chatId: 'root-chat'
+        }
+      },
+      () => dispatchRunTools(props)
+    );
+    expect(result.error).toBeUndefined();
+    expect(getSandboxClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'root', userId: 'root-user', chatId: 'root-chat' })
+    );
+    expect(checkTeamSandboxPermission).toHaveBeenCalledWith('root-team');
+    expect(markChatSandboxEnabledMock).toHaveBeenCalledWith({
+      sourceType: ChatSourceTypeEnum.app,
+      sourceId: 'root',
+      chatId: 'root-chat',
+      teamId: 'root-team'
+    });
+    expect(props.runningAppInfo.sourceId).toBe('child');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
-    global.feConfigs = { ...global.feConfigs, show_agent_sandbox: true };
+    getTestInstanceConfig().subservice.agentSandbox.provider = 'opensandbox';
     vi.mocked(checkTeamSandboxPermission).mockResolvedValue(undefined);
     ensureAppSandboxRuntimeReadyMock.mockResolvedValue(false);
+    markChatSandboxEnabledMock.mockResolvedValue(undefined);
     getLLMModelDataMock.mockReturnValue({
       model: 'gpt-5',
       name: 'GPT-5',
@@ -151,9 +208,10 @@ describe('dispatchRunTools file context', () => {
     runToolCallMock.mockResolvedValue({
       toolWorkflowInteractiveResponse: undefined,
       toolDispatchFlowResponses: [],
-      runtimeNodeResponseSummary: createRuntimeNodeResponseSummary(),
+      workflowRuntimeSummary: createWorkflowRuntimeSummary(),
       runTimes: 0,
       toolTotalPoints: 0,
+      nodeSummary: { llmInputTokens: 0, llmOutputTokens: 0 },
       toolCallInputTokens: 0,
       toolCallOutputTokens: 0,
       toolCallTotalPoints: 0,
@@ -163,6 +221,85 @@ describe('dispatchRunTools file context', () => {
       error: undefined,
       requestIds: []
     });
+  });
+
+  it.each([
+    { name: 'success', runtimeResult: {} },
+    { name: 'error', runtimeResult: { error: 'model request failed after tool execution' } },
+    {
+      name: 'interactive pause',
+      runtimeResult: {
+        toolWorkflowInteractiveResponse: {
+          type: 'toolChildrenInteractive',
+          params: { toolCallId: 'tool_1' }
+        }
+      }
+    }
+  ])(
+    'preserves complete tool history and next-turn model context on $name',
+    async ({ runtimeResult }) => {
+      const response = `${'a'.repeat(6000)}important middle content${'z'.repeat(6000)}`;
+      const assistantResponses: AIChatItemValueItemType[] = [
+        {
+          tools: [
+            {
+              id: 'tool_1',
+              toolName: 'Search',
+              toolAvatar: '',
+              functionName: 'search',
+              params: '{"query":"FastGPT"}',
+              response
+            }
+          ]
+        },
+        { text: { content: 'answer' } }
+      ];
+      runToolCallMock.mockResolvedValueOnce({
+        toolDispatchFlowResponses: [],
+        toolCallInputTokens: 0,
+        toolCallOutputTokens: 0,
+        toolCallTotalPoints: 0,
+        completeMessages: [],
+        finish_reason: 'stop',
+        requestIds: [],
+        ...runtimeResult,
+        assistantResponses
+      });
+
+      const result = await dispatchRunTools(createProps());
+
+      expect(result.assistantResponses).toEqual(assistantResponses);
+      const messages = buildAgentLoopCoreRequestMessages({
+        messages: [{ obj: ChatRoleEnum.AI, value: result.assistantResponses ?? [] }]
+      });
+      expect(messages.find((message) => message.role === 'tool')).toMatchObject({
+        tool_call_id: 'tool_1',
+        content: response
+      });
+    }
+  );
+
+  it('preserves user config classification from runToolCall', async () => {
+    runToolCallMock.mockResolvedValueOnce({
+      toolWorkflowInteractiveResponse: undefined,
+      toolDispatchFlowResponses: [],
+      toolCallInputTokens: 0,
+      toolCallOutputTokens: 0,
+      toolCallTotalPoints: 0,
+      completeMessages: [],
+      assistantResponses: [],
+      finish_reason: 'error',
+      error: new UserConfigError('Invalid API key'),
+      requestIds: []
+    });
+
+    const result = await dispatchRunTools(createProps());
+
+    expect(result.rawError).toMatchObject({
+      message: 'Invalid API key',
+      name: 'UserConfigError'
+    });
+    expect(result.responseData).toMatchObject({ errorText: 'Invalid API key' });
   });
 
   it('does not restore history files when the node has no selected file link input', async () => {
@@ -284,7 +421,7 @@ describe('dispatchRunTools file context', () => {
   });
 
   it('initializes sandbox client and injects input files before running toolcall', async () => {
-    global.feConfigs = { ...global.feConfigs, show_agent_sandbox: true };
+    getTestInstanceConfig().subservice.agentSandbox.provider = 'opensandbox';
     const sandboxClient = {
       provider: {},
       exec: vi.fn()
@@ -363,11 +500,19 @@ describe('dispatchRunTools file context', () => {
     expect(props.workflowStreamResponse.mock.calls.map(([event]: [unknown]) => event)).toEqual([
       {
         event: 'sandboxStatus',
+        data: { sandboxId, phase: 'lazyInit' }
+      },
+      {
+        event: 'sandboxStatus',
         data: { sandboxId, phase: 'upgrading' }
       },
       {
         event: 'sandboxStatus',
         data: { sandboxId, phase: 'lazyInit' }
+      },
+      {
+        event: 'sandboxStatus',
+        data: { sandboxId, phase: 'ready' }
       }
     ]);
     expect(result.error).toBeUndefined();
@@ -394,5 +539,10 @@ describe('dispatchRunTools file context', () => {
     });
     expect(getSandboxClientMock).not.toHaveBeenCalled();
     expect(runToolCallMock).not.toHaveBeenCalled();
+    expect(
+      props.workflowStreamResponse.mock.calls.map(
+        ([event]: [{ data: { phase: string } }]) => event.data.phase
+      )
+    ).toEqual(['lazyInit']);
   });
 });

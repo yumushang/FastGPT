@@ -1,10 +1,9 @@
 import React, { useCallback, useMemo } from 'react';
-import { Box, Flex } from '@chakra-ui/react';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { useRouter } from 'next/router';
 import { useUserStore } from '@/web/support/user/useUserStore';
 import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import SecondaryNavigationContainer from '@/pageComponents/common/SecondaryNavigationContainer';
 
 export enum TabEnum {
@@ -29,14 +28,15 @@ const AccountContainer = ({
   children: React.ReactNode;
   isLoading?: boolean;
 }) => {
-  const { t } = useClientTranslation('account');
+  const { t } = useSafeTranslation();
   const { userInfo, setUserInfo } = useUserStore();
-  const { feConfigs, systemVersion } = useSystemStore();
+  const { feConfigs } = useSystemStore();
   const router = useRouter();
 
   const showThirdPartyTab =
     feConfigs?.show_openai_account === true ||
     feConfigs?.externalProviderWorkflowVariables?.some((item) => item.isOpen) === true;
+  const showModelProviderTab = feConfigs.isPlus;
 
   const currentTab = useMemo(() => {
     return router.pathname.split('/').pop() as TabEnum;
@@ -89,7 +89,7 @@ const AccountContainer = ({
           }
         ]
       : []),
-    ...(feConfigs.isPlus
+    ...(showModelProviderTab
       ? [
           {
             icon: 'common/model',
@@ -156,14 +156,6 @@ const AccountContainer = ({
       value={currentTab}
       onChange={setCurrentTab}
       mobileScrollPositionKey={'account-mobile-navigation'}
-      footer={
-        <Flex alignItems={'center'} px={'11px'} pb={5} pt={3}>
-          <Box w={'8px'} h={'8px'} borderRadius={'50%'} bg={'#67c13b'} />
-          <Box fontSize={'md'} ml={2}>
-            V{systemVersion}
-          </Box>
-        </Flex>
-      }
     >
       {children}
       <ConfirmModal />

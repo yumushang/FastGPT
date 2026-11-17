@@ -1,4 +1,5 @@
 'use client';
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import React, { useState } from 'react';
 import {
   Box,
@@ -12,7 +13,6 @@ import {
   Tr,
   Th,
   Td,
-  TableContainer,
   Center,
   Fade
 } from '@chakra-ui/react';
@@ -25,7 +25,7 @@ import { getEmptyAppsTemplate } from '@/web/core/app/templates';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
-import { useTranslation } from 'next-i18next';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { AppTypeEnum, ToolTypeList } from '@fastgpt/global/core/app/constants';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import {
@@ -33,10 +33,10 @@ import {
   getTemplateMarketItemList
 } from '@/web/core/app/api/template';
 import { createAppTypeMap } from '@/pageComponents/app/constants';
-import { serviceSideProps } from '@/web/common/i18n/utils';
 import MyImage from '@fastgpt/web/components/common/Image/MyImage';
 import LeftRadio from '@fastgpt/web/components/common/Radio/LeftRadio';
 import HeaderAuthForm from '@/components/common/secret/HeaderAuthForm';
+import type { HeaderSecretConfigType } from '@/components/common/secret/HeaderAuthConfig';
 import { postCreateHttpTools } from '@/web/core/app/api/httpTools';
 import { getMCPTools, postCreateMCPTools } from '@/web/core/app/api/mcpTools';
 import { headerValue2StoreHeader } from '@/components/common/secret/HeaderAuthConfig';
@@ -58,8 +58,8 @@ type FormType = {
   createType?: HttpToolType;
   // mcp
   mcpUrl?: string;
-  mcpHeaderSecret?: any;
-  mcpToolList?: any[];
+  mcpHeaderSecret?: HeaderSecretConfigType;
+  mcpToolList?: McpToolConfigType[];
 };
 
 export type CreateAppType =
@@ -71,7 +71,7 @@ export type CreateAppType =
   | AppTypeEnum.httpToolSet;
 
 const CreateAppsPage = () => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { isPc } = useSystem();
   const { query } = router;
@@ -147,7 +147,7 @@ const CreateAppsPage = () => {
             ...baseParams,
             url: mcpUrl || '',
             headerSecret,
-            toolList: (mcpToolList || []) as McpToolConfigType[]
+            toolList: mcpToolList || []
           });
         }
 
@@ -165,7 +165,7 @@ const CreateAppsPage = () => {
             avatar: templateDetail.avatar,
             name: templateDetail.name,
             type: appType,
-            modules: templateDetail.workflow.nodes || [],
+            nodes: templateDetail.workflow.nodes || [],
             edges: templateDetail.workflow.edges || [],
             chatConfig: templateDetail.workflow.chatConfig || {},
             templateId: templateDetail.templateId
@@ -176,7 +176,7 @@ const CreateAppsPage = () => {
         return postCreateApp({
           ...baseParams,
           type: appType,
-          modules: emptyTemplate[appType].nodes,
+          nodes: emptyTemplate[appType].nodes,
           edges: emptyTemplate[appType].edges,
           chatConfig: emptyTemplate[appType].chatConfig
         });
@@ -189,7 +189,7 @@ const CreateAppsPage = () => {
         router.push(
           getAppDetailRoute({
             appId,
-            openSystemConfig: isWorkflowAppType(appType)
+            openWorkflowBuilder: isWorkflowAppType(appType)
           })
         );
       },
@@ -296,7 +296,6 @@ const CreateAppsPage = () => {
               </MyTooltip>
               <Input
                 flex={1}
-                h={'34px'}
                 mr={selectedAppType !== AppTypeEnum.mcpToolSet ? 3 : 0}
                 placeholder={t('app:unnamed_app')}
                 {...register('name')}
@@ -305,7 +304,6 @@ const CreateAppsPage = () => {
                 <Button
                   isLoading={isCreating}
                   onClick={handleSubmit((data) => onClickCreate(data))}
-                  h={'34px'}
                 >
                   {t('common:Create')}
                 </Button>
@@ -463,7 +461,7 @@ const CreateAppsPage = () => {
                   borderWidth={'1px'}
                   position={'relative'}
                 >
-                  <TableContainer maxH={360} minH={200} overflowY={'auto'}>
+                  <FixedTableContainer flush tableVariant={'flat'} maxH={360} minH={200}>
                     <Table bg={'white'}>
                       <Thead bg={'myGray.50'}>
                         <Tr>
@@ -506,7 +504,7 @@ const CreateAppsPage = () => {
                         ))}
                       </Tbody>
                     </Table>
-                  </TableContainer>
+                  </FixedTableContainer>
                   {(!mcpToolList || mcpToolList.length === 0) && (
                     <Center
                       position={'absolute'}
@@ -622,11 +620,3 @@ const CreateAppsPage = () => {
 };
 
 export default CreateAppsPage;
-
-export async function getServerSideProps(content: any) {
-  return {
-    props: {
-      ...(await serviceSideProps(content, ['app', 'user', 'workflow']))
-    }
-  };
-}

@@ -1,49 +1,294 @@
+import {
+  getTestInstanceConfig,
+  createDefaultInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+(global as any).systemInstanceConfig = createDefaultInstanceConfig();
+
 import { getHTTPToolList, runHTTPTool } from '@fastgpt/service/core/app/http';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { PRIVATE_URL_TEXT } from '@fastgpt/service/common/system/utils';
-import { serviceEnv } from '@fastgpt/service/env';
+
+import { ContentTypes } from '@fastgpt/global/core/workflow/constants';
+
+const { axiosMock } = vi.hoisted(() => ({ axiosMock: vi.fn() }));
+vi.mock('@fastgpt/service/common/api/axios', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/common/api/axios')>()),
+  axios: axiosMock
+}));
+
+describe('runHTTPTool request routing', () => {
+  const originalCheckInternalIp = getTestInstanceConfig().security.checkInternalIp;
+  beforeEach(() => {
+    getTestInstanceConfig().security.checkInternalIp = false;
+    axiosMock.mockReset();
+    axiosMock.mockImplementation(async (request) => ({
+      data: { json: request.data, query: request.params }
+    }));
+  });
+  afterEach(() => {
+    getTestInstanceConfig().security.checkInternalIp = originalCheckInternalIp;
+  });
+
+  it.each(['POST', 'PUT', 'PATCH'])(
+    'sends imported %s JSON rather than an empty object',
+    async (method) => {
+      const params = {
+        marker: 'verification',
+        profile: { name: '张三', count: 7 },
+        tags: ['alpha', 'beta'],
+        enabled: false,
+        empty: null
+      };
+      const apiSchemaStr = JSON.stringify({
+        openapi: '3.0.0',
+        info: { title: 'Echo', version: '1' },
+        paths: {
+          '/echo': {
+            [method.toLowerCase()]: {
+              requestBody: {
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        marker: { type: 'string' },
+                        profile: { type: 'object' },
+                        tags: { type: 'array', items: { type: 'string' } },
+                        enabled: { type: 'boolean' },
+                        empty: {}
+                      }
+                    }
+                  }
+                }
+              },
+              responses: { '200': { description: 'OK' } }
+            }
+          }
+        }
+      });
+      expect(
+        await runHTTPTool({
+          baseUrl: 'https://example.com',
+          toolPath: '/echo',
+          method,
+          params,
+          apiSchemaStr,
+          customHeaders: { Authorization: 'Bearer synthetic-test' }
+        })
+      ).toEqual({ data: { json: params, query: undefined } });
+      expect(axiosMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: params,
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer synthetic-test'
+          })
+        })
+      );
+    }
+  );
+
+  it.each([undefined, { type: ContentTypes.none }])(
+    'preserves manual no-body behavior (%s)',
+    async (staticBody) => {
+      await runHTTPTool({
+        baseUrl: 'https://example.com',
+        toolPath: '/echo',
+        method: 'POST',
+        params: { privateValue: 'not-for-body' },
+        staticBody
+      });
+      expect(axiosMock).toHaveBeenCalledWith(
+        expect.objectContaining({ data: {}, params: undefined })
+      );
+    }
+  );
+
+  it('preserves manual JSON templates and GET query inputs', async () => {
+    await runHTTPTool({
+      baseUrl: 'https://example.com',
+      toolPath: '/echo',
+      method: 'POST',
+      params: { value: 'test', ignored: 'not-for-body' },
+      staticBody: { type: ContentTypes.json, content: '{"value":"{{value}}"}' }
+    });
+    expect(axiosMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { value: 'test' } })
+    );
+    await runHTTPTool({
+      baseUrl: 'https://example.com',
+      toolPath: '/echo',
+      method: 'GET',
+      params: { value: 'test' }
+    });
+    expect(axiosMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: undefined, params: { value: 'test' } })
+    );
+  });
+
+  it('does not send a request when OpenAPI resolution fails', async () => {
+    const result = await runHTTPTool({
+      baseUrl: 'https://example.com',
+      toolPath: '/missing',
+      method: 'POST',
+      params: {},
+      apiSchemaStr: '{"openapi":"3.0.0","info":{"title":"Test","version":"1"},"paths":{}}'
+    });
+    expect(result.errorMsg).toContain('OpenAPI operation not found');
+    expect(axiosMock).not.toHaveBeenCalled();
+  });
+
+  it('includes the HTTP response body in the error text', async () => {
+    axiosMock.mockRejectedValueOnce({
+      message: 'Request failed with status code 400',
+      response: {
+        status: 400,
+        data: { code: 'E_DETAIL', detail: 'invalid payload' }
+      }
+    });
+
+    const result = await runHTTPTool({
+      baseUrl: 'https://example.com',
+      toolPath: '/echo',
+      method: 'POST',
+      params: {}
+    });
+
+    expect(result.errorMsg).toContain('Request failed with status code 400');
+    expect(result.errorMsg).toContain('invalid payload');
+  });
+});
 
 describe('SSRF Vulnerability Fix Tests', () => {
-  const originalCheckInternalIp = serviceEnv.CHECK_INTERNAL_IP;
+  const originalCheckInternalIp = getTestInstanceConfig().security.checkInternalIp;
 
   beforeEach(() => {
     // 确保测试环境启用内部 IP 检查
-    serviceEnv.CHECK_INTERNAL_IP = true;
+    getTestInstanceConfig().security.checkInternalIp = true;
   });
 
   afterEach(() => {
-    serviceEnv.CHECK_INTERNAL_IP = originalCheckInternalIp;
+    getTestInstanceConfig().security.checkInternalIp = originalCheckInternalIp;
   });
 
   describe('getHTTPToolList', () => {
-    it('should read tools when legacy customHeaders has a non-string value', async () => {
-      const result = await getHTTPToolList({
-        _id: 'http-toolset',
-        type: AppTypeEnum.httpToolSet,
-        modules: [
+    const createHttpWorkflow = (toolSet: Record<string, unknown>) => ({
+      nodes: [{ toolConfig: { httpToolSet: toolSet } }]
+    });
+
+    it('preserves stored schemas when legacy OpenAPI text cannot be parsed', async () => {
+      const requestSchema = { type: 'object', properties: { q: { type: 'string' } } };
+      const toolSet = {
+        apiSchemaStr: '{"openapi":"3.1.0"}',
+        toolList: [
           {
-            toolConfig: {
-              httpToolSet: {
-                customHeaders: false,
-                toolList: [
-                  {
-                    name: 'search',
-                    description: 'Search',
-                    path: '/search',
-                    method: 'GET'
-                  }
-                ]
-              }
-            }
+            name: 'search',
+            description: 'Search',
+            path: '/search',
+            method: 'GET',
+            requestSchema
           }
         ]
-      } as any);
+      };
+      const [tool] = await getHTTPToolList(
+        {
+          _id: '507f1f77bcf86cd799439011',
+          type: AppTypeEnum.httpToolSet
+        } as any,
+        createHttpWorkflow(toolSet) as any
+      );
+      expect(tool.requestSchema).toEqual(requestSchema);
+      expect(tool.requestSchema).not.toHaveProperty('required');
+    });
+    it('repairs historical Body-only schemas from OpenAPI rather than editor-only fields', async () => {
+      const requestSchema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: { body: { type: 'object' } },
+        required: ['body']
+      };
+      const inputSchema = {
+        type: 'object',
+        properties: { editorOnly: { type: 'string' } },
+        required: ['editorOnly']
+      };
+      const apiSchemaStr = JSON.stringify({
+        openapi: '3.0.0',
+        info: { title: 'Mixed', version: '1' },
+        paths: {
+          '/echo/{id}': {
+            post: {
+              parameters: [
+                { in: 'query', name: 'q', schema: { type: 'string' } },
+                { in: 'path', name: 'id', required: true, schema: { type: 'string' } }
+              ],
+              requestBody: { content: { 'application/json': { schema: requestSchema } } },
+              responses: { '200': { description: 'OK' } }
+            }
+          }
+        }
+      });
+      const app = {
+        _id: '507f1f77bcf86cd799439011',
+        type: AppTypeEnum.httpToolSet,
+        name: 'HTTP tools'
+      };
+      const toolSet = {
+        apiSchemaStr,
+        toolList: [
+          {
+            name: 'echo',
+            description: 'Echo',
+            path: '/echo/{id}',
+            method: 'POST',
+            inputSchema,
+            requestSchema
+          }
+        ]
+      };
+      const [tool] = await getHTTPToolList(app as any, createHttpWorkflow(toolSet) as any);
+      expect(tool.requestSchema).toEqual({
+        ...requestSchema,
+        properties: { q: { type: 'string' }, id: { type: 'string' }, ...requestSchema.properties },
+        required: ['body', 'id']
+      });
+      expect(tool.inputSchema).toEqual(inputSchema);
+      expect(toolSet.toolList[0].requestSchema).toEqual(requestSchema);
+      expect(
+        (
+          await getHTTPToolList(
+            app as any,
+            createHttpWorkflow({ ...toolSet, apiSchemaStr: undefined }) as any
+          )
+        )[0].requestSchema
+      ).toEqual(requestSchema);
+    });
+
+    it('should read tools when legacy customHeaders has a non-string value', async () => {
+      const result = await getHTTPToolList(
+        {
+          _id: '507f1f77bcf86cd799439011',
+          type: AppTypeEnum.httpToolSet
+        } as any,
+        createHttpWorkflow({
+          customHeaders: false,
+          toolList: [
+            {
+              name: 'search',
+              description: 'Search',
+              path: '/search',
+              method: 'GET'
+            }
+          ]
+        }) as any
+      );
 
       expect(result).toMatchObject([
         {
           name: 'search',
-          id: 'http-http-toolset/search'
+          id: 'http-507f1f77bcf86cd799439011/search'
         }
       ]);
     });
@@ -281,7 +526,7 @@ describe('SSRF Vulnerability Fix Tests', () => {
 
   describe('Environment Variable Control', () => {
     it('should always block cloud metadata endpoints even when CHECK_INTERNAL_IP=false', async () => {
-      serviceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       // 云服务商元数据端点应该始终被阻止，这是安全的关键
       const result = await runHTTPTool({
@@ -295,7 +540,7 @@ describe('SSRF Vulnerability Fix Tests', () => {
     });
 
     it('should always block localhost even when CHECK_INTERNAL_IP=false', async () => {
-      serviceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       // localhost 应该始终被阻止
       const result = await runHTTPTool({
@@ -309,7 +554,7 @@ describe('SSRF Vulnerability Fix Tests', () => {
     });
 
     it('should block internal addresses by default (no env var)', async () => {
-      serviceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       const result = await runHTTPTool({
         baseUrl: 'http://localhost',
@@ -322,7 +567,7 @@ describe('SSRF Vulnerability Fix Tests', () => {
     });
 
     it('should block internal addresses when CHECK_INTERNAL_IP=true', async () => {
-      serviceEnv.CHECK_INTERNAL_IP = true;
+      getTestInstanceConfig().security.checkInternalIp = true;
 
       const result = await runHTTPTool({
         baseUrl: 'http://localhost',
@@ -370,14 +615,6 @@ describe('SSRF Vulnerability Fix Tests', () => {
 
       expect(result.errorMsg).toBe(PRIVATE_URL_TEXT);
       expect(result.data).toBeUndefined();
-    });
-  });
-
-  describe('Legitimate External URLs', () => {
-    // 注意：这些测试会实际发起网络请求，可能需要 mock
-    it('should allow legitimate external URLs (example.com)', async () => {
-      // 这个测试需要 mock axios 或者跳过
-      // 因为我们不想在测试中实际发起外部请求
     });
   });
 });

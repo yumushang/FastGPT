@@ -1,3 +1,4 @@
+import { isValidInteractive } from '@fastgpt/global/core/workflow/runtime/utils';
 import React, { useCallback, useMemo } from 'react';
 import { Box, Button, Card, Flex } from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
@@ -99,7 +100,8 @@ const NodeDebugResponse = ({ nodeId, debugResult }: NodeDebugResponseProps) => {
 
   const response = debugResult?.response;
 
-  const interactive = debugResult?.interactiveResponse;
+  const rawInteractive = debugResult?.interactiveResponse;
+  const interactive = isValidInteractive(rawInteractive) ? rawInteractive : undefined;
   const onNextInteractive = useCallback(
     (userContent: string) => {
       if (!workflowDebugData || !workflowDebugData || !interactive) return;
@@ -204,7 +206,10 @@ const NodeDebugResponse = ({ nodeId, debugResult }: NodeDebugResponseProps) => {
             )}
             {!interactive && (
               <>
-                {(debugResult.status === 'success' || debugResult.status === 'skipped') &&
+                {/* 节点错误可能已进入 catch 分支，或同轮其他分支仍有待执行节点。 */}
+                {(debugResult.status === 'success' ||
+                  debugResult.status === 'skipped' ||
+                  (debugResult.status === 'failed' && !!response)) &&
                   !debugResult.isExpired &&
                   workflowDebugData?.entryNodeIds &&
                   workflowDebugData.entryNodeIds.length > 0 && (

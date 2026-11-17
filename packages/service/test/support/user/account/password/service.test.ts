@@ -1,0 +1,219 @@
+import {
+  createDefaultInstanceConfig,
+  getTestInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hashStr } from '@fastgpt/global/common/string/tools';
+import { UserStatusEnum } from '@fastgpt/global/support/user/constant';
+import { MongoUser } from '@fastgpt/service/support/user/schema';
+import { MongoTmpData } from '@fastgpt/service/support/tmpData/schema';
+import {
+  PASSWORD_CHANGE_SESSION_TTL_SECONDS,
+  assertUserPasswordAvailable,
+  createPasswordChangeSession,
+  getUserPasswordAvailability,
+  isSsoPasswordDisabled,
+  isSsoUserByUsername,
+  updatePassword,
+  updateRootPassword
+} from '@fastgpt/service/support/user/account/password/service';
+import { UserErrEnum } from '@fastgpt/global/common/error/code/user';
+
+/** 分别配置真实 SSO 服务与公开密码策略，其余字段沿用运行时已有配置。 */
+const setSsoPasswordPolicy = (enabled: boolean) => {
+  global.getSsoConfiguredHandler = () => true;
+  getTestInstanceConfig().auth.sso.disablePasswordForSsoUsers = enabled;
+};
+
+describe('password change session service', () => {
+  it('creates a short-lived session bound to the user and login session', async () => {
+    const result = await createPasswordChangeSession({
+      userId: 'user-1',
+      loginSessionId: 'login-1'
+    });
+    const record = await MongoTmpData.findOne({
+      data: { userId: 'user-1', loginSessionId: 'login-1' }
+    }).lean();
+
+    expect(result.sessionId).toHaveLength(43);
+    expect(new Date(result.expiredAt).getTime()).toBeGreaterThan(Date.now());
+    expect(record).toMatchObject({ data: { userId: 'user-1', loginSessionId: 'login-1' } });
+    expect(PASSWORD_CHANGE_SESSION_TTL_SECONDS).toBe(300);
+  });
+
+  it('rejects a missing, expired, mismatched, or reused session', async () => {
+    await expect(
+      updatePassword({
+        sessionId: 'missing',
+        userId: 'user-1',
+        loginSessionId: 'login-1',
+        newPassword: 'new'
+      })
+    ).rejects.toThrow(UserErrEnum.passwordChangeAuthorizationInvalid);
+  });
+
+  describe('updateRootPassword used by the open-source flow', () => {
+    let rootUserId: string;
+
+    beforeEach(async () => {
+      await MongoUser.deleteMany({ username: 'root' });
+      const user = await MongoUser.create({
+        username: 'root',
+        password: hashStr('current-password')
+      });
+      rootUserId = String(user._id);
+    });
+
+    it('updates the root password when the submitted old password matches', async () => {
+      await updateRootPassword({
+        userId: rootUserId,
+        oldPassword: hashStr('current-password'),
+        newPassword: hashStr('next-password')
+      });
+
+      const updated = await MongoUser.findById(rootUserId).select('+password').lean();
+      expect(updated?.password).toBe(hashStr(hashStr('next-password')));
+    });
+
+    it('rejects a wrong old password and leaves the password unchanged', async () => {
+      await expect(
+        updateRootPassword({
+          userId: rootUserId,
+          oldPassword: hashStr('wrong-password'),
+          newPassword: hashStr('next-password')
+        })
+      ).rejects.toThrow(UserErrEnum.oldPasswordError);
+
+      const unchanged = await MongoUser.findById(rootUserId).select('+password').lean();
+      expect(unchanged?.password).toBe(hashStr(hashStr('current-password')));
+      expect(unchanged?.passwordUpdateTime).toBeUndefined();
+    });
+
+    it('rejects non-root users even if userId exists', async () => {
+      const nonRoot = await MongoUser.create({
+        username: 'non-root-user',
+        password: hashStr('current-password')
+      });
+
+      await expect(
+        updateRootPassword({
+          userId: String(nonRoot._id),
+          oldPassword: hashStr('current-password'),
+          newPassword: hashStr('next-password')
+        })
+      ).rejects.toThrow('Failed to update password');
+    });
+  });
+
+  it('activates an inactive account after setting a password with a change session', async () => {
+    const user = await MongoUser.create({
+      username: 'update-password-activation',
+      password: hashStr('old-password'),
+      status: UserStatusEnum.inactive
+    });
+    const userId = String(user._id);
+    const loginSessionId = 'login-activation';
+    const { sessionId } = await createPasswordChangeSession({ userId, loginSessionId });
+
+    await updatePassword({
+      sessionId,
+      userId,
+      loginSessionId,
+      newPassword: hashStr('new-password')
+    });
+
+    const updated = await MongoUser.findById(user._id).lean();
+    expect(updated?.status).toBe(UserStatusEnum.active);
+    expect(updated?.passwordUpdateTime).toBeInstanceOf(Date);
+  });
+
+  it('does not activate a forbidden account when its password is changed', async () => {
+    const user = await MongoUser.create({
+      username: 'update-password-forbidden',
+      password: hashStr('old-password'),
+      status: UserStatusEnum.forbidden
+    });
+    const userId = String(user._id);
+    const loginSessionId = 'login-forbidden';
+    const { sessionId } = await createPasswordChangeSession({ userId, loginSessionId });
+
+    await expect(
+      updatePassword({
+        sessionId,
+        userId,
+        loginSessionId,
+        newPassword: hashStr('new-password')
+      })
+    ).rejects.toThrow('Failed to update password');
+
+    const updated = await MongoUser.findById(user._id).select('+password').lean();
+    expect(updated?.status).toBe(UserStatusEnum.forbidden);
+    expect(updated?.password).toBe(hashStr(hashStr('old-password')));
+  });
+});
+
+describe('SSO password policy', () => {
+  let originalConfig: typeof global.systemInstanceConfig;
+  let originalSsoHandler: typeof global.getSsoConfiguredHandler;
+  beforeEach(() => {
+    // 全局配置由 beforeAll 初始化，不能在模块导入时保存未初始化的值。
+    originalConfig = global.systemInstanceConfig;
+    global.systemInstanceConfig = createDefaultInstanceConfig();
+    originalSsoHandler = global.getSsoConfiguredHandler;
+    setSsoPasswordPolicy(false);
+  });
+  afterEach(() => {
+    global.systemInstanceConfig = originalConfig;
+    global.getSsoConfiguredHandler = originalSsoHandler;
+  });
+
+  it('only disables password for dynamically classified SSO users when the policy is enabled', async () => {
+    setSsoPasswordPolicy(true);
+
+    await expect(isSsoPasswordDisabled()).resolves.toBe(true);
+    await expect(isSsoUserByUsername('tenant-user')).resolves.toBe(true);
+    await expect(getUserPasswordAvailability('tenant-user')).resolves.toBe(false);
+    await expect(assertUserPasswordAvailable('tenant-user')).rejects.toThrow(
+      UserErrEnum.ssoPasswordUnavailable
+    );
+  });
+
+  it.each([
+    'local',
+    'user-name@example-domain.com',
+    'wechat-openid',
+    'git-octocat',
+    'google-sub',
+    'microsoft-id',
+    'wecom-id'
+  ])('keeps password available for non-SSO account %s', async (username) => {
+    setSsoPasswordPolicy(true);
+    await expect(getUserPasswordAvailability(username)).resolves.toBe(true);
+  });
+
+  it('restores password availability when the switch is disabled or SSO is not configured', async () => {
+    await expect(getUserPasswordAvailability('tenant-user')).resolves.toBe(true);
+
+    getTestInstanceConfig().auth.sso.disablePasswordForSsoUsers = true;
+    global.getSsoConfiguredHandler = () => false;
+    await expect(isSsoPasswordDisabled()).resolves.toBe(false);
+    await expect(getUserPasswordAvailability('tenant-user')).resolves.toBe(true);
+  });
+
+  it('fails closed only for accounts affected by a policy when SSO status is unavailable', async () => {
+    setSsoPasswordPolicy(true);
+    const resolver = vi.fn(() => {
+      throw new Error('synthetic-private-token');
+    });
+    global.getSsoConfiguredHandler = resolver;
+
+    await expect(getUserPasswordAvailability('root')).resolves.toBe(true);
+    expect(resolver).not.toHaveBeenCalled();
+    await expect(getUserPasswordAvailability('tenant-user')).rejects.toThrow(
+      'SSO configuration is unavailable'
+    );
+    getTestInstanceConfig().auth.sso.disablePasswordForSsoUsers = false;
+    await expect(getUserPasswordAvailability('tenant-user')).resolves.toBe(true);
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { imageBaseUrl } from '@fastgpt/global/common/file/image/constants';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
@@ -21,7 +20,10 @@ vi.mock('@fastgpt/service/core/app/templates/templateSchema', () => ({
   }
 }));
 
-import { getAppTemplatesAndLoadThem } from '@fastgpt/service/core/app/templates/register';
+import {
+  getAppTemplatesAndLoadThem,
+  pickPluginSystemTemplateDbConfig
+} from '@fastgpt/service/core/app/templates/register';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,7 +32,7 @@ beforeEach(() => {
 });
 
 describe('getAppTemplatesAndLoadThem', () => {
-  it('uses the local image proxy for plugin object storage avatars', async () => {
+  it('passes through plugin avatar URL unchanged', async () => {
     mocks.listWorkflows.mockResolvedValue([
       {
         templateId: 'question-classify',
@@ -53,7 +55,7 @@ describe('getAppTemplatesAndLoadThem', () => {
     const [template] = await getAppTemplatesAndLoadThem(true);
 
     expect(template?.avatar).toBe(
-      `${imageBaseUrl}system/plugin/workflow/templates/question-classify/logo`
+      'http://localhost:9000/fastgpt-public/system/plugin/workflow/templates/question-classify/logo'
     );
   });
 
@@ -233,5 +235,16 @@ describe('getAppTemplatesAndLoadThem', () => {
     const [template] = await getAppTemplatesAndLoadThem(true);
 
     expect(template?.workflow.chatConfig).not.toHaveProperty('_id');
+  });
+});
+
+describe('pickPluginSystemTemplateDbConfig', () => {
+  it('keeps experienceUrl when picking editable plugin template config', () => {
+    expect(
+      pickPluginSystemTemplateDbConfig({
+        templateId: `${AppToolSourceEnum.community}-demo`,
+        experienceUrl: 'https://demo.example.com'
+      })
+    ).toEqual({ experienceUrl: 'https://demo.example.com' });
   });
 });

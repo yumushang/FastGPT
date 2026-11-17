@@ -1,14 +1,15 @@
-import { useRouter } from 'next/router';
-import { serviceSideProps } from '@/web/common/i18n/utils';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
-import { Box } from '@chakra-ui/react';
-import { useToast } from '@fastgpt/web/hooks/useToast';
+import React from 'react';
 import { webPushTrack } from '@/web/common/middle/tracks/utils';
-import { useTranslation } from 'next-i18next';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { errorLogger } from '@/web/common/utils/errorLogger';
-import { useMount } from 'ahooks';
+import { useModelDefault } from '@/web/core/ai/model/useModelDefault';
+import { Box } from '@chakra-ui/react';
 import type { I18nStringType } from '@fastgpt/global/common/i18n/type';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { useMount } from 'ahooks';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import { useRouter } from 'next/router';
 import { useEffect } from 'react';
 
 const errorText: I18nStringType = {
@@ -20,12 +21,14 @@ const errorText: I18nStringType = {
 };
 
 function Error() {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useSafeTranslation();
   const lang = i18n.language;
   const router = useRouter();
   const { toast } = useToast();
   const { lastRoute } = useSystemStore();
-  const { llmModelList, embeddingModelList, loaded: modelsLoaded } = useUserModelLists();
+  const llm = useModelDefault({ enabled: true, modelType: ModelTypeEnum.llm });
+  const embedding = useModelDefault({ enabled: true, modelType: ModelTypeEnum.embedding });
+  const modelsLoaded = llm.loaded && embedding.loaded;
 
   useMount(() => {
     // Send track
@@ -39,14 +42,14 @@ function Error() {
     if (!modelsLoaded) return;
 
     let modelError = false;
-    if (llmModelList.length === 0) {
+    if (!llm.model) {
       modelError = true;
       toast({
         title: t('common:llm_model_not_config'),
         status: 'error'
       });
     }
-    if (embeddingModelList.length === 0) {
+    if (!embedding.model) {
       modelError = true;
       toast({
         title: t('common:error_embedding_not_config'),
@@ -56,23 +59,17 @@ function Error() {
 
     const timer = setTimeout(() => {
       if (modelError) {
-        router.push('/config/model?modelTab=config');
+        router.push('/admin/resources/model?modelTab=config');
       } else {
         router.push('/dashboard/agent');
       }
     }, 2000);
     return () => clearTimeout(timer);
-  }, [embeddingModelList.length, llmModelList.length, modelsLoaded, router, t]);
+  }, [embedding.model, llm.model, modelsLoaded, router, t]);
 
   return (
     <Box whiteSpace={'pre-wrap'}>{errorText[lang as keyof typeof errorText] ?? errorText.en}</Box>
   );
-}
-
-export async function getServerSideProps(context: any) {
-  return {
-    props: { ...(await serviceSideProps(context)) }
-  };
 }
 
 export default Error;

@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { isCSVFile, detectImageContentType } from '@fastgpt/global/common/file/utils';
+import {
+  isCSVFile,
+  isOfficeLockFilename,
+  detectImageContentType,
+  normalizeDocumentFileExtension
+} from '@fastgpt/global/common/file/utils';
+
+describe('normalizeDocumentFileExtension', () => {
+  it.each([
+    [undefined, ''],
+    [' .HTM ', 'html'],
+    ['MARKDOWN', 'md'],
+    ['.ZIP', 'zip']
+  ])(
+    'normalizes %s without treating unsupported extensions as documents',
+    (extension, expected) => {
+      expect(normalizeDocumentFileExtension(extension)).toBe(expected);
+    }
+  );
+});
 
 describe('isCSVFile', () => {
   it('should detect csv extension', () => {
@@ -14,6 +33,15 @@ describe('isCSVFile', () => {
     expect(isCSVFile('data.csv.txt')).toBe(false);
     expect(isCSVFile('data.txt')).toBe(false);
     expect(isCSVFile('data')).toBe(false);
+  });
+});
+
+describe('isOfficeLockFilename', () => {
+  it('detects Office lock files by the ~$ prefix', () => {
+    expect(isOfficeLockFilename('~$report.docx')).toBe(true);
+    expect(isOfficeLockFilename('folder/~$sheet.xlsx')).toBe(true);
+    expect(isOfficeLockFilename('report.docx')).toBe(false);
+    expect(isOfficeLockFilename('')).toBe(false);
   });
 });
 

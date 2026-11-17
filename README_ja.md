@@ -109,7 +109,7 @@ docker compose up -d
 
 ## 💪 プロジェクトとリンク
 
-- [クイックスタート ローカル開発](https://doc.fastgpt.io/self-host/dev/)
+- [クイックスタート ローカル開発](https://doc.fastgpt.io/self-host/dev)
 - [OpenAPI ドキュメント](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: モデル集約ロードバランシングサービス](https://github.com/labring/aiproxy)
@@ -122,6 +122,7 @@ docker compose up -d
 ## 🌿 サードパーティエコシステム
 
 - [AI Proxy: 大規模モデル集約サービス](https://sealos.run/aiproxy/?k=fastgpt-github/)
+- [TokenDance (词元跳动) - 統合 AI API ゲートウェイ](https://tokendance.space/)
 - [SiliconCloud - オープンソースモデルオンライン体験プラットフォーム](https://cloud.siliconflow.cn/i/TR9Ym0c4)
 
 <a href="#readme">

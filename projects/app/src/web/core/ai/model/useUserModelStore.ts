@@ -5,7 +5,7 @@ import {
   getModelProviderListFromCache,
   type langType,
   type ModelProviderItemType
-} from '@fastgpt/global/core/ai/provider';
+} from '@fastgpt/global/core/ai/model/provider';
 import type {
   MyModelItemType,
   MyLLMModelItemType,
@@ -14,12 +14,12 @@ import type {
   MySTTModelItemType,
   MyRerankModelItemType
 } from '@fastgpt/global/openapi/core/ai/model/api';
-import type { ModelDefaultIds } from '@fastgpt/global/core/ai/defaultModel';
+import type { ModelDefaultIds } from '@fastgpt/global/core/ai/model/default';
 import {
   GetModelCatalogResponseSchema,
   type GetModelCatalogResponse
 } from '@fastgpt/global/openapi/core/ai/model/api';
-import { getUserModelCatalog } from '@/web/common/system/api';
+import { getUserModelCatalog } from './catalogApi';
 import type { OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 import { resetLogoutState } from '@/web/support/user/logoutState';
 
@@ -186,7 +186,8 @@ export const useUserModelStore = create<UserModelStoreState>()(
             try {
               const response = await getUserModelCatalog({
                 version: currentVersion ?? cached?.version,
-                outLinkAuthData
+                outLinkAuthData,
+                orderBy: 'custom'
               });
               // 身份或同身份请求代次发生变化时丢弃旧响应，防止切换成员后串写或覆盖新请求。
               if (

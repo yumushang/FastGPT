@@ -1,3 +1,4 @@
+import type { ApiKeyAuditParams } from '@fastgpt/global/support/openapi/schema';
 import { AuditEventEnum, AdminAuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 
@@ -37,6 +38,17 @@ export const adminAuditLogMap = {
     content: i18nT('account_team:log_admin_update_team'),
     typeLabel: i18nT('account_team:admin_update_team'),
     params: {} as { name?: string; teamName: string; newTeamName: string; newBalance: string }
+  },
+  [AdminAuditEventEnum.ADMIN_SWITCH_TEAM]: {
+    content: i18nT('account_team:log_admin_switch_team'),
+    typeLabel: i18nT('account_team:admin_switch_team'),
+    params: {} as {
+      name?: string;
+      sourceTeamId: string;
+      targetTeamId: string;
+      targetTeamName: string;
+      ip?: string | null;
+    }
   },
   [AdminAuditEventEnum.ADMIN_ADD_PLAN]: {
     content: i18nT('account_team:log_admin_add_plan'),
@@ -134,10 +146,54 @@ export const adminAuditLogMap = {
     content: i18nT('account_team:log_admin_update_operational_ad'),
     typeLabel: i18nT('account_team:admin_update_operational_ad'),
     params: {}
+  },
+
+  // Moderation
+  [AdminAuditEventEnum.ADMIN_ENABLE_MODERATION_PLUGIN]: {
+    content: i18nT('account_team:log_admin_enable_moderation_plugin'),
+    typeLabel: i18nT('account_team:admin_enable_moderation_plugin'),
+    params: {} as { name?: string; pluginName: string }
+  },
+  [AdminAuditEventEnum.ADMIN_DISABLE_MODERATION_PLUGIN]: {
+    content: i18nT('account_team:log_admin_disable_moderation_plugin'),
+    typeLabel: i18nT('account_team:admin_disable_moderation_plugin'),
+    params: {} as { name?: string; pluginName: string }
+  },
+  [AdminAuditEventEnum.ADMIN_INSTALL_MODERATION_PLUGIN]: {
+    content: i18nT('account_team:log_admin_install_moderation_plugin'),
+    typeLabel: i18nT('account_team:admin_install_moderation_plugin'),
+    params: {} as { name?: string; pluginName: string }
+  },
+  [AdminAuditEventEnum.ADMIN_UNINSTALL_MODERATION_PLUGIN]: {
+    content: i18nT('account_team:log_admin_uninstall_moderation_plugin'),
+    typeLabel: i18nT('account_team:admin_uninstall_moderation_plugin'),
+    params: {} as { name?: string; pluginName: string }
+  },
+  [AdminAuditEventEnum.ADMIN_UPDATE_MODERATION_PLUGIN_CONFIG]: {
+    content: i18nT('account_team:log_admin_update_moderation_plugin_config'),
+    typeLabel: i18nT('account_team:admin_update_moderation_plugin_config'),
+    params: {} as { name?: string; pluginName: string }
+  },
+  [AdminAuditEventEnum.ADMIN_UPDATE_MODERATION_POLICY]: {
+    content: i18nT('account_team:log_admin_update_moderation_policy'),
+    typeLabel: i18nT('account_team:admin_update_moderation_policy'),
+    params: {} as { name?: string }
   }
 };
 
 export const auditLogMap = {
+  [AuditEventEnum.EXPORT_AUDIT_LOGS]: {
+    content: i18nT('account_team:log_export_audit_logs'),
+    typeLabel: i18nT('account_team:export_audit_logs'),
+    params: {} as {
+      name?: string;
+      dateStart: string;
+      dateEnd: string;
+      tmbIds: string;
+      events: string;
+      total: string;
+    }
+  },
   //Team
   [AuditEventEnum.LOGIN]: {
     content: i18nT('account_team:log_login'),
@@ -203,6 +259,26 @@ export const auditLogMap = {
     content: i18nT('account_team:log_assign_permission'),
     typeLabel: i18nT('account_team:assign_permission'),
     params: {} as { name?: string; objectName: string; permission: string }
+  },
+  [AuditEventEnum.TRANSFER_TEAM_OWNERSHIP]: {
+    content: i18nT('account_team:log_transfer_team_ownership'),
+    typeLabel: i18nT('account_team:transfer_team_ownership'),
+    params: {} as {
+      name?: string;
+      teamName: string;
+      oldOwnerName: string;
+      newOwnerName: string;
+    }
+  },
+  // Resource permission
+  [AuditEventEnum.RESUME_INHERIT_PERMISSION]: {
+    content: i18nT('account_team:log_resume_inherit_permission'),
+    typeLabel: i18nT('account_team:resume_inherit_permission'),
+    params: {} as {
+      name?: string;
+      targetResource: string;
+      parentResource?: string;
+    }
   },
   //APP
   [AuditEventEnum.CREATE_APP]: {
@@ -336,6 +412,46 @@ export const auditLogMap = {
     typeLabel: i18nT('account_team:update_dataset'),
     params: {} as { name?: string; datasetName: string; datasetType: string }
   },
+  /**
+   * 修改知识库配置：每个实际变化的配置项一条日志。
+   *
+   * `changeItem` 是「配置项 i18n key」，对象型配置再拼 `.字段路径`（如 `… · chunkSize`），
+   * 因此这里是 string 而不是枚举。
+   */
+  ['dataset.config.update']: {
+    content: i18nT('account_team:log_dataset_config_updated'),
+    typeLabel: i18nT('account_team:dataset_config_updated'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      changeItem: string;
+      oldValue: string;
+      newValue: string;
+    }
+  },
+  /** 创建知识库标签定义。 */
+  ['dataset.tag.create']: {
+    content: i18nT('account_team:log_dataset_tag_created'),
+    typeLabel: i18nT('account_team:dataset_tag_created'),
+    params: {} as { name?: string; datasetName: string; tagName: string }
+  },
+  /** 重命名知识库标签定义。 */
+  ['dataset.tag.rename']: {
+    content: i18nT('account_team:log_dataset_tag_renamed'),
+    typeLabel: i18nT('account_team:dataset_tag_renamed'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      oldName: string;
+      newName: string;
+    }
+  },
+  /** 删除知识库标签定义。 */
+  ['dataset.tag.delete']: {
+    content: i18nT('account_team:log_dataset_tag_deleted'),
+    typeLabel: i18nT('account_team:dataset_tag_deleted'),
+    params: {} as { name?: string; datasetName: string; tagName: string }
+  },
   [AuditEventEnum.DELETE_DATASET]: {
     content: i18nT('account_team:log_delete_dataset'),
     typeLabel: i18nT('account_team:delete_dataset'),
@@ -435,6 +551,56 @@ export const auditLogMap = {
       collectionName: string;
       datasetName: string;
       datasetType: string;
+    }
+  },
+  //Training
+  ['dataset.training.retry']: {
+    content: i18nT('account_team:log_dataset_training_retry'),
+    typeLabel: i18nT('account_team:dataset_training_retry'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+    }
+  },
+  ['dataset.collection.training.retry']: {
+    content: i18nT('account_team:log_dataset_collection_training_retry'),
+    typeLabel: i18nT('account_team:dataset_collection_training_retry'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      collectionName: string;
+    }
+  },
+  ['dataset.training.task.retry']: {
+    content: i18nT('account_team:log_dataset_training_task_retry'),
+    typeLabel: i18nT('account_team:dataset_training_task_retry'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      collectionName: string;
+    }
+  },
+  ['dataset.training.record.delete']: {
+    content: i18nT('account_team:log_dataset_training_record_delete'),
+    typeLabel: i18nT('account_team:dataset_training_record_delete'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      collectionName: string;
+    }
+  },
+  ['dataset.index.rebuild']: {
+    content: i18nT('account_team:log_dataset_index_rebuild'),
+    typeLabel: i18nT('account_team:dataset_index_rebuild'),
+    params: {} as {
+      name?: string;
+      datasetName: string;
+      /** 展示名，日志正文使用；目录查不到模型时退回模型 ID。 */
+      oldModelName: string;
+      newModelName: string;
+      /** 稳定模型 ID，正文不展示，仅供排查模型改名场景。 */
+      oldModelId: string;
+      newModelId: string;
     }
   },
   //Data
@@ -572,22 +738,22 @@ export const auditLogMap = {
   [AuditEventEnum.CREATE_API_KEY]: {
     content: i18nT('account_team:log_create_api_key'),
     typeLabel: i18nT('account_team:create_api_key'),
-    params: {} as { name?: string; keyName: string }
+    params: {} as ApiKeyAuditParams
   },
   [AuditEventEnum.UPDATE_API_KEY]: {
     content: i18nT('account_team:log_update_api_key'),
     typeLabel: i18nT('account_team:update_api_key'),
-    params: {} as { name?: string; keyName: string }
+    params: {} as ApiKeyAuditParams
   },
   [AuditEventEnum.COPY_API_KEY]: {
     content: i18nT('account_team:log_copy_api_key'),
     typeLabel: i18nT('account_team:copy_api_key'),
-    params: {} as { name?: string; keyName: string }
+    params: {} as ApiKeyAuditParams
   },
   [AuditEventEnum.DELETE_API_KEY]: {
     content: i18nT('account_team:log_delete_api_key'),
     typeLabel: i18nT('account_team:delete_api_key'),
-    params: {} as { name?: string; keyName: string }
+    params: {} as ApiKeyAuditParams
   },
   //Agent Skills
   [AuditEventEnum.CREATE_SKILL]: {

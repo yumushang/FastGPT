@@ -1,10 +1,14 @@
+import {
+  getChatPublishSourceName,
+  getChatPublishSourceType
+} from '@fastgpt/global/common/chat/publishSource';
+import { extendChatPublishSources } from '@fastgpt/service/core/chat/publishSource/service';
+import { buildAppChatLogFilter } from '@fastgpt/service/core/app/logs/utils';
 import type { NextApiResponse } from 'next';
-import { responseWriteController } from '@fastgpt/service/common/response';
 import { readFromSecondary } from '@fastgpt/service/common/mongo/utils';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
-import dayjs from 'dayjs';
+import { formatDateWithOffset } from '@fastgpt/global/common/time/fixedOffset';
 import { type ApiRequestProps } from '@fastgpt/next/type';
-import { replaceRegChars } from '@fastgpt/global/common/string/tools';
 import { NextAPI } from '@/service/middleware/entry';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
 import { Types } from '@fastgpt/service/common/mongo';
@@ -13,7 +17,7 @@ import {
   ChatItemCollectionName,
   ChatItemResponseCollectionName
 } from '@fastgpt/service/core/chat/constants';
-import { MongoTeamMember } from '@fastgpt/service/support/user/team/teamMemberSchema';
+import { getTeamMemberMap } from '@fastgpt/service/support/user/team/utils';
 import { ChatSourceTypeEnum, type ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
 import { AppLogKeysEnum } from '@fastgpt/global/core/app/logs/constants';
 import { sanitizeCsvField } from '@fastgpt/service/common/file/csv';
@@ -28,16 +32,13 @@ import { getAppLatestVersion } from '@fastgpt/service/core/app/version/controlle
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 import { getTimezoneCodeFromStr } from '@fastgpt/global/common/time/timezone';
 import { getLocationFromIp } from '@fastgpt/service/common/geo';
+import { getDisplayChatTitle } from '@fastgpt/service/core/chat/title';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { AppVersionCollectionName } from '@fastgpt/service/core/app/version/schema';
 import { ExportChatLogsBodySchema } from '@fastgpt/global/openapi/core/app/log/api';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import { isUnselectedLogUserFilter } from '@fastgpt/global/core/app/logs/utils';
 const logger = getLogger(LogCategories.MODULE.APP.LOGS);
-
-const appChatSourceMatch = {
-  $or: [{ sourceType: ChatSourceTypeEnum.app }, { sourceType: { $exists: false } }]
-};
 
 const formatJsonString = (data: any) => {
   if (data == null) return '';
@@ -49,7 +50,7 @@ const formatJsonString = (data: any) => {
 
 async function handler(req: ApiRequestProps, res: NextApiResponse) {
   const {
-    appId,
+    appId: requestedAppId,
     dateStart,
     dateEnd,
     sources,
@@ -70,10 +71,11 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
   const locale = getLocale(req);
   const timezoneCode = getTimezoneCodeFromStr(dateStart);
 
-  const { teamId, tmbId, app } = await authApp({
+  const { teamId, tmbId, app, appId } = await authApp({
     req,
     authToken: true,
-    appId,
+    authAppApiKey: true,
+    appId: requestedAppId,
     per: AppReadChatLogPerVal
   });
   await assertMemberRateLimit({
@@ -108,88 +110,20 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
   }
 
   // Get members
-  const teamMemberWithContact = await MongoTeamMember.aggregate([
-    { $match: { teamId: new Types.ObjectId(teamId) } },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'userId',
-        foreignField: '_id',
-        as: 'user'
-      }
-    },
-    {
-      $project: {
-        memberId: '$_id',
-        teamId: 1,
-        userId: 1,
-        name: 1,
-        role: 1,
-        status: 1,
-        contact: { $ifNull: [{ $arrayElemAt: ['$user.contact', 0] }, '-'] }
-      }
-    }
-  ]);
+  const memberDisplayMap = await getTeamMemberMap({ teamId, fields: '_id name' });
 
-  const where = {
-    appId: new Types.ObjectId(appId),
-    $and: [appChatSourceMatch],
-    // Feedback type filtering (BEFORE pagination for performance)
-    ...(feedbackType === 'has_feedback' &&
-      !unreadOnly && {
-        $or: [{ hasGoodFeedback: true }, { hasBadFeedback: true }]
-      }),
-    ...(feedbackType === 'has_feedback' &&
-      unreadOnly && {
-        $or: [{ hasUnreadGoodFeedback: true }, { hasUnreadBadFeedback: true }]
-      }),
-    ...(feedbackType === 'good' &&
-      !unreadOnly && {
-        hasGoodFeedback: true
-      }),
-    ...(feedbackType === 'good' &&
-      unreadOnly && {
-        hasUnreadGoodFeedback: true
-      }),
-    ...(feedbackType === 'bad' &&
-      !unreadOnly && {
-        hasBadFeedback: true
-      }),
-    ...(feedbackType === 'bad' &&
-      unreadOnly && {
-        hasUnreadBadFeedback: true
-      }),
-    ...(sources && { source: { $in: sources } }),
-    ...(tmbIds || outLinkUids
-      ? {
-          $or: [
-            ...(tmbIds?.length
-              ? [
-                  {
-                    tmbId: { $in: tmbIds.map((item) => new Types.ObjectId(item)) },
-                    $or: [{ outLinkUid: { $exists: false } }, { outLinkUid: { $in: [null, ''] } }]
-                  }
-                ]
-              : []),
-            ...(outLinkUids?.length ? [{ outLinkUid: { $in: outLinkUids } }] : [])
-          ]
-        }
-      : {}),
-    updateTime: {
-      $gte: new Date(dateStart),
-      $lte: new Date(dateEnd)
-    },
-    ...(chatSearch
-      ? {
-          $or: [
-            { chatId: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } },
-            { title: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } },
-            { customTitle: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } }
-          ]
-        }
-      : undefined),
-    ...(errorFilter === 'has_error' && { errorCount: { $gt: 0 } })
-  };
+  const where = buildAppChatLogFilter({
+    appId,
+    dateStart,
+    dateEnd,
+    sources,
+    tmbIds,
+    outLinkUids,
+    chatSearch,
+    feedbackType,
+    unreadOnly,
+    errorFilter
+  });
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8;');
   res.setHeader('Content-Disposition', 'attachment; filename=usage.csv; ');
@@ -422,6 +356,8 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
           title: 1,
           customTitle: 1,
           source: 1,
+          sourceName: 1,
+          publishSource: 1,
           updateTime: 1,
           createTime: 1,
           messageCount: 1,
@@ -450,32 +386,59 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     }
   ).cursor({ batchSize: 1000 });
 
-  const write = responseWriteController({
-    res,
-    readStream: cursor
-  });
+  /** 每个固定批次先批量取名，再按响应背压输出，避免逐行查询和积压整份导出。 */
+  const write = async (value: string) => {
+    if (res.destroyed || res.writableEnded) return;
+    if (res.write(value)) return;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        res.off('drain', done);
+        res.off('close', done);
+        resolve();
+      };
+      res.once('drain', done);
+      res.once('close', done);
+    });
+  };
 
-  write(csvHeader);
-
-  cursor.on('data', (doc) => {
+  const renderRow = (doc: any) => {
     const createdTime = doc.createTime
-      ? dayjs(doc.createTime).utcOffset(timezoneCode).format('YYYY-MM-DD HH:mm:ss')
+      ? formatDateWithOffset({
+          time: doc.createTime,
+          offset: timezoneCode,
+          format: 'YYYY-MM-DD HH:mm:ss'
+        })
       : '';
     const lastConversationTime = doc.updateTime
-      ? dayjs(doc.updateTime).utcOffset(timezoneCode).format('YYYY-MM-DD HH:mm:ss')
+      ? formatDateWithOffset({
+          time: doc.updateTime,
+          offset: timezoneCode,
+          format: 'YYYY-MM-DD HH:mm:ss'
+        })
       : '';
-    const source = sourcesMap[doc.source as ChatSourceEnum]?.label || doc.source;
-    const titleStr = doc.customTitle || doc.title || '';
-    const tmbName = doc.outLinkUid
-      ? doc.outLinkUid
-      : teamMemberWithContact.find((member) => String(member.memberId) === String(doc.tmbId))?.name;
+    const channelType = doc.publishSource?.type as ChatSourceEnum | undefined;
+    const source = channelType ? sourcesMap[channelType]?.label || '-' : '-';
+    const titleStr = getDisplayChatTitle({ customTitle: doc.customTitle, title: doc.title });
+    const authorizerId = String(doc.tmbId ?? '');
+    const member = memberDisplayMap.get(authorizerId);
+    // CSV 保留成员 ID；仅拼接原始姓名，避免缺名成员被展示为 id:unknown。
+    const authorizer = member?.name?.trim()
+      ? `${authorizerId}:${member.name}`
+      : authorizerId || '-';
     const region = getLocationFromIp(doc.originIp, locale);
 
     const valueMap: Record<string, () => any> = {
-      [AppLogKeysEnum.SOURCE]: () => source,
+      [AppLogKeysEnum.PUBLISH_SOURCE_TYPE]: () => source,
+      [AppLogKeysEnum.SOURCE]: () =>
+        getChatPublishSourceName({
+          type: getChatPublishSourceType(doc),
+          name: doc.publishSource?.name,
+          sourceName: doc.sourceName
+        }) ?? '-',
       [AppLogKeysEnum.CREATED_TIME]: () => createdTime,
       [AppLogKeysEnum.LAST_CONVERSATION_TIME]: () => lastConversationTime,
-      [AppLogKeysEnum.USER]: () => tmbName || '-',
+      [AppLogKeysEnum.USER]: () => doc.outLinkUid || authorizer,
+      [AppLogKeysEnum.AUTH_USER]: () => authorizer,
       [AppLogKeysEnum.TITLE]: () => titleStr,
       [AppLogKeysEnum.SESSION_ID]: () => doc.id || '-',
       [AppLogKeysEnum.MESSAGE_COUNT]: () => doc.messageCount,
@@ -527,19 +490,36 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
       })
       .join(',')}`;
 
-    write(`\n${rowStr}`);
-  });
+    return `\n${rowStr}`;
+  };
 
-  cursor.on('end', () => {
-    cursor.close();
-    res.end();
-  });
+  const flush = async (batch: any[]) => {
+    const rows = await extendChatPublishSources({ list: batch, teamId, appId });
+    for (const row of rows) {
+      if (res.destroyed || res.writableEnded) break;
+      await write(renderRow(row));
+    }
+  };
 
-  cursor.on('error', (err) => {
-    logger.error(`export chat logs error`, { error: err });
-    res.status(500);
-    res.end();
-  });
+  try {
+    await write(csvHeader);
+    let batch: any[] = [];
+    for await (const doc of cursor) {
+      if (res.destroyed || res.writableEnded) break;
+      batch.push(doc);
+      if (batch.length === 200) {
+        await flush(batch);
+        batch = [];
+      }
+    }
+    if (batch.length && !res.destroyed && !res.writableEnded) await flush(batch);
+  } catch (error) {
+    logger.error('export chat logs error', { error });
+    if (!res.headersSent) res.status(500);
+  } finally {
+    await cursor.close();
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
 
   logExportAudit();
 }

@@ -21,7 +21,6 @@ export const WorkflowTemplateTypeSchema = z.object({
   avatar: z.string().optional(),
   name: z.union([I18nStringSchema, z.string()]),
   intro: z.union([I18nStringSchema, z.string()]).optional(),
-  toolDescription: z.string().optional(),
 
   author: z.string().optional(),
   courseUrl: z.string().optional(),

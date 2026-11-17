@@ -2,7 +2,8 @@
   "title": "对话使用",
   "root": false,
   "pages": [
-    "htmlRendering",
+    "html",
+    "!htmlRendering",
     "quoteList"
   ]
 }

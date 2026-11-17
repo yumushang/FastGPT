@@ -2,8 +2,15 @@ import type {
   ApiFileReadContentResponseType,
   APIFileReadResponseType,
   ApiDatasetDetailResponse,
+  ApiDatasetResult,
   APIFileServerType
 } from '@fastgpt/global/core/dataset/apiDataset/type';
+import {
+  classifyApiDatasetError,
+  toApiDatasetError,
+  toApiDatasetSuccess
+} from '@fastgpt/global/core/dataset/apiDataset/utils';
+import type { IultmzhFileParseConfigType } from '@fastgpt/global/core/dataset/type';
 import { type Method } from 'axios';
 import { createProxyAxios } from '../../../../common/api/axios';
 import { readFileRawTextByUrl } from '../../read';
@@ -11,6 +18,7 @@ import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
 import { type RequireOnlyOne } from '@fastgpt/global/common/type/utils';
 import { getS3RawTextSource } from '../../../../common/s3/sources/rawText';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
+import { ensureHttpProtocol } from '@fastgpt/global/common/string/url';
 import { getLogger, LogCategories } from '../../../../common/logger';
 
 type ResponseDataType = {
@@ -32,7 +40,9 @@ type APIFileListResponse = {
 export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerType }) => {
   const logger = getLogger(LogCategories.MODULE.DATASET.API_DATASET);
   const instance = createProxyAxios({
-    baseURL: apiServer.baseUrl,
+    // 兜底未经过 schema 解析的历史配置（如后台任务直接读库），补齐协议后再交给 axios，
+    // 避免请求阶段直接抛 ERR_INVALID_URL。
+    baseURL: ensureHttpProtocol(apiServer.baseUrl),
     timeout: 60000, // 超时时间
     headers: {
       'content-type': 'application/json',
@@ -61,15 +71,7 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     if (typeof err === 'string') {
       return Promise.reject({ message: err });
     }
-    if (typeof err.message === 'string') {
-      return Promise.reject({ message: err.message });
-    }
-    if (typeof err.data === 'string') {
-      return Promise.reject({ message: err.data });
-    }
-    if (err?.response?.data) {
-      return Promise.reject(err?.response?.data);
-    }
+    // 保留 HTTP 状态、网络错误码和响应体，详情层统一分类时不能丢失删除判断依据。
     return Promise.reject(err);
   };
 
@@ -119,9 +121,9 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     previewUrl: string;
   }) => {
     try {
-      const fileDetail = await getFileDetail({ apiFileId });
-      if (fileDetail.name) {
-        return fileDetail.name;
+      const fileDetailRes = await getFileDetail({ apiFileId });
+      if (fileDetailRes.success && fileDetailRes.data.name) {
+        return fileDetailRes.data.name;
       }
     } catch (error) {
       logger.warn('Get api dataset file detail for title fallback failed', {
@@ -159,6 +161,8 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     const formattedFiles = files.map((file) => ({
       ...file,
       rawId: file.id,
+      // 自定义接口特殊：folder 可以没有子级、file 也可以挂子级（语雀一类），
+      // 因此只在对方没给 hasChild 时才回退到 type，不能反过来由 type 覆盖
       hasChild: file.hasChild ?? file.type === 'folder'
     }));
 
@@ -170,6 +174,7 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     tmbId,
     apiFileId,
     customPdfParse,
+    sangforFileParseConfig,
     datasetId,
     usageId
   }: {
@@ -177,6 +182,7 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     tmbId: string;
     apiFileId: string;
     customPdfParse?: boolean;
+    sangforFileParseConfig?: IultmzhFileParseConfigType;
     datasetId: string;
     usageId?: string;
   }): Promise<ApiFileReadContentResponseType> => {
@@ -204,7 +210,8 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
       // Get from buffer
       const rawTextBuffer = await getS3RawTextSource().getRawTextBuffer({
         sourceId: previewUrl,
-        customPdfParse
+        customPdfParse,
+        sangforFileParseConfig
       });
       if (rawTextBuffer) {
         return {
@@ -220,6 +227,7 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
         relatedId: apiFileId,
         datasetId,
         customPdfParse,
+        sangforFileParseConfig,
         usageId,
         getFormatText: true
       });
@@ -230,7 +238,8 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
         sourceId: previewUrl,
         sourceName,
         text: rawText,
-        customPdfParse
+        customPdfParse,
+        sangforFileParseConfig
       });
 
       return {
@@ -259,28 +268,35 @@ export const useApiDatasetRequest = ({ apiServer }: { apiServer: APIFileServerTy
     apiFileId
   }: {
     apiFileId: string;
-  }): Promise<ApiDatasetDetailResponse> => {
-    const fileData = await request<ApiDatasetDetailResponse>(
-      `/v1/file/detail`,
-      {
-        id: apiFileId
-      },
-      'GET'
-    );
+  }): Promise<ApiDatasetResult<ApiDatasetDetailResponse>> => {
+    try {
+      const fileData = await request<ApiDatasetDetailResponse>(
+        `/v1/file/detail`,
+        {
+          id: apiFileId
+        },
+        'GET'
+      );
 
-    if (fileData) {
-      return {
-        id: fileData.id,
-        rawId: apiFileId,
-        name: fileData.name,
-        parentId: fileData.parentId === null ? '' : fileData.parentId,
-        type: fileData.type,
-        updateTime: fileData.updateTime,
-        createTime: fileData.createTime
-      };
+      if (fileData) {
+        return toApiDatasetSuccess({
+          id: fileData.id,
+          rawId: apiFileId,
+          name: fileData.name,
+          parentId: fileData.parentId === null ? '' : fileData.parentId,
+          type: fileData.type,
+          // 与 listFiles 同一口径。同步拿它当根种子：漏了 hasChild 会退化为 false，
+          // 子树不再被遍历 → 后代全部落入删除集，整棵删掉
+          hasChild: fileData.hasChild ?? fileData.type === 'folder',
+          updateTime: fileData.updateTime,
+          createTime: fileData.createTime
+        });
+      }
+
+      return toApiDatasetError({ code: 'NOT_FOUND', message: 'File not found', status: 404 });
+    } catch (err: any) {
+      return classifyApiDatasetError(err);
     }
-
-    return Promise.reject('File not found');
   };
 
   const getFileRawId = (fileId: string) => {

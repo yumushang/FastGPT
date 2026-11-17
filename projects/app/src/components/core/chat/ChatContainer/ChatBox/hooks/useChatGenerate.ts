@@ -23,6 +23,7 @@ import {
 } from '@fastgpt/global/core/chat/utils/mergeNode';
 import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { AuxiliaryGenerationEventEnum } from '@fastgpt/global/core/ai/auxiliaryGeneration/constants';
+import { isChatEntryModerationError } from '@fastgpt/global/core/chat/error';
 import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
@@ -45,12 +46,19 @@ import {
 import type { ChatSiteItemType, ChatBoxInputType, SendPromptFnType } from '../type';
 import type { StartChatFnProps, generatingMessageProps } from '../../type';
 import { cloneDeep } from 'lodash-es';
-import type { ChatAuthTargetInput } from '@/web/core/chat/utils';
+import type { ResolvedChatAuthTargetInput } from '@/web/core/chat/type';
 import { useChatAuthApiTarget } from '@/web/core/chat/utils';
 import { getChatItemErrorText } from '@/global/core/chat/utils';
-import { isChatGeneratingError, shouldRestoreSubmittedChatInput } from '../utils/generate';
+import {
+  isChatGeneratingError,
+  getChatGeneratingConflictData,
+  safeAbortController,
+  shouldRestoreSubmittedChatInput
+} from '../utils/generate';
 import { getLastAiDataId } from '../utils/resume';
 import type { ChatGeneratingConflictRecovery } from '../type';
+
+import type { ChatInputSubmission } from '@/web/core/chat/inputDraft/useChatInputDraft';
 
 type HumanChatSiteItemType = Extract<ChatSiteItemType, { obj: ChatRoleEnum.Human }>;
 
@@ -67,7 +75,7 @@ type NotifyChatGenerateStatusChange = (
 type FinishChatGenerateStatus = (params: {
   status: ChatGenerateStatusEnum;
   finishedInActiveChat: boolean;
-  targetChatTarget?: ChatAuthTargetInput;
+  targetChatTarget?: ResolvedChatAuthTargetInput;
   targetSourceKey?: string;
   targetChatId?: string;
   shouldUpdateChatBoxData?: (state: {
@@ -87,6 +95,7 @@ type QueuedGeneratingMessage = generatingMessageProps & {
 
 type UseChatGenerateProps = {
   onStartChat?: (e: StartChatFnProps) => Promise<{ responseText: string; isNewChat?: boolean }>;
+  onGeneratingMessage?: (message: generatingMessageProps) => void;
   isRoundPending: boolean;
   chatControllerRef: MutableRefObject<AbortController>;
   questionGuideControllerRef: MutableRefObject<AbortController>;
@@ -96,7 +105,10 @@ type UseChatGenerateProps = {
   activeSourceKeyRef: MutableRefObject<string | undefined>;
   activeChatIdRef: MutableRefObject<string | undefined>;
   TextareaDom: MutableRefObject<HTMLTextAreaElement | null>;
-  resetInputVal: (value: ChatBoxInputType) => void;
+  captureSubmittedInput: (input: ChatBoxInputType) => ChatInputSubmission;
+  isSubmittedInputCurrent: (submission: ChatInputSubmission) => boolean;
+  clearSubmittedInput: (submission: ChatInputSubmission) => void;
+  restoreSubmittedInput: (submission: ChatInputSubmission) => void;
   setQuestionGuide: (guides: string[]) => void;
   createQuestionGuide: () => Promise<void>;
   scrollToBottom: (behavior?: 'smooth' | 'auto', delay?: number) => void;
@@ -120,18 +132,20 @@ const isAbortByLeave = (reason: unknown) => {
  *
  * 输入约定：
  * - refs 仍由 ChatBox 持有，保证页面切换、恢复生成等生命周期清理共用同一组 controller。
- * - `resetInputVal`、`createQuestionGuide`、`scrollToBottom`、`generatingScroll` 都来自前面 PR
- *   已抽出的基础 hook，`useChatGenerate` 只编排它们，不重新实现输入或滚动细节。
+ * - 输入快照、草稿清理、失败恢复、问题引导和滚动由基础 hook 提供，本 hook 只编排生成流程。
  * - `notifyChatGenerateStatusChange` 只负责把生成状态变化抛给外部，不感知侧栏历史等外部模型。
  *
  * 边界行为：
  * - `generatingMessage` 仍只更新最后一条 AI 消息；如果最后一条不是 AI，则直接跳过。
- * - interactive 输入会改写上一轮交互结果，不创建新的普通会话轮次。
+ * - 普通生成和恢复流都先通知业务事件回调，避免恢复时遗漏表单配置等聊天内容以外的事件。
+ * - Ask/Preview 回复会新建 user/AI 轮次并回写旧交互状态；表单等 submit 交互继续使用原 AI。
  * - 发送失败且后端没有返回 `responseText` 时恢复用户输入，并回滚本轮 human/AI placeholder。
- * - `abortRequest('leave')` 触发的异常不 toast，也不额外标记错误状态，保持页面切换语义。
+ * - `abortRequest('leave')` 后无论流正常返回或抛错，都保留服务端生成状态，不更新当前会话。
+ * - 刷新销毁页面时也按 leave 中断本地订阅，避免浏览器断流错误回填已发送的草稿。
  */
 export const useChatGenerate = ({
   onStartChat,
+  onGeneratingMessage,
   isRoundPending,
   chatControllerRef,
   questionGuideControllerRef,
@@ -141,7 +155,10 @@ export const useChatGenerate = ({
   activeSourceKeyRef,
   activeChatIdRef,
   TextareaDom,
-  resetInputVal,
+  captureSubmittedInput,
+  isSubmittedInputCurrent,
+  clearSubmittedInput,
+  restoreSubmittedInput,
   setQuestionGuide,
   createQuestionGuide,
   scrollToBottom,
@@ -191,6 +208,8 @@ export const useChatGenerate = ({
         planStatus,
         sandboxStatus,
         skill,
+        workflowBuilderVersion,
+        chatAgentBuilderVersion,
         variables,
         nodeResponse,
         durationSeconds,
@@ -211,14 +230,6 @@ export const useChatGenerate = ({
         if (autoTTSResponse) {
           splitText2Audio(formatChatValue2InputType(item.value).text || '');
         }
-
-        const updateIndex = (() => {
-          if (!responseValueId) return item.value.length - 1;
-          const index = item.value.findIndex((item) => item.id === responseValueId);
-          if (index !== -1) return index;
-          return item.value.length - 1;
-        })();
-        const updateValue: AIChatItemValueItemType = cloneDeep(item.value[updateIndex]);
 
         if (event === SseResponseEventEnum.flowNodeResponse && nodeResponse) {
           return {
@@ -408,45 +419,31 @@ export const useChatGenerate = ({
             value: [...item.value, val]
           };
         }
-        if (event === SseResponseEventEnum.toolParams && tool && updateValue.tools) {
-          if (tool.params) {
-            updateValue.tools = updateValue.tools.map((item) => {
-              if (item.id !== tool.id) return item;
+        if (
+          (event === SseResponseEventEnum.toolParams ||
+            event === SseResponseEventEnum.toolResponse) &&
+          tool
+        ) {
+          const field = event === SseResponseEventEnum.toolParams ? 'params' : 'response';
+          const delta = tool[field];
+          if (typeof delta !== 'string' || (field === 'params' && !delta)) return item;
+
+          // 仅按工具 ID 合并；孤立增量不能落到最后一个正文或尚为空的新 AI 占位上。
+          return {
+            ...item,
+            value: item.value.map((value) => {
+              if (!value.tools?.some((currentTool) => currentTool.id === tool.id)) return value;
 
               return {
-                ...item,
-                params: `${item.params || ''}${tool.params}`
+                ...value,
+                tools: value.tools.map((currentTool) =>
+                  currentTool.id === tool.id
+                    ? { ...currentTool, [field]: `${currentTool[field] || ''}${delta}` }
+                    : currentTool
+                )
               };
-            });
-            return {
-              ...item,
-              value: [
-                ...item.value.slice(0, updateIndex),
-                updateValue,
-                ...item.value.slice(updateIndex + 1)
-              ]
-            };
-          }
-          return item;
-        }
-        if (event === SseResponseEventEnum.toolResponse && tool && updateValue.tools) {
-          if (tool.response) {
-            updateValue.tools = updateValue.tools.map((item) =>
-              item.id === tool.id
-                ? { ...item, response: `${item.response || ''}${tool.response}` }
-                : item
-            );
-
-            return {
-              ...item,
-              value: [
-                ...item.value.slice(0, updateIndex),
-                updateValue,
-                ...item.value.slice(updateIndex + 1)
-              ]
-            };
-          }
-          return item;
+            })
+          };
         }
 
         if (event === SseResponseEventEnum.planStatus && planStatus) {
@@ -531,6 +528,21 @@ export const useChatGenerate = ({
             value: item.value.concat(val)
           };
         }
+        if (event === AuxiliaryGenerationEventEnum.chatAgentConfig && chatAgentBuilderVersion) {
+          // 一轮内多次生成时展示最后一次成功配置，与最终落库的引用保持一致。
+          return {
+            ...item,
+            value: item.value
+              .filter((value) => !value.chatAgentBuilderVersion)
+              .concat({ chatAgentBuilderVersion })
+          };
+        }
+        if (event === SseResponseEventEnum.workflowBuilderVersion && workflowBuilderVersion) {
+          return {
+            ...item,
+            value: item.value.concat({ workflowBuilderVersion })
+          };
+        }
 
         if (event === SseResponseEventEnum.workflowDuration && durationSeconds) {
           return {
@@ -601,6 +613,8 @@ export const useChatGenerate = ({
 
   const generatingMessage = useMemoizedFn(
     (message: generatingMessageProps & { autoTTSResponse?: boolean }) => {
+      onGeneratingMessage?.(message);
+
       if (message.event === SseResponseEventEnum.chatTitle && message.title) {
         setChatBoxData((state) =>
           state.sourceKey === sourceKey && state.chatId === chatId
@@ -641,11 +655,22 @@ export const useChatGenerate = ({
     if (reason === 'leave') {
       cancelGeneratingMessageQueue();
     }
-    chatControllerRef.current?.abort(new Error(reason));
-    questionGuideControllerRef.current?.abort(new Error(reason));
-    pluginControllerRef.current?.abort(new Error(reason));
-    resumeControllerRef.current?.abort(new Error(reason));
+    const abortReason = new Error(reason);
+    safeAbortController(chatControllerRef.current, abortReason);
+    safeAbortController(questionGuideControllerRef.current, abortReason);
+    safeAbortController(pluginControllerRef.current, abortReason);
+    safeAbortController(resumeControllerRef.current, abortReason);
   });
+
+  useEffect(() => {
+    // 刷新不保证触发 React 卸载；先标记为离开，避免断流被当作发送失败而复活已清理的草稿。
+    // beforeunload 可能被用户取消，往返缓存中的页面也可能恢复，只在页面销毁时断开本地订阅。
+    const onPageHide = (event: PageTransitionEvent) => {
+      if (!event.persisted) abortRequest('leave');
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [abortRequest]);
 
   const sendPrompt = useMemoizedFn<SendPromptFnType>(
     ({
@@ -653,13 +678,22 @@ export const useChatGenerate = ({
       files = [],
       history = chatRecords,
       interactive,
+      select,
       autoTTSResponse = false,
       hideInUI = false,
       clearInput = false
     }) => {
+      // 变量校验可能异步完成，发送快照必须在点击时固定，避免期间编辑的内容被清掉。
+      const submission = clearInput ? captureSubmittedInput({ text, files }) : undefined;
       variablesForm.handleSubmit(
         async ({ variables = {} }) => {
           if (!onStartChat) return;
+          if (
+            activeSourceKeyRef.current !== sourceKey ||
+            activeChatIdRef.current !== chatId ||
+            (submission && !isSubmittedInputCurrent(submission))
+          )
+            return;
           if (isRoundPending || chatRequestActiveRef.current) {
             if (!hideInUI) {
               toast({
@@ -670,11 +704,11 @@ export const useChatGenerate = ({
             return;
           }
 
-          questionGuideControllerRef.current?.abort(new Error('stop'));
+          safeAbortController(questionGuideControllerRef.current, new Error('stop'));
 
           text = text.trim();
 
-          if (!text && files.length === 0) {
+          if (!text && files.length === 0 && !select) {
             toast({
               title: t('chat:content_empty'),
               status: 'warning'
@@ -704,8 +738,18 @@ export const useChatGenerate = ({
             throw error;
           }
 
+          // 音频初始化等待期间可能已离开当前会话，此时不创建消息或清理新会话输入。
+          if (
+            activeSourceKeyRef.current !== sourceKey ||
+            activeChatIdRef.current !== chatId ||
+            (submission && !isSubmittedInputCurrent(submission))
+          ) {
+            chatRequestActiveRef.current = false;
+            if (autoTTSResponse) finishSegmentedAudio();
+            return;
+          }
+
           const currentHumanChat: HumanChatSiteItemType = {
-            id: humanChatId,
             dataId: humanChatId,
             obj: ChatRoleEnum.Human,
             time: new Date(),
@@ -716,18 +760,20 @@ export const useChatGenerate = ({
                   type: file.type,
                   name: file.name,
                   url: file.url,
-                  key: file.key || ''
+                  key: file.key || undefined
                 }
               })),
-              ...(text
-                ? [
-                    {
-                      text: {
-                        content: text
+              ...(select
+                ? [{ select }]
+                : text
+                  ? [
+                      {
+                        text: {
+                          content: text
+                        }
                       }
-                    }
-                  ]
-                : [])
+                    ]
+                  : [])
             ] as UserChatItemValueItemType[],
             status: ChatStatusEnum.finish
           };
@@ -736,7 +782,6 @@ export const useChatGenerate = ({
             ...history,
             currentHumanChat,
             {
-              id: responseChatId,
               dataId: responseChatId,
               obj: ChatRoleEnum.AI,
               value: [
@@ -777,13 +822,13 @@ export const useChatGenerate = ({
               : newChatList
           );
 
-          if (clearInput) {
-            resetInputVal({});
-          }
+          if (submission) clearSubmittedInput(submission);
           setQuestionGuide([]);
           scrollToBottom('smooth', 100);
 
           const abortSignal = new AbortController();
+          const isLeaveAborted = () =>
+            abortSignal.signal.aborted && isAbortByLeave(abortSignal.signal.reason);
 
           try {
             chatControllerRef.current = abortSignal;
@@ -799,7 +844,8 @@ export const useChatGenerate = ({
                 return item;
               }),
               reserveId: true,
-              reserveTool: true
+              reserveTool: true,
+              reserveSelect: true
             });
             const { responseText } = await onStartChat({
               messages,
@@ -809,6 +855,9 @@ export const useChatGenerate = ({
               generatingMessage: (e) => generatingMessage({ ...e, autoTTSResponse }),
               variables: requestVariables
             });
+
+            // 离开只断开本地订阅，流可能正常返回；生成结果仍由服务端状态同步接管。
+            if (isLeaveAborted()) return;
 
             flushGeneratingMessageQueue();
 
@@ -873,7 +922,11 @@ export const useChatGenerate = ({
                 state.sourceKey === sourceKey && state.chatId === chatId
             });
           } catch (err: any) {
-            if (isAbortByLeave(err)) return;
+            // 浏览器刷新会先拒绝 fetch，再派发 pagehide。让出当前任务，等离页监听标记 leave，
+            // 避免在页面销毁前的微任务里把已发送内容重新写入草稿；取消离页仍正常处理真实错误。
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            // 流可能将中断包装为 AbortError，需同时检查 controller 上保留的离开原因。
+            if (isLeaveAborted() || isAbortByLeave(err)) return;
 
             flushGeneratingMessageQueue();
 
@@ -881,25 +934,52 @@ export const useChatGenerate = ({
               // 服务端已有生成任务，本轮并未真正创建；回滚占位消息后再恢复原有流。
               setChatRecords(history);
               if (shouldRestoreSubmittedChatInput({ clearInput })) {
-                resetInputVal({ text, files });
+                if (submission) restoreSubmittedInput(submission);
               }
               // 暂时解除本轮发送态；恢复 hook 会用服务端记录校准当前轮并接管后续状态。
               setChatBoxData((state) =>
                 state.sourceKey === sourceKey && state.chatId === chatId
                   ? {
                       ...state,
-                      chatGenerateStatus: ChatGenerateStatusEnum.error
+                      chatGenerateStatus: ChatGenerateStatusEnum.done
                     }
                   : state
               );
+              const conflictData = getChatGeneratingConflictData(err);
               onChatGeneratingConflict({
+                responseChatItemId: conflictData?.responseChatItemId,
                 previousAiDataId,
-                canReusePreviousAi: responseChatId === previousAiDataId
+                canReusePreviousAi:
+                  conflictData?.reusePreviousAi ?? responseChatId === previousAiDataId
               });
               return;
             }
 
             const errorMsg = t(getErrText(err, t('common:core.chat.error.Chat error') as any));
+
+            if (isChatEntryModerationError(err)) {
+              // 仅在服务端明确标识入口审核拦截且尚未创建轮次时，弹出提示、回滚占位消息并恢复草稿输入。
+              toast({
+                title: errorMsg,
+                status: 'warning'
+              });
+              setChatRecords(history);
+              if (shouldRestoreSubmittedChatInput({ clearInput })) {
+                if (submission) restoreSubmittedInput(submission);
+              }
+              const finishedInActiveChat =
+                activeSourceKeyRef.current === sourceKey && activeChatIdRef.current === chatId;
+              finishChatGenerateStatus({
+                status: ChatGenerateStatusEnum.done,
+                finishedInActiveChat,
+                targetChatTarget: currentChatTarget,
+                targetSourceKey: sourceKey,
+                targetChatId: chatId,
+                shouldUpdateChatBoxData: (state) =>
+                  state.sourceKey === sourceKey && state.chatId === chatId
+              });
+              return;
+            }
 
             setChatRecords((state) =>
               state.map((item, index) => {
@@ -919,13 +999,13 @@ export const useChatGenerate = ({
                 responseText: err?.responseText
               })
             ) {
-              resetInputVal({ text, files });
+              if (submission) restoreSubmittedInput(submission);
             }
 
             const finishedInActiveChat =
               activeSourceKeyRef.current === sourceKey && activeChatIdRef.current === chatId;
             finishChatGenerateStatus({
-              status: ChatGenerateStatusEnum.error,
+              status: ChatGenerateStatusEnum.done,
               finishedInActiveChat,
               targetChatTarget: currentChatTarget,
               targetSourceKey: sourceKey,

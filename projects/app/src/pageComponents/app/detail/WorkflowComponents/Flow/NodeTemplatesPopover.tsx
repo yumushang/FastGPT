@@ -21,6 +21,7 @@ import NodeTemplateListHeader from './components/NodeTemplates/header';
 import NodeTemplateList from './components/NodeTemplates/list';
 import { useNodeTemplates } from './components/NodeTemplates/useNodeTemplates';
 import { popoverHeight, popoverWidth } from './hooks/useWorkflow';
+import { validateConnectionWithCore } from '../adapters/command';
 
 const NodeTemplatesPopover = () => {
   const { handleParams, setHandleParams } = useContextSelector(WorkflowModalContext, (v) => v);
@@ -55,6 +56,7 @@ const NodeTemplatesPopover = () => {
     setSearchKey,
     templatesIsLoading,
     templates,
+    TeamScrollData,
     onUpdateTemplateType,
     onUpdateParentId,
     toolTags,
@@ -100,7 +102,15 @@ const NodeTemplatesPopover = () => {
         target: node.id,
         targetHandle: isToolHandle ? 'selectedTools' : `${node.id}-target-left`,
         type: EDGE_TYPE
-      }));
+      }))
+      .filter((edge) => {
+        const result = validateConnectionWithCore({
+          nodes: [...nodes, ...newNodes],
+          edges,
+          connection: edge
+        });
+        return result.status === 'success';
+      });
 
     setEdges((state) => {
       const newState = state.concat(newEdges);
@@ -155,6 +165,7 @@ const NodeTemplatesPopover = () => {
             flexDirection={'column'}
             py={4}
             h={'full'}
+            minH={0}
             userSelect="none"
           >
             <NodeTemplateListHeader
@@ -176,6 +187,7 @@ const NodeTemplatesPopover = () => {
               templates={templates}
               templateType={templateType}
               onUpdateParentId={onUpdateParentId}
+              ScrollData={TeamScrollData}
             />
           </MyBox>
         </PopoverBody>

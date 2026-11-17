@@ -1,39 +1,39 @@
-import React, { useCallback, useMemo } from 'react';
 import {
   Box,
-  Flex,
   Button,
-  IconButton,
+  Flex,
   HStack,
+  IconButton,
   ModalBody,
   ModalFooter,
   useDisclosure
 } from '@chakra-ui/react';
 import { useTranslation } from 'next-i18next';
+import React, { useCallback, useMemo } from 'react';
 
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyBackButton from '@fastgpt/web/components/common/MyBackButton';
+import { useRouter } from 'next/router';
 import { useContextSelector } from 'use-context-selector';
 import { AppContext, TabEnum } from '../context';
 import RouteTab from '../RouteTab';
-import { useRouter } from 'next/router';
 
-import AppCard from '../WorkflowComponents/AppCard';
-import { useSystem } from '@fastgpt/web/hooks/useSystem';
-import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import MyModal from '@fastgpt/web/components/common/MyModal';
-import { formatTime2YMDHMS } from '@fastgpt/global/common/string/time';
-import { useToast } from '@fastgpt/web/hooks/useToast';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { formatTime2YMDHMS } from '@fastgpt/global/common/string/time';
+import MyModal from '@fastgpt/web/components/common/MyModal';
+import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { useSystem } from '@fastgpt/web/hooks/useSystem';
+import { useToast } from '@fastgpt/web/hooks/useToast';
 import PublishHistories from '../PublishHistoriesSlider';
 import SaveButton from '../Workflow/components/SaveButton';
+import AppCard from '../WorkflowComponents/AppCard';
+import { WorkflowModalContext } from '../WorkflowComponents/context/workflowModalContext';
+import { WorkflowPersistenceContext } from '../WorkflowComponents/context/workflowPersistenceContext';
 import {
   WorkflowSnapshotContext,
   type WorkflowSnapshotsType
 } from '../WorkflowComponents/context/workflowSnapshotContext';
 import { WorkflowUtilsContext } from '../WorkflowComponents/context/workflowUtilsContext';
-import { WorkflowModalContext } from '../WorkflowComponents/context/workflowModalContext';
-import { WorkflowPersistenceContext } from '../WorkflowComponents/context/workflowPersistenceContext';
 
 const Header = () => {
   const { t } = useTranslation();
@@ -178,20 +178,17 @@ const Header = () => {
               <IconButton
                 icon={<MyIcon name={'history'} w={'18px'} />}
                 aria-label={''}
-                size={'sm'}
-                w={'34px'}
-                h={'34px'}
+                size={'mdSquare'}
                 variant={'whitePrimary'}
                 onClick={() => setActivePanel(showHistoryModal ? null : 'history')}
               />
               <Button
                 leftIcon={<MyIcon name={'core/workflow/debug'} w={['14px', '16px']} />}
                 w={'81px'}
-                h={'34px'}
                 variant={'whitePrimary'}
                 flexShrink={0}
-                onClick={() => {
-                  const data = flowData2StoreDataAndCheck();
+                onClick={async () => {
+                  const data = await flowData2StoreDataAndCheck();
                   if (data) {
                     setWorkflowTestData(data);
                   }
@@ -204,7 +201,7 @@ const Header = () => {
                 isLoading={loading}
                 isDisabled={showHistoryModal}
                 onClickSave={onClickSave}
-                checkData={() => !!flowData2StoreDataAndCheck()}
+                checkData={async () => !!(await flowData2StoreDataAndCheck())}
               />
             </HStack>
           )}

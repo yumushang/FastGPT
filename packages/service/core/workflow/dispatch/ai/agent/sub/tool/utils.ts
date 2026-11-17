@@ -10,8 +10,6 @@ import {
   splitToolsetToolPluginId
 } from '@fastgpt/global/core/app/tool/utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
-import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
-import { authAppByTmbId } from '../../../../../../../support/permission/app/auth';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import {
   FlowNodeInputTypeEnum,
@@ -47,20 +45,25 @@ import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/
 import {
   appData2FlowNodeIO,
   pluginData2FlowNodeIO,
-  projectExternalVariableInput,
   toolData2FlowNodeIO
-} from '@fastgpt/global/core/workflow/utils';
+} from '@fastgpt/global/common/app/workflow';
+import { projectExternalVariableInput } from '@fastgpt/global/common/workflow/input';
 import type { AppSchemaType } from '@fastgpt/global/core/app/type';
+import type { AppVersionSchemaType } from '@fastgpt/global/core/app/version/type';
 import { getAppVersionById } from '../../../../../../app/version/controller';
 import { AppFolderTypeList, AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { PluginErrEnum } from '@fastgpt/global/common/error/code/plugin';
-import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
+import { parseI18nString, selectPluginText } from '@fastgpt/global/common/i18n/utils';
 import { SystemToolRepo } from '../../../../../../app/tool/systemTool/systemTool.repo';
 import { Output_Template_Error_Message } from '@fastgpt/global/core/workflow/template/output';
-import type { NodeToolConfigType } from '@fastgpt/global/core/workflow/type/node';
+import {
+  type NodeToolConfigType,
+  HttpToolSetRuntimeConfigSchema
+} from '@fastgpt/global/core/workflow/type/node';
 import { getMCPChildren } from '../../../../../../app/mcp';
-import { getHTTPToolList } from '../../../../../../app/http';
-import { decodeToolSetNodesFromStorage } from '../../../../../../app/jsonSchemaStorage';
+import { filterWorkflowToolList } from '../../../../../resource/context';
+import { isWorkflowResourceError, loadWorkflowAppResource } from '../../../../../resource/service';
+import { getWorkflowResourceContext } from '../../../../../utils/context';
 import { getTmbInfoByTmbId } from '../../../../../../../support/user/team/controller';
 import {
   assertTeamPluginSourceAccess,
@@ -100,6 +103,7 @@ export const getAgentRuntimeTools = async ({
   tmbId: string;
   lang?: localeType;
 }): Promise<SubAppInitType[]> => {
+  const resourceContext = getWorkflowResourceContext();
   let teamIdPromise: Promise<string> | undefined;
   const getCurrentTeamId = async () => {
     if (!teamIdPromise) {
@@ -121,7 +125,7 @@ export const getAgentRuntimeTools = async ({
   const getToolSetNodeIO = ({
     nodes
   }: {
-    nodes: AppSchemaType['modules'];
+    nodes: AppVersionSchemaType['nodes'];
   }): {
     inputs: RuntimeNodeItemType['inputs'];
     outputs: RuntimeNodeItemType['outputs'];
@@ -145,14 +149,17 @@ export const getAgentRuntimeTools = async ({
     nodeId,
     idSource,
     runtimeSource,
-    versionId
+    versionId,
+    metadataLocale
   }: {
     toolId: string;
     nodeId: string;
     idSource: AppToolSourceEnum.systemTool | AppToolSourceEnum.commercial;
     runtimeSource?: string;
     versionId?: string;
+    metadataLocale?: localeType;
   }): Promise<AgentRuntimeNode> => {
+    const uiLocale = metadataLocale ?? 'en';
     const systemToolRepo = SystemToolRepo.getInstance();
     const toolConfigSource = (() => {
       if (isDebugToolSource(runtimeSource)) return runtimeSource;
@@ -176,16 +183,20 @@ export const getAgentRuntimeTools = async ({
     const toolDetail = await systemToolRepo.getSystemToolDetail({
       pluginId: toolId,
       version: versionId || undefined,
-      lang,
+      lang: uiLocale,
       source: detailSource
     });
     const isWorkflowTool = !!toolDetail.associatedPluginId;
-    const secrets = jsonSchema2SecretInput({ jsonSchema: toolDetail.secretSchema });
+    const secrets = jsonSchema2SecretInput({ jsonSchema: toolDetail.secretSchema, lang: uiLocale });
     const schemaInputs = jsonSchema2NodeInput({
       jsonSchema: toolDetail.inputSchema,
-      schemaType: 'systemTool'
+      schemaType: 'systemTool',
+      lang: uiLocale
     });
-    const schemaOutputs = jsonSchema2NodeOutput({ jsonSchema: toolDetail.outputSchema });
+    const schemaOutputs = jsonSchema2NodeOutput({
+      jsonSchema: toolDetail.outputSchema,
+      lang: uiLocale
+    });
     // secrets 是运行时私密配置，只放进隐藏 input，不能暴露成模型可填写参数。
     const inputs = [
       ...(secrets?.length
@@ -210,9 +221,9 @@ export const getAgentRuntimeTools = async ({
           ? FlowNodeTypeEnum.toolSet
           : FlowNodeTypeEnum.tool,
       avatar: toolDetail.avatar,
-      name: toolDetail.name,
-      intro: toolDetail.intro,
-      toolDescription: toolDetail.toolDescription,
+      name: selectPluginText(toolDetail.name, uiLocale),
+      intro: selectPluginText(toolDetail.intro, uiLocale),
+      metadataLocale: uiLocale,
       version: versionId ?? '',
       inputs,
       outputs: appendErrorOutput(schemaOutputs),
@@ -232,8 +243,8 @@ export const getAgentRuntimeTools = async ({
                       ...(toolConfigSource ? { source: toolConfigSource } : {}),
                       toolList:
                         toolDetail.children?.map((child) => ({
-                          description: child.description ?? '',
-                          name: child.name,
+                          description: selectPluginText(child.description, uiLocale),
+                          name: selectPluginText(child.name, uiLocale),
                           toolId: child.id
                         })) ?? []
                     }
@@ -249,7 +260,7 @@ export const getAgentRuntimeTools = async ({
     };
   };
 
-  // 缺失或空版本都表示最新版本；固定版本由 Agent 工具配置显式传入。
+  // 所有 App，包括 MCP/HTTP 工具集，都从对应 Version 读取；App.modules 只属于迁移数据。
   const getVersionNodes = async ({
     app,
     versionId
@@ -257,16 +268,6 @@ export const getAgentRuntimeTools = async ({
     app: AppSchemaType;
     versionId?: string;
   }) => {
-    if (app.type === AppTypeEnum.mcpToolSet || app.type === AppTypeEnum.httpToolSet) {
-      return {
-        versionId: undefined,
-        versionName: undefined,
-        nodes: decodeToolSetNodesFromStorage(app.modules),
-        edges: app.edges,
-        chatConfig: app.chatConfig
-      };
-    }
-
     const version = await getAppVersionById({
       appId: String(app._id),
       versionId,
@@ -355,7 +356,10 @@ export const getAgentRuntimeTools = async ({
       };
     }
 
-    const nodeIO = appData2FlowNodeIO({ chatConfig: version.chatConfig });
+    const nodeIO = appData2FlowNodeIO({
+      chatConfig: version.chatConfig,
+      isChatAgent: app.type === AppTypeEnum.chatAgent
+    });
     return {
       ...baseNode,
       flowNodeType: FlowNodeTypeEnum.appModule,
@@ -366,8 +370,7 @@ export const getAgentRuntimeTools = async ({
 
   /**
    * 解析单个 MCP 工具 id: mcp-${appId}/${toolName}。
-   * 运行时始终从 MCP 工具集应用读取完整工具定义；旧版子 App 数据由 getMCPChildren
-   * 内部兼容处理。
+   * 运行时始终从当前 MCP 工具集 Version 读取完整工具定义。
    */
   const formatMcpToolNode = async ({
     app,
@@ -377,6 +380,7 @@ export const getAgentRuntimeTools = async ({
     pluginId: string;
   }): Promise<AgentRuntimeNode> => {
     const { toolName } = splitToolsetToolPluginId(pluginId);
+    // 单个子工具已按 toolName 完成快照或成员鉴权，直接读取完整定义。
     const toolList = await getMCPChildren(app);
     const tool = findToolByName(toolList, toolName);
     if (!tool) return Promise.reject(PluginErrEnum.unExist);
@@ -410,7 +414,8 @@ export const getAgentRuntimeTools = async ({
     pluginId: string;
   }): Promise<AgentRuntimeNode> => {
     const { toolName } = splitToolsetToolPluginId(pluginId);
-    const toolList = await getHTTPToolList(app);
+    const version = await getVersionNodes({ app, versionId: undefined });
+    const toolList = version.nodes[0]?.toolConfig?.httpToolSet?.toolList ?? [];
     const tool = getToolNameCandidates(toolName)
       .map((name) => toolList.find((item) => item.name === name))
       .find(Boolean);
@@ -439,6 +444,7 @@ export const getAgentRuntimeTools = async ({
     pluginId,
     toolId,
     versionId,
+    metadataLocale,
     app
   }: {
     idSource: AppToolSourceEnum | string;
@@ -446,6 +452,7 @@ export const getAgentRuntimeTools = async ({
     pluginId: string;
     toolId: string;
     versionId?: string;
+    metadataLocale?: localeType;
     app?: AppSchemaType;
   }): Promise<AgentRuntimeNode> => {
     // Agent 运行时只需要节点执行和 schema 信息，不能依赖面向前端展示的 preview controller。
@@ -455,7 +462,8 @@ export const getAgentRuntimeTools = async ({
         nodeId: pluginId,
         idSource,
         runtimeSource,
-        versionId
+        versionId,
+        metadataLocale
       });
     }
     if (!app) return Promise.reject(PluginErrEnum.unExist);
@@ -473,7 +481,6 @@ export const getAgentRuntimeTools = async ({
     toolId,
     inputs,
     name,
-    toolDescription,
     intro,
     jsonSchema,
     fixedInputBindings
@@ -481,18 +488,17 @@ export const getAgentRuntimeTools = async ({
     toolId: string;
     inputs: FlowNodeInputItemType[];
     name: string;
-    toolDescription?: string;
     intro?: string;
     jsonSchema?: JSONSchemaInputType;
     fixedInputBindings?: Record<string, unknown>;
   }) => {
-    const description = [name, toolDescription || intro].filter(Boolean).join(': ');
     // 仅数字开头的工具名需要补前缀，避免破坏 runtime 使用原始 tool id 反查工具。
     const formatToolId = /^\d/.test(toolId) ? `t${toolId}` : toolId;
 
     return compileToolRuntime({
       toolId: formatToolId,
-      name: description,
+      name,
+      description: intro,
       inputs,
       jsonSchema,
       fixedInputBindings
@@ -509,13 +515,11 @@ export const getAgentRuntimeTools = async ({
   }) => {
     if (!app || !toolSetId || String(app._id) === toolSetId) return app;
 
-    return (
-      await authAppByTmbId({
-        tmbId,
-        appId: toolSetId,
-        per: ReadPermissionVal
-      })
-    ).app;
+    return loadWorkflowAppResource({
+      tmbId,
+      appId: toolSetId,
+      type: 'tool'
+    });
   };
 
   return Promise.all(
@@ -528,11 +532,14 @@ export const getAgentRuntimeTools = async ({
           tool.toolConfig?.systemToolSet?.source;
         // 工具间整体并发；单个 App 类工具必须先鉴权拿到 app，才能读取对应版本节点。
         const authAppPromise = authAppId
-          ? authAppByTmbId({
+          ? loadWorkflowAppResource({
               tmbId,
               appId: authAppId,
-              per: ReadPermissionVal
-            })
+              type: 'tool',
+              ...(idSource === AppToolSourceEnum.mcp || idSource === AppToolSourceEnum.http
+                ? { toolName: splitToolsetToolPluginId(pluginId).toolName }
+                : {})
+            }).then((app) => ({ app }))
           : Promise.resolve(undefined);
 
         const [authResult, toolNode] = await Promise.all([
@@ -544,6 +551,7 @@ export const getAgentRuntimeTools = async ({
               pluginId,
               app: authResult?.app,
               toolId: tool.id,
+              metadataLocale: tool.metadataLocale,
               versionId:
                 authResult?.app?.type === AppTypeEnum.mcpToolSet ||
                 authResult?.app?.type === AppTypeEnum.httpToolSet
@@ -553,18 +561,7 @@ export const getAgentRuntimeTools = async ({
           )
         ]);
         const authApp = authResult?.app;
-        if (
-          !validateToolConfiguration({
-            toolTemplate: toolNode,
-            isAppTool: true
-          })
-        ) {
-          getLogger(LogCategories.MODULE.AI.AGENT).warn(`[Agent] tool has unsupported inputs`, {
-            toolId: tool.id,
-            toolName: toolNode.name
-          });
-          return [];
-        }
+        toolNode.name = tool.name ?? toolNode.name;
         const legacyDefaultMode =
           tool.inputs === undefined
             ? isSystemOrCommercialToolId(tool.id)
@@ -586,6 +583,19 @@ export const getAgentRuntimeTools = async ({
             legacyDefaultMode
           })
         );
+        // 必须在输入类型归一化并应用已保存 mode 之后再校验，与 UI 侧校验状态对齐，避免 reference 等合法由 Agent 生成的入参被误判拦截。
+        if (
+          !validateToolConfiguration({
+            toolTemplate: toolNode,
+            isAppTool: true
+          })
+        ) {
+          getLogger(LogCategories.MODULE.AI.AGENT).warn(`[Agent] tool has unsupported inputs`, {
+            toolId: tool.id,
+            toolName: toolNode.name
+          });
+          return [];
+        }
         const configuredParams = filterToolConfiguredParams({
           params: tool.config,
           inputs: toolNode.inputs
@@ -631,7 +641,7 @@ export const getAgentRuntimeTools = async ({
           }
         });
 
-        // 缺少必填运行配置时，不把该工具注册给模型，避免模型调用后才失败。
+        // 缺少必填运行配置或配置无效时，不把该工具注册给模型，避免模型调用后才失败。
         const configStatus = getToolConfigStatus({
           tool: toolNode
         });
@@ -689,7 +699,6 @@ export const getAgentRuntimeTools = async ({
             toolId: runtimeId,
             inputs,
             name: child.name,
-            toolDescription: child.toolDescription,
             intro: child.intro,
             jsonSchema: child.jsonSchema,
             fixedInputBindings: filterToolConfiguredParams({ params: configuredParams, inputs })
@@ -728,10 +737,10 @@ export const getAgentRuntimeTools = async ({
                 toolConfig: toolNode.toolConfig,
                 inputs: toolNode.inputs,
                 nodeId: pluginId,
+                metadataLocale: toolNode.metadataLocale,
                 version: toolNode.version
               },
-              teamId: isTeamPluginSource(runtimeSource) ? await getCurrentTeamId() : undefined,
-              lang
+              teamId: isTeamPluginSource(runtimeSource) ? await getCurrentTeamId() : undefined
             });
 
             return children.map((child) => buildSubApp(child));
@@ -743,7 +752,13 @@ export const getAgentRuntimeTools = async ({
               app: authApp,
               toolSetId
             });
-            const finalToolList = toolSetApp ? await getMCPChildren(toolSetApp) : [];
+            const finalToolList = toolSetApp
+              ? filterWorkflowToolList({
+                  context: resourceContext,
+                  appId: String(toolSetApp._id),
+                  tools: await getMCPChildren(toolSetApp)
+                })
+              : [];
 
             const runtimeToolSetId = toolSetId || toolNode.pluginId || pluginId;
             const children = finalToolList.map((tool, index) => {
@@ -766,7 +781,17 @@ export const getAgentRuntimeTools = async ({
               app: authApp,
               toolSetId
             });
-            const toolList = toolSetApp ? await getHTTPToolList(toolSetApp) : [];
+            const toolList = toolSetApp
+              ? filterWorkflowToolList({
+                  context: resourceContext,
+                  appId: String(toolSetApp._id),
+                  tools:
+                    HttpToolSetRuntimeConfigSchema.safeParse(
+                      (await getVersionNodes({ app: toolSetApp, versionId: undefined })).nodes[0]
+                        ?.toolConfig?.httpToolSet
+                    ).data?.toolList ?? []
+                })
+              : [];
             const runtimeToolSetId = toolSetId || toolNode.pluginId || pluginId;
             const children = toolList.map((tool: HttpToolConfigType, index) => {
               const newToolNode = getHTTPToolRuntimeNode({
@@ -793,7 +818,6 @@ export const getAgentRuntimeTools = async ({
             toolId: runtimeToolId,
             inputs,
             name: toolNode.name,
-            toolDescription: toolNode.toolDescription,
             intro: toolNode.intro,
             jsonSchema: toolNode.jsonSchema,
             fixedInputBindings: filterToolConfiguredParams({ params: configuredParams, inputs })
@@ -816,6 +840,7 @@ export const getAgentRuntimeTools = async ({
           ];
         }
       } catch (error) {
+        if (isWorkflowResourceError(error)) throw error;
         getLogger(LogCategories.MODULE.AI.AGENT).warn(`[Agent] tool load error`, {
           toolId: tool.id,
           error: getErrText(error)

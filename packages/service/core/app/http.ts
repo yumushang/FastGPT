@@ -1,7 +1,8 @@
 import { type StoreSecretValueType } from '@fastgpt/global/common/secret/type';
+import type { SecretValueReferenceResolver } from '@fastgpt/global/common/secret/utils';
 import { getSecretValue } from '../../common/secret/utils';
 import { axios } from '../../common/api/axios';
-import { getErrText } from '@fastgpt/global/common/error/utils';
+import { formatHttpError, getSafeHttpErrorFields } from '../../common/api/httpError';
 import type { RequireOnlyOne } from '@fastgpt/global/common/type/utils';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import {
@@ -16,6 +17,10 @@ import { replaceEditorVariable } from '../workflow/dispatch/utils/replaceEditorV
 import FormData from 'form-data';
 import { getLogger, LogCategories } from '../../common/logger';
 import { decodeHttpToolSetNodesFromStorage } from './jsonSchemaStorage';
+import { buildOpenAPIHttpRequest } from './httpTool/request';
+import { str2OpenApiSchema } from '@fastgpt/global/core/app/jsonschema';
+import { completeOpenAPIRequestSchema } from '@fastgpt/global/core/app/tool/httpTool/utils';
+import { getAppLatestVersion, type AppPublishedWorkflow } from './version/controller';
 
 const logger = getLogger(LogCategories.MODULE.APP.HTTP_TOOLS);
 
@@ -24,11 +29,13 @@ export type RunHTTPToolParams = {
   toolPath: string;
   method: string;
   params: Record<string, any>;
+  apiSchemaStr?: string;
   headerSecret?: StoreSecretValueType | null;
   customHeaders?: Record<string, string>;
   staticParams?: HttpToolConfigType['staticParams'];
   staticHeaders?: HttpToolConfigType['staticHeaders'];
   staticBody?: HttpToolConfigType['staticBody'];
+  resolveReference?: SecretValueReferenceResolver;
 };
 
 export type RunHTTPToolResult = RequireOnlyOne<{
@@ -36,6 +43,7 @@ export type RunHTTPToolResult = RequireOnlyOne<{
   errorMsg?: string;
 }>;
 
+/** 按手动工具模板构造请求；缺失模板仍保持原有空 Body 行为，不自动透传 params。 */
 const buildHttpRequest = ({
   method,
   params,
@@ -43,7 +51,8 @@ const buildHttpRequest = ({
   customHeaders,
   staticParams,
   staticHeaders,
-  staticBody
+  staticBody,
+  resolveReference
 }: Omit<RunHTTPToolParams, 'baseUrl' | 'toolPath'>) => {
   const replaceVariables = (text: string) => {
     return replaceEditorVariable({
@@ -97,7 +106,7 @@ const buildHttpRequest = ({
   const headers = {
     ...(contentType && { 'Content-Type': contentType }),
     ...(customHeaders || {}),
-    ...(headerSecret ? getSecretValue({ storeSecret: headerSecret }) : {}),
+    ...(headerSecret ? getSecretValue({ storeSecret: headerSecret, resolveReference }) : {}),
     ...(staticHeaders?.reduce(
       (acc, { key, value }) => {
         const replacedKey = replaceVariables(key);
@@ -136,6 +145,10 @@ const buildHttpRequest = ({
   };
 };
 
+/**
+ * HTTP 工具统一执行入口。导入工具从 OpenAPI 原文恢复参数位置，手动工具使用显式模板。
+ * 鉴权配置优先于动态 Header，并在路径参数编码后验证最终 URL；失败返回 errorMsg。
+ */
 export const runHTTPTool = async ({
   baseUrl,
   toolPath,
@@ -145,9 +158,27 @@ export const runHTTPTool = async ({
   customHeaders,
   staticParams,
   staticHeaders,
-  staticBody
+  staticBody,
+  apiSchemaStr,
+  resolveReference
 }: RunHTTPToolParams): Promise<RunHTTPToolResult> => {
   try {
+    // OpenAPI 与手动工具共用发送层，但参数来源不同；不能用 staticBody 缺失来猜测来源。
+    const openApiSchema = apiSchemaStr?.trim();
+    const manualRequest = buildHttpRequest({
+      method,
+      params,
+      headerSecret,
+      customHeaders,
+      staticParams,
+      staticHeaders,
+      staticBody: openApiSchema ? undefined : staticBody,
+      resolveReference
+    });
+    const request = openApiSchema
+      ? await buildOpenAPIHttpRequest({ apiSchemaStr: openApiSchema, toolPath, method, params })
+      : { ...manualRequest, toolPath };
+    const headers = { ...request.headers, ...manualRequest.headers };
     // Construct full base URL
     const fullBaseUrl = !baseUrl
       ? ''
@@ -158,55 +189,75 @@ export const runHTTPTool = async ({
     // SSRF Protection: Validate URL before making request
     // When baseUrl is empty, toolPath must be a complete URL
     const fullUrl = fullBaseUrl
-      ? new URL(toolPath, fullBaseUrl).toString()
-      : new URL(toolPath).toString();
+      ? new URL(request.toolPath, fullBaseUrl).toString()
+      : new URL(request.toolPath).toString();
 
     if (await isInternalAddress(fullUrl)) {
       return { errorMsg: PRIVATE_URL_TEXT };
     }
 
-    const { headers, body, queryParams } = buildHttpRequest({
-      method,
-      params,
-      headerSecret,
-      customHeaders,
-      staticParams,
-      staticHeaders,
-      staticBody
-    });
-
     const { data } = await axios({
       method: method.toUpperCase(),
       baseURL: fullBaseUrl,
-      url: toolPath,
+      url: request.toolPath,
       headers,
-      data: body,
-      params: queryParams,
+      data: request.body,
+      params: request.queryParams,
       timeout: 300000
     });
 
     return { data };
   } catch (error) {
-    logger.warn('HTTP tool request failed', { error });
-    return { errorMsg: getErrText(error) };
+    // 保留 HTTP Tool 只采集响应状态的边界，不把异常上的直接 status 新增为日志来源。
+    logger.warn('HTTP tool request failed', {
+      name: 'HttpToolRequestError',
+      message: 'HTTP tool request failed',
+      ...getSafeHttpErrorFields({ error, statusSource: 'response' })
+    });
+    // 与 HTTP 节点保持一致：非 2xx 时把响应体中的具体原因附加到错误文本，避免只剩状态行。
+    return { errorMsg: formatHttpError(error).rawText };
   }
 };
 
 /** Read the current HTTP tool list from a toolset app. */
-export const getHTTPToolList = async (app: AppSchemaType) => {
+export const getHTTPToolList = async (app: AppSchemaType, workflow?: AppPublishedWorkflow) => {
   if (app.type !== AppTypeEnum.httpToolSet) return [];
 
-  const modules = decodeHttpToolSetNodesFromStorage(app.modules);
-  const toolSet = modules[0]?.toolConfig?.httpToolSet;
+  const nodes = decodeHttpToolSetNodesFromStorage(
+    (workflow ?? (await getAppLatestVersion(String(app._id), app))).nodes
+  );
+  const toolSet = nodes[0]?.toolConfig?.httpToolSet;
   const toolList = HttpToolConfigTypeSchema.array().safeParse(
     toolSet && 'toolList' in toolSet ? toolSet.toolList : undefined
   ).data;
+  // 只有导入工具有 OpenAPI 原文；历史 Body-only Schema 只补原文明示的非 Body 参数。
+  const apiSchemaStr = toolSet && 'apiSchemaStr' in toolSet ? toolSet.apiSchemaStr : undefined;
+  const pathData =
+    toolList?.length && apiSchemaStr?.trim()
+      ? // 读取旧配置时，无法解析原文就不猜测补字段，保留存储契约供编辑修复。
+        // 真正发送请求时 buildOpenAPIHttpRequest 仍严格校验原文，不会静默发送空请求。
+        ((await str2OpenApiSchema(apiSchemaStr).catch(() => undefined))?.pathData ?? [])
+      : [];
 
   return (
-    toolList?.map((item) => ({
-      ...item,
-      id: `${AppToolSourceEnum.http}-${String(app._id)}/${item.name}`,
-      avatar: app.avatar
-    })) ?? []
+    toolList?.map((item) => {
+      const operation = pathData.find(
+        (path) => path.path === item.path && path.method.toUpperCase() === item.method.toUpperCase()
+      );
+      const bodySchema = operation?.request?.content?.['application/json']?.schema;
+      return {
+        ...item,
+        ...(bodySchema
+          ? {
+              requestSchema: completeOpenAPIRequestSchema({
+                requestSchema: item.requestSchema ?? bodySchema,
+                parameters: operation?.params
+              })
+            }
+          : {}),
+        id: `${AppToolSourceEnum.http}-${String(app._id)}/${item.name}`,
+        avatar: app.avatar
+      };
+    }) ?? []
   );
 };

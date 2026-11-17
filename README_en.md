@@ -109,7 +109,7 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 
 ## 💪 Our Projects & Links
 
-- [Quick Start Local Development](https://doc.fastgpt.io/self-host/dev/)
+- [Quick Start Local Development](https://doc.fastgpt.io/self-host/dev)
 - [OpenAPI Documentation](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: Model Aggregation Load Balancing Service](https://github.com/labring/aiproxy)
@@ -122,6 +122,7 @@ If you encounter any issues, you can [view the complete Docker deployment tutori
 ## 🌿 Third-party Ecosystem
 
 - [AI Proxy: Large Model Aggregation Service](https://sealos.run/aiproxy/?k=fastgpt-github/)
+- [TokenDance - Multi-provider AI API Gateway](https://tokendance.space/)
 - [SiliconCloud - Open Source Model Online Experience Platform](https://cloud.siliconflow.cn/i/TR9Ym0c4)
 
 <a href="#readme">

@@ -9,7 +9,7 @@ import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { parseJsonArgs } from '../../../../../ai/utils';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { dispatchTool } from './tool';
-import type { WorkflowResponseItemType } from '../../../type';
+import type { WorkflowResponseItemType } from '@fastgpt/global/core/workflow/runtime/sse';
 import { dispatchApp, dispatchPlugin } from './app';
 import { SystemToolRepo } from '../../../../../app/tool/systemTool/systemTool.repo';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
@@ -85,6 +85,7 @@ export type ToolDispatchContext = Pick<
   | 'usageId'
   | 'uid'
   | 'variableState'
+  | 'memoryState'
   | 'externalProvider'
   | 'lang'
   | 'requestOrigin'
@@ -94,10 +95,12 @@ export type ToolDispatchContext = Pick<
   | 'maxRunTimes'
   | 'workflowDispatchDeep'
   | 'params'
+  | 'query'
   | 'stream'
   | 'nodeResponseSink'
 > & {
-  modelData: import('@fastgpt/global/core/ai/model.schema').LLMSystemModelDataType;
+  runtimeNodesMap?: DispatchAgentModuleProps['runtimeNodesMap'];
+  modelData: import('@fastgpt/global/core/ai/model/schema').LLMModelDataType;
   nodeResponseParentId?: string;
   systemPrompt?: string;
   getSubAppInfo: GetSubAppInfoFnType;
@@ -106,9 +109,15 @@ export type ToolDispatchContext = Pick<
   streamResponseFn?: (args: WorkflowResponseItemType) => void | undefined;
 };
 
-const filterAgentWorkflowRuntimeParams = (params: Record<string, any>) => {
+const filterAgentWorkflowRuntimeParams = (
+  params: Record<string, any>,
+  options: { omitHistory?: boolean } = {}
+) => {
   const runtimeParams = { ...params };
   delete runtimeParams[NodeInputKeyEnum.forbidStream];
+  if (options.omitHistory) {
+    delete runtimeParams[NodeInputKeyEnum.history];
+  }
   return runtimeParams;
 };
 
@@ -132,10 +141,12 @@ export const getAgentDatasetParams = (
     rerankModelId: params[NodeInputKeyEnum.datasetSearchRerankModelId],
     rerankModel: params[NodeInputKeyEnum.datasetSearchRerankModel],
     rerankWeight: params[NodeInputKeyEnum.datasetSearchRerankWeight],
+    rerankCandidateNum: params[NodeInputKeyEnum.datasetSearchRerankCandidateNum],
     datasetSearchUsingExtensionQuery: params[NodeInputKeyEnum.datasetSearchUsingExtensionQuery],
     datasetSearchExtensionModelId: params[NodeInputKeyEnum.datasetSearchExtensionModelId],
     datasetSearchExtensionModel: params[NodeInputKeyEnum.datasetSearchExtensionModel],
     datasetSearchExtensionBg: params[NodeInputKeyEnum.datasetSearchExtensionBg],
+    collectionFilterMatch: params[NodeInputKeyEnum.collectionFilterMatch],
     [NodeInputKeyEnum.authTmbId]: params[NodeInputKeyEnum.authTmbId]
   };
 };
@@ -153,8 +164,11 @@ export const getExecuteTool = ({
   runningAppInfo,
   chatId,
   responseChatItemId,
+  usageId,
   uid,
   variableState,
+  memoryState,
+  runtimeNodesMap,
   externalProvider,
   lang,
   requestOrigin,
@@ -163,6 +177,7 @@ export const getExecuteTool = ({
   retainDatasetCite,
   maxRunTimes,
   workflowDispatchDeep,
+  query,
   nodeResponseSink
 }: ToolDispatchContext) => {
   /**
@@ -183,18 +198,22 @@ export const getExecuteTool = ({
 
     const {
       response,
+      assistantMessages,
       usages = [],
       interactive,
       stop = false,
       nodeResponse,
+      nodeSummary,
       errorMessage
     } = await (async (): Promise<{
       response: string;
+      assistantMessages?: DispatchSubAppResponse['assistantMessages'];
       usages?: ChatNodeUsageType[];
       interactive?: DispatchSubAppResponse['interactive'];
       stop?: boolean;
       errorMessage?: string;
       nodeResponse?: DispatchSubAppResponse['nodeResponse'];
+      nodeSummary?: DispatchSubAppResponse['nodeSummary'];
     }> => {
       try {
         // User Sub App
@@ -224,7 +243,7 @@ export const getExecuteTool = ({
         });
 
         if (tool.type === 'tool') {
-          const { response, usages, nodeResponse, errorMessage } = await dispatchTool({
+          const { response, usages, nodeResponse, nodeSummary, errorMessage } = await dispatchTool({
             tool: {
               name: tool.name,
               avatar: tool.avatar,
@@ -235,8 +254,10 @@ export const getExecuteTool = ({
             runningUserInfo,
             runningAppInfo,
             chatId,
+            usageId,
             uid,
             variableState,
+            runtimeNodesMap,
             // Agent 统一负责外层流输出，子工具不得绕过 Agent 直接写入响应流。
             workflowStreamResponse: undefined
           });
@@ -245,12 +266,23 @@ export const getExecuteTool = ({
             response,
             usages,
             nodeResponse,
+            nodeSummary,
             errorMessage
           };
         } else if (tool.type === 'workflow') {
-          const { userChatInput, ...params } = filterAgentWorkflowRuntimeParams(requestParams);
+          const { userChatInput, ...params } = filterAgentWorkflowRuntimeParams(requestParams, {
+            omitHistory: true
+          });
 
-          const { response, usages, interactive, nodeResponse, errorMessage } = await dispatchApp({
+          const {
+            response,
+            assistantMessages,
+            usages,
+            interactive,
+            nodeResponse,
+            nodeSummary,
+            errorMessage
+          } = await dispatchApp({
             app: {
               name: tool.name,
               avatar: tool.avatar,
@@ -276,14 +308,18 @@ export const getExecuteTool = ({
             nodeResponseSink,
             nodeResponseParentId: callId,
             variableState,
-            lastInteractive
+            memoryState,
+            lastInteractive,
+            query
           });
 
           return {
             response,
+            assistantMessages,
             usages,
             interactive,
             nodeResponse,
+            nodeSummary,
             errorMessage
           };
         } else if (tool.type === 'toolWorkflow' || tool.type === 'commercialTool') {
@@ -313,42 +349,53 @@ export const getExecuteTool = ({
             };
           })();
           const customAppVariables = filterAgentWorkflowRuntimeParams(requestParams);
-          const { response, usages, interactive, nodeResponse, errorMessage } =
-            await dispatchPlugin({
-              app: {
-                name: tool.name,
-                avatar: tool.avatar,
-                id,
-                version: tool.version,
-                ...(systemToolId ? { systemToolId } : {})
-              },
-              userChatInput: '',
-              customAppVariables,
-              checkIsStopping,
-              lang,
-              requestOrigin,
-              mode,
-              timezone,
-              externalProvider,
-              chatId,
-              responseChatItemId,
-              uid,
-              runningAppInfo,
-              runningUserInfo,
-              retainDatasetCite,
-              maxRunTimes,
-              workflowDispatchDeep,
-              nodeResponseSink,
-              nodeResponseParentId: callId,
-              variableState,
-              lastInteractive
-            });
-
-          return {
+          const {
             response,
+            assistantMessages,
             usages,
             interactive,
             nodeResponse,
+            nodeSummary,
+            errorMessage
+          } = await dispatchPlugin({
+            app: {
+              name: tool.name,
+              avatar: tool.avatar,
+              id,
+              version: tool.version,
+              ...(systemToolId ? { systemToolId } : {})
+            },
+            userChatInput: '',
+            customAppVariables,
+            checkIsStopping,
+            lang,
+            requestOrigin,
+            mode,
+            timezone,
+            externalProvider,
+            chatId,
+            responseChatItemId,
+            uid,
+            runningAppInfo,
+            runningUserInfo,
+            retainDatasetCite,
+            maxRunTimes,
+            workflowDispatchDeep,
+            nodeResponseSink,
+            nodeResponseParentId: callId,
+            variableState,
+            memoryState,
+            lastInteractive,
+            query
+          });
+
+          return {
+            response,
+            assistantMessages,
+            usages,
+            interactive,
+            nodeResponse,
+            nodeSummary,
             errorMessage
           };
         } else {
@@ -384,16 +431,19 @@ export const getExecuteTool = ({
         nodeId: callId,
         id: callId,
         runningTime: +((Date.now() - startTime) / 1000).toFixed(2),
-        totalPoints: usages?.reduce((sum, item) => sum + item.totalPoints, 0),
+        totalPoints:
+          nodeResponse?.totalPoints ?? usages?.reduce((sum, item) => sum + item.totalPoints, 0),
         ...(childResponseCount !== undefined ? { childResponseCount } : {})
       };
     })();
 
     return {
       response,
+      assistantMessages,
       usages,
       interactive,
       stop,
+      nodeSummary,
       ...(errorMessage ? { errorMessage } : {}),
       nodeResponse: formatNodeResponse
     };

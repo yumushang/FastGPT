@@ -1,11 +1,17 @@
+import { formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import {
+  getChatPublishSourceName,
+  getChatPublishSourceType
+} from '@fastgpt/global/common/chat/publishSource';
+import { getLogIdentity, normalizeAppLogKeys } from '@fastgpt/global/core/app/logs/utils';
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import {
   Box,
   Button,
   Flex,
   HStack,
-  Input,
   Table,
-  TableContainer,
   Tbody,
   Td,
   Th,
@@ -13,10 +19,10 @@ import {
   Tr,
   Checkbox
 } from '@chakra-ui/react';
-import type { ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
-import { ChatSourceMap } from '@fastgpt/global/core/chat/constants';
+import { ChatSourceMap, type ChatSourceEnum } from '@fastgpt/global/core/chat/constants';
 import DateRangePicker from '@fastgpt/web/components/common/DateRangePicker';
 import {
+  FilterInput,
   MultiSelectFilter,
   createMultiSelectFilter,
   toMultiSelectFilterQuery,
@@ -109,9 +115,10 @@ const LogTable = ({
   const [chatSearch, setChatSearch] = useState('');
 
   // log keys
-  const [logKeys = DefaultAppLogKeys, setLogKeys] = useLocalStorageState<AppLogKeysType[]>(
+  const [storedLogKeys, setLogKeys] = useLocalStorageState<AppLogKeysType[]>(
     `app_log_keys_${appId}`
   );
+  const logKeys = useMemo(() => normalizeAppLogKeys(storedLogKeys), [storedLogKeys]);
   const { runAsync: fetchLogKeys, data: teamLogKeys } = useRequest(
     async () => {
       return getLogKeys({ appId });
@@ -120,9 +127,9 @@ const LogTable = ({
       manual: false,
       refreshDeps: [appId],
       onSuccess: (res) => {
-        if (logKeys.length > 0) return;
+        if (storedLogKeys?.length) return;
         if (res.logKeys.length > 0) {
-          setLogKeys(res.logKeys);
+          setLogKeys(normalizeAppLogKeys(res.logKeys));
         } else if (res.logKeys.length === 0) {
           setLogKeys(DefaultAppLogKeys);
         }
@@ -130,9 +137,7 @@ const LogTable = ({
     }
   );
   const showSyncPopover = useMemo(() => {
-    const teamLogKeysList = (
-      teamLogKeys?.logKeys?.length ? teamLogKeys?.logKeys : DefaultAppLogKeys
-    ).filter((item) => item.enable);
+    const teamLogKeysList = normalizeAppLogKeys(teamLogKeys?.logKeys).filter((item) => item.enable);
     const personalLogKeysList = logKeys.filter((item) => item.enable);
     return !isEqual(teamLogKeysList, personalLogKeysList);
   }, [teamLogKeys, logKeys]);
@@ -148,7 +153,8 @@ const LogTable = ({
     };
   }, [userFilter]);
 
-  const { runAsync: exportLogs } = useRequest(async () => {
+  // 失败提示和 loading 由 PopoverConfirm 统一处理，避免重复 toast。
+  const exportLogs = async () => {
     const enabledKeys = logKeys.filter((item) => item.enable).map((item) => item.key);
     const headerTitle = enabledKeys.map((k) => t(AppLogKeysEnumMap[k])).join(',');
     await downloadFetch({
@@ -156,8 +162,8 @@ const LogTable = ({
       filename: t('app:export_log_filename', { name: appName }),
       body: {
         appId,
-        dateStart: dayjs(dateRange.from || new Date()).format(),
-        dateEnd: dayjs(dateRange.to || new Date()).format(),
+        dateStart: formatToISOWithTimezone(dateRange.from),
+        dateEnd: formatToISOWithTimezone(dateRange.to),
         sources: toMultiSelectFilterQuery(sourceFilter),
         tmbIds,
         outLinkUids,
@@ -177,7 +183,7 @@ const LogTable = ({
         errorFilter: errorFilter === 'all' ? undefined : errorFilter
       }
     });
-  });
+  };
   const params = useMemoEnhance(
     () => ({
       appId,
@@ -251,6 +257,9 @@ const LogTable = ({
 
   const HeaderRenderMap = useMemoEnhance(
     () => ({
+      [AppLogKeysEnum.PUBLISH_SOURCE_TYPE]: (
+        <Th key={AppLogKeysEnum.PUBLISH_SOURCE_TYPE}>{t('app:logs_keys_publish_source_type')}</Th>
+      ),
       [AppLogKeysEnum.SOURCE]: <Th key={AppLogKeysEnum.SOURCE}>{t('app:logs_keys_source')}</Th>,
       [AppLogKeysEnum.CREATED_TIME]: (
         <Th key={AppLogKeysEnum.CREATED_TIME}>{t('app:logs_keys_createdTime')}</Th>
@@ -260,7 +269,10 @@ const LogTable = ({
           {t('app:logs_keys_lastConversationTime')}
         </Th>
       ),
-      [AppLogKeysEnum.USER]: <Th key={AppLogKeysEnum.USER}>{t('app:logs_chat_user')}</Th>,
+      [AppLogKeysEnum.USER]: <Th key={AppLogKeysEnum.USER}>{t('app:logs_keys_user')}</Th>,
+      [AppLogKeysEnum.AUTH_USER]: (
+        <Th key={AppLogKeysEnum.AUTH_USER}>{t('app:logs_keys_auth_user')}</Th>
+      ),
       [AppLogKeysEnum.REGION]: (
         <Th key={AppLogKeysEnum.REGION}>
           <UserIpTypeFilter
@@ -346,10 +358,30 @@ const LogTable = ({
 
   const getCellRenderMap = useCallback(
     (item: AppLogsListItemType) => ({
+      [AppLogKeysEnum.PUBLISH_SOURCE_TYPE]: (
+        <Td key={AppLogKeysEnum.PUBLISH_SOURCE_TYPE}>
+          {item.publishSource?.type && ChatSourceMap[item.publishSource.type]
+            ? t(ChatSourceMap[item.publishSource.type].name)
+            : '-'}
+        </Td>
+      ),
       [AppLogKeysEnum.SOURCE]: (
         <Td key={AppLogKeysEnum.SOURCE}>
-          {/* @ts-ignore */}
-          {item.sourceName || t(ChatSourceMap[item.source]?.name) || item.source}
+          <MyTooltip
+            label={
+              item.publishSource?.id
+                ? t('app:logs_publish_source_id', { id: item.publishSource.id })
+                : undefined
+            }
+          >
+            <Box as="span">
+              {getChatPublishSourceName({
+                type: getChatPublishSourceType(item),
+                name: item.publishSource?.name,
+                sourceName: item.sourceName
+              }) ?? '-'}
+            </Box>
+          </MyTooltip>
         </Td>
       ),
       [AppLogKeysEnum.CREATED_TIME]: (
@@ -364,15 +396,20 @@ const LogTable = ({
       ),
       [AppLogKeysEnum.USER]: (
         <Td key={AppLogKeysEnum.USER}>
-          <Box>
-            {!!item.outLinkUid ? (
-              item.outLinkUid
-            ) : item.sourceMember ? (
-              <UserBox sourceMember={item.sourceMember} />
-            ) : (
-              '-'
-            )}
-          </Box>
+          {getLogIdentity(item).member ? (
+            <UserBox sourceMember={getLogIdentity(item).member!} />
+          ) : (
+            getLogIdentity(item).name
+          )}
+        </Td>
+      ),
+      [AppLogKeysEnum.AUTH_USER]: (
+        <Td key={AppLogKeysEnum.AUTH_USER}>
+          {item.authMember ? (
+            <UserBox sourceMember={item.authMember} />
+          ) : (
+            getLogIdentity({ ...item, isAuthorizer: true }).name
+          )}
         </Td>
       ),
       [AppLogKeysEnum.REGION]: (
@@ -390,7 +427,7 @@ const LogTable = ({
       ),
       [AppLogKeysEnum.TITLE]: (
         <Td key={AppLogKeysEnum.TITLE} className="textEllipsis" maxW={'250px'}>
-          {item.customTitle || item.title}
+          {item.title || '-'}
         </Td>
       ),
       [AppLogKeysEnum.SESSION_ID]: (
@@ -449,6 +486,11 @@ const LogTable = ({
   return (
     <MyBox isLoading={isLoading} display={'flex'} flexDir={'column'} h={'full'} px={px}>
       <Flex alignItems={'center'} gap={3} flexWrap={'wrap'}>
+        <DateRangePicker
+          defaultDate={dateRange}
+          onSuccess={setDateRange}
+          formLabel={t('app:logs_date')}
+        />
         {showSourceSelector && (
           <MultiSelectFilter
             title={t('app:logs_source')}
@@ -458,11 +500,6 @@ const LogTable = ({
             labels={labels}
           />
         )}
-        <DateRangePicker
-          defaultDate={dateRange}
-          onSuccess={setDateRange}
-          formLabel={t('app:logs_date')}
-        />
         {feConfigs?.isPlus && (
           <UserFilter
             appId={appId}
@@ -472,38 +509,13 @@ const LogTable = ({
             onChange={setUserFilter}
           />
         )}
-        <Flex
+        <FilterInput
           flex={'0 1 230px'}
-          h={10}
-          alignItems={'center'}
-          rounded={'8px'}
-          border={'1px solid'}
-          borderColor={'myGray.200'}
-          _focusWithin={{
-            borderColor: 'primary.600',
-            boxShadow: '0 0 0 2.4px rgba(51, 112, 255, 0.15)'
-          }}
-          pl={3}
-        >
-          <Box rounded={'8px'} bg={'white'} fontSize={'sm'} border={'none'} whiteSpace={'nowrap'}>
-            {t('common:Search')}
-          </Box>
-          <Box w={'1px'} h={'12px'} bg={'myGray.200'} mx={2} />
-          <Input
-            placeholder={t('app:logs_search_placeholder')}
-            value={chatSearch}
-            onChange={(e) => setChatSearch(e.target.value)}
-            fontSize={'sm'}
-            border={'none'}
-            pl={0}
-            _focus={{
-              boxShadow: 'none'
-            }}
-            _placeholder={{
-              fontSize: 'sm'
-            }}
-          />
-        </Flex>
+          label={t('common:Search')}
+          placeholder={t('app:logs_search_placeholder')}
+          value={chatSearch}
+          onChange={(e) => setChatSearch(e.target.value)}
+        />
 
         <Box flex={'1'} />
         {showSyncPopover && (
@@ -531,8 +543,44 @@ const LogTable = ({
         />
       </Flex>
 
-      <TableContainer ref={scrollContainerRef} mt={[2, 4]} flex={'1 0 0'} overflowY={'auto'}>
-        <Table variant={'simple'} fontSize={'sm'}>
+      <FixedTableContainer
+        maxH="none"
+        ref={scrollContainerRef}
+        mt={[2, 4]}
+        flex={'1 0 0'}
+        footer={
+          <>
+            <FloatingActionBar
+              pb={0}
+              Controler={
+                <HStack>
+                  <Button
+                    variant={'whiteDanger'}
+                    onClick={() =>
+                      openConfirmDelete({
+                        onConfirm: () => handleDelete(chatIds),
+                        customContent: t('app:confirm_delete_chats', {
+                          n: chatIds.length
+                        })
+                      })()
+                    }
+                  >
+                    {t('common:Delete')} ({chatIds.length})
+                  </Button>
+                </HStack>
+              }
+            >
+              {total > pageSize && (
+                <Flex justifyContent={'center'}>
+                  <Pagination />
+                </Flex>
+              )}
+            </FloatingActionBar>
+          </>
+        }
+      >
+        {/* 按内容分配列宽，避免长 UID 将成员姓名压缩；不足一屏时仍铺满容器。 */}
+        <Table variant={'simple'} fontSize={'sm'} w={'max-content'} minW={'100%'}>
           <Thead>
             <Tr>
               <Th>
@@ -555,8 +603,7 @@ const LogTable = ({
                     onClick: () =>
                       setDetailLogData({
                         chatId: item.chatId,
-                        feedbackUserName:
-                          item.outLinkUid || item.sourceMember?.name || item.tmbId || undefined
+                        feedbackUserName: getLogIdentity(item).name
                       })
                   })}
                 >
@@ -586,34 +633,7 @@ const LogTable = ({
           </Tbody>
         </Table>
         {logs.length === 0 && !isLoading && <EmptyTip text={t('app:logs_empty')}></EmptyTip>}
-      </TableContainer>
-
-      <FloatingActionBar
-        pb={0}
-        Controler={
-          <HStack>
-            <Button
-              variant={'whiteDanger'}
-              onClick={() =>
-                openConfirmDelete({
-                  onConfirm: () => handleDelete(chatIds),
-                  customContent: t('app:confirm_delete_chats', {
-                    n: chatIds.length
-                  })
-                })()
-              }
-            >
-              {t('common:Delete')} ({chatIds.length})
-            </Button>
-          </HStack>
-        }
-      >
-        {total > pageSize && (
-          <Flex justifyContent={'center'}>
-            <Pagination />
-          </Flex>
-        )}
-      </FloatingActionBar>
+      </FixedTableContainer>
 
       {!!detailLogData && (
         <DetailLogsModal

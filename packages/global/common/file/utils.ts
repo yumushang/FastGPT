@@ -1,8 +1,25 @@
 import path from 'path';
 
+/** 统一文档分类与解析的扩展名别名，返回不带点的小写后缀；未知后缀保留供解析器报错。 */
+export const normalizeDocumentFileExtension = (extension?: string) => {
+  const normalized = extension?.trim().toLowerCase().replace(/^\./, '') ?? '';
+  if (normalized === 'markdown') return 'md';
+  if (normalized === 'htm') return 'html';
+  return normalized;
+};
+
 export const isCSVFile = (filename: string) => {
   const extension = path.extname(filename).toLowerCase();
   return extension === '.csv';
+};
+
+/**
+ * 判断是否为 Office/Windows 打开文档时生成的 `~$filename.ext` 锁文件。
+ * 这些文件不是可解析文档，按正式后缀上传会触发 MIME 不匹配。
+ */
+export const isOfficeLockFilename = (filename = '') => {
+  const base = filename.split(/[/\\]/).pop()?.trim() ?? '';
+  return base.startsWith('~$');
 };
 
 export function detectImageContentType(buffer: Buffer) {

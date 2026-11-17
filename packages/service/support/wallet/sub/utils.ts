@@ -9,7 +9,8 @@ import type {
   TeamStandardSubPlanItemType,
   TeamPlanStatusType,
   TeamPlanStandardType,
-  TeamSubSchemaType
+  TeamSubSchemaType,
+  StandSubPlanLevelMapType
 } from '@fastgpt/global/support/wallet/sub/type';
 import dayjs from 'dayjs';
 import { type ClientSession } from '../../../common/mongo';
@@ -17,8 +18,11 @@ import { addMonths, addDays } from 'date-fns';
 import { readFromSecondary } from '../../../common/mongo/utils';
 import { TeamPointCache, teamQpmCache } from '@fastgpt/dal/redis/caches';
 import { getLogger, LogCategories } from '../../../common/logger';
+import { getSystemInstanceConfig } from '../../../common/system/systemInstanceConfig/runtime';
+import { logInstanceConfigRead } from '../../../common/system/migrationCoverageLog';
 import { serviceEnv } from '../../../env';
 import { getRuntimeStandardPlanConfig } from '@fastgpt/global/support/wallet/sub/utils';
+import { getFileUploadLimits } from '@fastgpt/global/common/file/limit';
 
 const logger = getLogger(LogCategories.MODULE.WALLET.SUB);
 const teamPointCache = new TeamPointCache({ logger });
@@ -28,11 +32,11 @@ const normalizeUnlimitedValue = (value: number): number | null =>
   Number.isFinite(value) ? value : null;
 
 export const getStandardPlansConfig = () => {
-  return global?.subPlans?.standard;
+  return getSystemInstanceConfig().commercial.subPlans?.standard;
 };
 export const getStandardPlanConfig = (level: `${StandardSubLevelEnum}`) => {
   return getRuntimeStandardPlanConfig({
-    plans: global.subPlans?.standard,
+    plans: getSystemInstanceConfig().commercial.subPlans?.standard,
     level
   });
 };
@@ -47,11 +51,12 @@ export const sortStandPlans = (plans: TeamSubSchemaType[]) => {
 /**
  * 将标准套餐的历史数据库记录与当前静态配置合并为完整的客户端格式。
  * 缺失的续订字段仅在读取结果中按当前套餐补齐，不回写原始订阅记录。
+ * 团队级品牌权益由调用方基于全部订阅统一解析，不在单条记录的格式转换中判断。
  */
 export const buildStandardPlan = (
   standard: TeamSubSchemaType,
   standardConstants: TeamStandardSubPlanItemType
-): TeamPlanStandardType => ({
+): Omit<TeamPlanStandardType, 'canHideShareBrand'> => ({
   ...standard,
   currentMode: standard.currentMode ?? SubModeEnum.month,
   nextMode: standard.nextMode ?? standard.currentMode ?? SubModeEnum.month,
@@ -78,10 +83,34 @@ export const buildStandardPlan = (
   auditLogStoreDuration: standard?.auditLogStoreDuration ?? standardConstants.auditLogStoreDuration,
   ticketResponseTime: standard?.ticketResponseTime ?? standardConstants.ticketResponseTime,
   customDomain: standard?.customDomain ?? standardConstants.customDomain,
-  maxUploadFileSize: standard?.maxUploadFileSize ?? standardConstants.maxUploadFileSize,
-  maxUploadFileCount: standard?.maxUploadFileCount ?? standardConstants.maxUploadFileCount,
+  ...getFileUploadLimits({
+    teamPlan: standard,
+    plan: standardConstants,
+    systemLimit: getSystemInstanceConfig().resource
+  }),
   enableSandbox: standard?.enableSandbox ?? standardConstants.enableSandbox
 });
+
+/** 按有效订阅优先级解析品牌权益，显式覆盖优先于对应等级的实时配置。 */
+export const getPlansCanHideShareBrand = ({
+  plans,
+  standardPlans,
+  now
+}: {
+  plans: TeamSubSchemaType[];
+  standardPlans?: StandSubPlanLevelMapType;
+  now: number;
+}): boolean => {
+  const activePlans = plans.filter(
+    (plan) => plan.type === SubTypeEnum.standard && new Date(plan.expiredTime).getTime() > now
+  );
+  const plan = sortStandPlans(activePlans)[0];
+  return (
+    !!plan &&
+    (plan.canHideShareBrandOverride ?? standardPlans?.[plan.currentSubLevel]?.canHideShareBrand) ===
+      true
+  );
+};
 
 export const initTeamFreePlan = async ({
   teamId,
@@ -93,8 +122,11 @@ export const initTeamFreePlan = async ({
   session?: ClientSession;
 }) => {
   const freePoints = isWecomTeam
-    ? Math.round((global.subPlans?.standard?.basic?.totalPoints ?? 4000) / 2)
-    : global?.subPlans?.standard?.[StandardSubLevelEnum.free]?.totalPoints || 100;
+    ? Math.round(
+        (getSystemInstanceConfig().commercial.subPlans?.standard?.basic?.totalPoints ?? 4000) / 2
+      )
+    : getSystemInstanceConfig().commercial.subPlans?.standard?.[StandardSubLevelEnum.free]
+        ?.totalPoints || 100;
 
   const freePlan = await MongoTeamSub.findOne({
     teamId,
@@ -104,7 +136,8 @@ export const initTeamFreePlan = async ({
 
   // Get basic plan config for wecom mode
   const specialConfig: Record<string, any> | null = (() => {
-    const config = global?.subPlans?.standard?.[StandardSubLevelEnum.basic];
+    const config =
+      getSystemInstanceConfig().commercial.subPlans?.standard?.[StandardSubLevelEnum.basic];
     if (isWecomTeam && config) {
       return {
         maxTeamMember: config.maxTeamMember,
@@ -171,9 +204,24 @@ export const initTeamFreePlan = async ({
   );
 };
 
-// 获取团队标准套餐
-export const getTeamStandPlan = async ({ teamId }: { teamId: string }) => {
-  const standardPlans = global.subPlans?.standard;
+type TeamStandPlanReadPreference =
+  | 'primary'
+  | 'primaryPreferred'
+  | 'secondary'
+  | 'secondaryPreferred'
+  | 'nearest';
+
+/**
+ * 获取团队标准套餐；普通展示场景默认读从库，额度和权限校验可显式要求主库。
+ */
+export const getTeamStandPlan = async ({
+  teamId,
+  readPreference = readFromSecondary.readPreference
+}: {
+  teamId: string;
+  readPreference?: TeamStandPlanReadPreference;
+}) => {
+  const standardPlans = getSystemInstanceConfig().commercial.subPlans?.standard;
   const plans = await MongoTeamSub.find(
     {
       teamId,
@@ -181,7 +229,7 @@ export const getTeamStandPlan = async ({ teamId }: { teamId: string }) => {
     },
     undefined,
     {
-      ...readFromSecondary
+      readPreference
     }
   ).lean();
   sortStandPlans(plans);
@@ -194,7 +242,16 @@ export const getTeamStandPlan = async ({ teamId }: { teamId: string }) => {
 
   return {
     [SubTypeEnum.standard]:
-      standard && standardConstants ? buildStandardPlan(standard, standardConstants) : undefined
+      standard && standardConstants
+        ? {
+            ...buildStandardPlan(standard, standardConstants),
+            canHideShareBrand: getPlansCanHideShareBrand({
+              plans,
+              standardPlans,
+              now: Date.now()
+            })
+          }
+        : undefined
   };
 };
 
@@ -205,10 +262,12 @@ export const getTeamPlanStatus = async ({
   teamId: string;
 }): Promise<TeamPlanStatusType> => {
   /** 配置里的套餐 */
-  const standardPlans = global.subPlans?.standard;
+  const standardPlans = getSystemInstanceConfig().commercial.subPlans?.standard;
 
   /* Get all plans and datasetSize */
-  const plans = await MongoTeamSub.find({ teamId }).lean();
+  const plans = await MongoTeamSub.find({ teamId }, undefined, {
+    readPreference: 'primary'
+  }).lean();
 
   /* Get all standardPlans and active standardPlan */
   const teamStandardPlans = sortStandPlans(
@@ -276,7 +335,14 @@ export const getTeamPlanStatus = async ({
 
   return {
     [SubTypeEnum.standard]: standardConstants
-      ? buildStandardPlan(standardPlan, standardConstants)
+      ? {
+          ...buildStandardPlan(standardPlan, standardConstants),
+          canHideShareBrand: getPlansCanHideShareBrand({
+            plans,
+            standardPlans: getSystemInstanceConfig().commercial.subPlans?.standard,
+            now: Date.now()
+          })
+        }
       : undefined,
 
     totalPoints,
@@ -342,7 +408,12 @@ export const teamQPM = {
     const limit = teamPlanStatus[SubTypeEnum.standard]?.requestsPerMinute;
 
     if (!limit) {
-      return serviceEnv.CHAT_MAX_QPM;
+      const maxQpm = getSystemInstanceConfig().performance.chat.maxQpm;
+      logInstanceConfigRead({
+        callsite: 'runtime.support.wallet.sub.teamQPM.getTeamQPMLimit',
+        fields: [{ path: 'performance.chat.maxQpm', value: maxQpm }]
+      });
+      return maxQpm;
     }
 
     // 3. Set cache

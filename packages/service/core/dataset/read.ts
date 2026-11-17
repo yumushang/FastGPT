@@ -1,11 +1,16 @@
 import {
+  ChunkSettingModeEnum,
   ChunkTriggerConfigTypeEnum,
+  DatasetCollectionDataProcessModeEnum,
   DatasetSourceReadTypeEnum
 } from '@fastgpt/global/core/dataset/constants';
+import type { IultmzhFileParseConfigType } from '@fastgpt/global/core/dataset/type';
 import { urlsFetch } from '../../common/string/cheerio';
 import { type TextSplitProps } from '../../common/string/textSplitter';
 import { readFileContentBySource } from '../../common/file/read/utils';
 import { getApiDatasetRequest } from './apiDataset';
+import { chunkByIultmzh } from '../../thirdProvider/sangfor/chunk';
+import { serviceEnv } from '../../env';
 import Papa from 'papaparse';
 import type { ApiDatasetServerType } from '@fastgpt/global/core/dataset/apiDataset/type';
 import { text2Chunks } from '../../worker/function';
@@ -54,6 +59,7 @@ export const readFileRawTextByUrl = async ({
   tmbId,
   url,
   customPdfParse,
+  sangforFileParseConfig,
   getFormatText,
   datasetId,
   usageId,
@@ -63,6 +69,7 @@ export const readFileRawTextByUrl = async ({
   tmbId: string;
   url: string;
   customPdfParse?: boolean;
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   getFormatText?: boolean;
   relatedId: string; // externalFileId / apiFileId
   datasetId: string;
@@ -90,6 +97,7 @@ export const readFileRawTextByUrl = async ({
   const { rawText } = await retryFn(() =>
     readFileContentBySource({
       customPdfParse,
+      sangforFileParseConfig,
       usageId,
       getFormatText,
       source,
@@ -119,6 +127,7 @@ export const readDatasetSourceRawText = async ({
   externalFileId,
   apiDatasetServer,
   customPdfParse,
+  sangforFileParseConfig,
   getFormatText,
   usageId,
   datasetId
@@ -128,6 +137,8 @@ export const readDatasetSourceRawText = async ({
   type: DatasetSourceReadTypeEnum;
   sourceId: string;
   customPdfParse?: boolean;
+  /** 外部文档解析开关;建议传入 getDatasetIultmzhFileParseConfig(dataset) 补全后的完整配置 */
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   getFormatText?: boolean;
 
   selector?: string; // link selector
@@ -154,6 +165,7 @@ export const readDatasetSourceRawText = async ({
       fileId: sourceId,
       getFormatText,
       customPdfParse,
+      sangforFileParseConfig,
       usageId,
       datasetId
     });
@@ -186,6 +198,7 @@ export const readDatasetSourceRawText = async ({
       relatedId: externalFileId,
       datasetId,
       customPdfParse,
+      sangforFileParseConfig,
       usageId
     });
     return {
@@ -198,6 +211,7 @@ export const readDatasetSourceRawText = async ({
       teamId,
       tmbId,
       customPdfParse,
+      sangforFileParseConfig,
       datasetId,
       usageId
     });
@@ -218,6 +232,7 @@ export const readApiServerFileContent = async ({
   teamId,
   tmbId,
   customPdfParse,
+  sangforFileParseConfig,
   datasetId,
   usageId
 }: {
@@ -226,6 +241,7 @@ export const readApiServerFileContent = async ({
   teamId: string;
   tmbId: string;
   customPdfParse?: boolean;
+  sangforFileParseConfig?: IultmzhFileParseConfigType;
   datasetId: string;
   usageId?: string;
 }): Promise<{
@@ -237,6 +253,7 @@ export const readApiServerFileContent = async ({
     tmbId,
     apiFileId,
     customPdfParse,
+    sangforFileParseConfig,
     datasetId,
     usageId
   });
@@ -249,6 +266,8 @@ export const rawText2Chunks = async ({
   backupParse,
   chunkSize = 512,
   imageIdList,
+  chunkSettingMode,
+  trainingType,
   ...splitProps
 }: {
   rawText: string;
@@ -259,6 +278,9 @@ export const rawText2Chunks = async ({
 
   backupParse?: boolean;
   tableParse?: boolean;
+  // chunkSettingMode=intelligent 且训练类型为 chunk 时,「文本→chunk」委托给外部智能分块服务
+  chunkSettingMode?: ChunkSettingModeEnum;
+  trainingType?: DatasetCollectionDataProcessModeEnum;
 } & TextSplitProps): Promise<
   {
     q: string;
@@ -382,6 +404,22 @@ export const rawText2Chunks = async ({
     if (textLength < chunkTriggerMinSize) {
       return [{ q: rawText, a: '', imageIdList }];
     }
+  }
+
+  // 智能分块: chunkSettingMode=intelligent 且训练类型为 chunk 时,把「文本→chunk」委托给 sangfor 智能分块服务。
+  // 未配置服务地址、请求失败、响应异常都由 chunkByIultmzh 抛错,不静默回退本地分块。
+  if (
+    trainingType === DatasetCollectionDataProcessModeEnum.chunk &&
+    chunkSettingMode === ChunkSettingModeEnum.intelligent
+  ) {
+    return chunkByIultmzh({
+      text: rawText,
+      imageIdList,
+      url: serviceEnv.SANGFOR_CHUNK_URL,
+      key: serviceEnv.SANGFOR_CHUNK_KEY,
+      chunkSize,
+      timeoutMs: serviceEnv.SANGFOR_CHUNK_TIMEOUT_MINUTES * 60 * 1000
+    });
   }
 
   const { chunks } = await text2Chunks({

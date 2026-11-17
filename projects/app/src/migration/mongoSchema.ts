@@ -1,4 +1,7 @@
-import { SystemMigrationStatusEnum } from '@fastgpt/global/migration/constants';
+import {
+  SystemMigrationStatusEnum,
+  systemMigrationStateCollectionName
+} from '@fastgpt/global/migration/constants';
 import type {
   SystemMigrationError,
   SystemMigrationFailedRecord,
@@ -9,12 +12,11 @@ import { connectionMongo, defineIndex, getMongoModel } from '@fastgpt/service/co
 
 const { Schema } = connectionMongo;
 
-export const SystemMigrationCollectionName = 'system_migration_states';
 export const SystemMigrationFailedRecordCollectionName = 'system_migration_failed_records';
 
 /**
  * 每个静态任务对应一条状态记录，_id 即任务 ID。
- * 静态名称、版本、顺序和阻塞属性不落库，避免发布后数据库元数据与代码注册表漂移。
+ * 静态名称、版本、顺序和调度模式不落库，避免发布后数据库元数据与代码注册表漂移。
  */
 export type SystemMigrationStateSchemaType = {
   _id: string;
@@ -161,7 +163,7 @@ const SystemMigrationStateSchema = new Schema<SystemMigrationStateSchemaType>(
 );
 
 export const MongoSystemMigrationState = getMongoModel<SystemMigrationStateSchemaType>(
-  SystemMigrationCollectionName,
+  systemMigrationStateCollectionName,
   SystemMigrationStateSchema
 );
 

@@ -1,8 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { Box, Button, Flex } from '@chakra-ui/react';
-import { serviceSideProps } from '@/web/common/i18n/utils';
-import { useTranslation } from 'next-i18next';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { useContextSelector } from 'use-context-selector';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import MyBox from '@fastgpt/web/components/common/MyBox';
@@ -37,7 +36,7 @@ const CreateSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/
 const ImportSkillModal = dynamic(() => import('@/pageComponents/dashboard/skill/ImportSkillModal'));
 
 const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { isPc } = useSystem();
   const { userInfo } = useUserStore();
@@ -49,8 +48,6 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     useSkillSandboxOperationGuard();
 
   const {
-    skills,
-    isFetchingSkills,
     refreshSkills,
     searchKey,
     setSearchKey,
@@ -58,7 +55,9 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     paths,
     folderDetail,
     listFilters,
-    setListFilters
+    setListFilters,
+    isBatchMode,
+    setIsBatchMode
   } = useContextSelector(SkillListContext, (v) => v);
   const maxFolderDepth = feConfigs?.limit?.maxFolderDepth ?? DEFAULT_MAX_FOLDER_DEPTH;
   const canCreateFolder = canCreateSubFolder(parentId, paths, maxFolderDepth);
@@ -72,6 +71,7 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
   });
 
   const onNavigate = (targetParentId: ParentIdType) => {
+    setSearchKey('');
     router.push({
       query: {
         ...router.query,
@@ -80,9 +80,10 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
     });
   };
 
-  const hasCreatePer = folderDetail
-    ? folderDetail.permission.hasWritePer
-    : userInfo?.team.permission.hasSkillCreatePer;
+  // 进入目录后只认目录自身的写权限，不能把根目录的团队创建权限继承进来。
+  const hasCreatePer = parentId
+    ? Boolean(folderDetail?.permission.hasWritePer)
+    : Boolean(userInfo?.team.permission.hasSkillCreatePer);
 
   return (
     <Flex flexDirection={'column'} h={'100%'}>
@@ -92,15 +93,14 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
           flexDirection={'column'}
           h={'100%'}
           pr={[3, 6]}
-          pl={6}
+          pl={[3, 6]}
           pt={6}
-          overflowY={'auto'}
+          overflowY={'hidden'}
           overflowX={'hidden'}
         >
-          <Flex alignItems={'center'} gap={3} minW={0}>
-            {!isPc ? (
-              MenuIcon
-            ) : paths.length > 0 ? (
+          <Flex alignItems={'center'} gap={3} minW={0} flexWrap={'wrap'} flexShrink={0}>
+            {!isPc && MenuIcon}
+            {isPc && paths.length > 0 ? (
               <Box>
                 <FolderPath
                   paths={paths}
@@ -130,50 +130,78 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
               </>
             )}
             <Flex flex={1} />
-            <Flex alignItems={'center'} gap={3}>
-              {hasCreatePer && (
-                <>
-                  <MyTooltip label={canCreateFolder ? '' : folderDepthLimitTip}>
-                    <Button
-                      variant={'grayBase'}
-                      leftIcon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
-                      onClick={() => setEditFolder({})}
-                      isDisabled={!canCreateFolder}
-                      px={5}
-                    >
-                      {t('common:Folder')}
-                    </Button>
-                  </MyTooltip>
+            {(isPc || hasCreatePer) && (
+              <Flex alignItems={'center'} gap={[2, '12px']}>
+                {isPc && (
                   <Button
                     variant={'grayBase'}
-                    leftIcon={<MyIcon name={'common/importLight'} w={'14px'} />}
-                    onClick={() => {
-                      if (guardSkillSandboxOperation()) {
-                        setShowImportModal(true);
+                    px={'14px'}
+                    iconSpacing={'6px'}
+                    {...(isBatchMode && {
+                      color: 'primary.600',
+                      bg: 'primary.50',
+                      _hover: {
+                        color: 'primary.600',
+                        bg: 'primary.100'
                       }
-                    }}
-                    px={5}
+                    })}
+                    leftIcon={<MyIcon name={'common/checkSquareBroken'} w={'18px'} h={'18px'} />}
+                    onClick={() => setIsBatchMode((prev) => !prev)}
                   >
-                    {t('common:Import')}
+                    {t('common:batch_manage')}
                   </Button>
-                </>
-              )}
-            </Flex>
+                )}
+                {hasCreatePer && (
+                  <>
+                    <MyTooltip label={canCreateFolder ? '' : folderDepthLimitTip}>
+                      <Button
+                        variant={'grayBase'}
+                        px={['12px', '14px']}
+                        iconSpacing={'6px'}
+                        leftIcon={<MyIcon name={'common/add2'} w={'18px'} h={'18px'} />}
+                        onClick={() => setEditFolder({})}
+                        isDisabled={!canCreateFolder}
+                      >
+                        {t('common:Folder')}
+                      </Button>
+                    </MyTooltip>
+                    <Button
+                      variant={'grayBase'}
+                      px={['12px', '14px']}
+                      iconSpacing={'6px'}
+                      leftIcon={<MyIcon name={'common/importLight'} w={'18px'} h={'18px'} />}
+                      onClick={() => {
+                        if (guardSkillSandboxOperation()) {
+                          setShowImportModal(true);
+                        }
+                      }}
+                    >
+                      {t('common:Import')}
+                    </Button>
+                  </>
+                )}
+              </Flex>
+            )}
           </Flex>
 
           {!isPc && (
-            <Box mt={2}>
+            <Flex mt={3} direction={'column'} gap={3}>
+              {paths.length > 0 && (
+                <Box overflowX={'auto'}>
+                  <FolderPath paths={paths} forbidLastClick onClick={onNavigate} />
+                </Box>
+              )}
               <SearchInput
-                maxW={['auto', '250px']}
                 value={searchKey}
                 onChange={(e) => setSearchKey(e.target.value)}
                 placeholder={t('skill:search_skill')}
                 maxLength={30}
               />
-            </Box>
+              <ResourceListFilters value={listFilters} onChange={setListFilters} />
+            </Flex>
           )}
 
-          <MyBox flex={'1 0 0'} isLoading={skills.length === 0 && isFetchingSkills}>
+          <MyBox flex={'1 0 0'} minH={0}>
             <List
               onClickCreate={
                 hasCreatePer
@@ -212,7 +240,7 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
         <CreateSkillModal
           parentId={parentId}
           onClose={() => setShowCreateModal(false)}
-          onSuccess={refreshSkills}
+          onSuccess={() => refreshSkills()}
         />
       )}
 
@@ -220,7 +248,7 @@ const SkillPageContent = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
         <ImportSkillModal
           parentId={parentId}
           onClose={() => setShowImportModal(false)}
-          onSuccess={refreshSkills}
+          onSuccess={() => refreshSkills()}
         />
       )}
 
@@ -242,11 +270,3 @@ function ContextRender() {
 }
 
 export default ContextRender;
-
-export async function getServerSideProps(content: any) {
-  return {
-    props: {
-      ...(await serviceSideProps(content, ['app', 'common', 'file', 'skill', 'user']))
-    }
-  };
-}

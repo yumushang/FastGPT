@@ -1,13 +1,14 @@
-import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
+import { authDatasetCollectionCreate } from '@fastgpt/service/support/permission/dataset/auth';
 import {
   CreateCollectionByLocalFileBodySchema,
   type CreateCollectionWithResultResponseType
 } from '@fastgpt/global/openapi/core/dataset/collection/createApi';
 import { createCollectionAndInsertData } from '@fastgpt/service/core/dataset/collection/controller';
+import { getDatasetModelAuthContext } from '@fastgpt/service/core/dataset/model';
 import { DatasetCollectionTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { NextAPI } from '@/service/middleware/entry';
 import { type ApiRequestProps } from '@fastgpt/next/type';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 import { multer } from '@fastgpt/service/common/file/multer';
 import { getS3DatasetSource } from '@fastgpt/service/common/s3/sources/dataset';
 import { documentFileType } from '@fastgpt/global/common/file/constants';
@@ -26,17 +27,24 @@ async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResult
   try {
     const formData = await multer.resolveFormData({
       request: req,
-      maxFileSize: global.feConfigs.uploadFileMaxSize,
+      maxFileSize: getSystemInstanceConfig().resource.uploadFileMaxSize,
       allowedExtensions: parseAllowedExtensions(documentFileType)
     });
     filepaths.push(formData.fileMetadata.path);
 
-    const { teamId, tmbId, dataset } = await authDataset({
+    const collectionData = CreateCollectionByLocalFileBodySchema.parse(formData.data);
+    const { teamId, tmbId, isRoot, dataset } = await authDatasetCollectionCreate({
       req,
       authToken: true,
       authApiKey: true,
-      per: WritePermissionVal,
-      datasetId: formData.data.datasetId
+      datasetId: collectionData.datasetId,
+      parentId: collectionData.parentId
+    });
+    const modelAuthContext = await getDatasetModelAuthContext({
+      dataset,
+      teamId,
+      tmbId,
+      isRoot
     });
 
     // Check dataset limit
@@ -45,7 +53,6 @@ async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResult
       insertLen: 1
     });
 
-    const collectionData = CreateCollectionByLocalFileBodySchema.parse(formData.data);
     const collectionName = decodeMultipartFilename(formData.fileMetadata.originalname);
 
     fileId = await getS3DatasetSource().upload({
@@ -57,6 +64,7 @@ async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResult
 
     const collectionResult = await createCollectionAndInsertData({
       dataset,
+      modelAuthContext,
       createCollectionParams: {
         ...collectionData,
         datasetId: dataset._id,

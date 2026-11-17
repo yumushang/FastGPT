@@ -1,19 +1,34 @@
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
+
 import * as createapi from '@/pages/api/core/app/create';
 import { AppErrEnum } from '@fastgpt/global/common/error/code/app';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
-import type { AppSchemaType } from '@fastgpt/global/core/app/type';
+import type { AppVersionSchemaType } from '@fastgpt/global/core/app/version/type';
 import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
-import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import {
+  FlowNodeInputTypeEnum,
+  FlowNodeTypeEnum
+} from '@fastgpt/global/core/workflow/node/constant';
+import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import type { CreateAppBodyType } from '@fastgpt/global/openapi/core/app/common/api';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import {
+  OwnerRoleVal,
+  PerResourceTypeEnum,
+  ReadRoleVal,
+  WritePermissionVal
+} from '@fastgpt/global/support/permission/constant';
 import { TeamAppCreatePermissionVal } from '@fastgpt/global/support/permission/user/constant';
+import { Types } from '@fastgpt/service/common/mongo';
 import { MongoApp } from '@fastgpt/service/core/app/schema';
 import { MongoAppVersion } from '@fastgpt/service/core/app/version/schema';
 import { MongoAppTemplate } from '@fastgpt/service/core/app/templates/templateSchema';
+import { MongoDataset } from '@fastgpt/service/core/dataset/schema';
 import { MongoResourcePermission } from '@fastgpt/service/support/permission/schema';
 import { getFakeUsers } from '@test/datas/users';
+import type { parseHeaderCertRet } from '@test/mocks/request';
 import { Call } from '@test/utils/request';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 type EmptyRequestParams = Record<string, never>;
 
@@ -36,7 +51,7 @@ describe('create api', () => {
     const res = await Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
       auth: users.members[0],
       body: {
-        modules: [],
+        nodes: [],
         name: 'testfolder',
         type: AppTypeEnum.folder
       }
@@ -48,7 +63,7 @@ describe('create api', () => {
     const res2 = await Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
       auth: users.members[0],
       body: {
-        modules: [],
+        nodes: [],
         name: 'testapp',
         type: AppTypeEnum.simple,
         parentId: String(folderId)
@@ -61,7 +76,7 @@ describe('create api', () => {
     const res3 = await Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
       auth: users.members[1],
       body: {
-        modules: [],
+        nodes: [],
         name: 'testapp',
         type: AppTypeEnum.simple,
         parentId: String(folderId)
@@ -86,7 +101,7 @@ describe('create api', () => {
     const res4 = await Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
       auth: users.members[1],
       body: {
-        modules: [],
+        nodes: [],
         name: 'testapp',
         type: AppTypeEnum.simple,
         parentId: String(folderId)
@@ -121,7 +136,7 @@ describe('create api', () => {
     const res = await Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
       auth: users.members[0],
       body: {
-        modules: [],
+        nodes: [],
         name: 'community template app',
         avatar: '/plugin-avatar.png',
         type: AppTypeEnum.workflow,
@@ -142,7 +157,7 @@ describe('create api', () => {
       type: AppTypeEnum.workflow,
       teamId: user.teamId,
       tmbId: user.tmbId,
-      modules: [
+      nodes: [
         {
           nodeId: 'start-1',
           flowNodeType: 'workflowStart',
@@ -157,17 +172,305 @@ describe('create api', () => {
           ],
           outputs: []
         }
-      ] as unknown as AppSchemaType['modules']
+      ] as unknown as AppVersionSchemaType['nodes']
     });
 
-    const [app, version] = await Promise.all([
-      MongoApp.findById(appId).lean(),
-      MongoAppVersion.findOne({ appId }).lean()
-    ]);
-    const input = app?.modules[0]?.inputs[0];
+    const version = await MongoAppVersion.findOne({ appId }).lean();
+    const rawApp = await MongoApp.collection.findOne(
+      { _id: new Types.ObjectId(appId) },
+      { projection: { modules: 1, edges: 1, chatConfig: 1 } }
+    );
+    const input = version?.nodes[0]?.inputs[0];
 
     expect(input?.selectedType).toBe(FlowNodeInputTypeEnum.reference);
     expect(input).not.toHaveProperty('selectedTypeIndex');
-    expect(version?.nodes).toEqual(app?.modules);
+    expect(rawApp).not.toHaveProperty('modules');
+    expect(rawApp).not.toHaveProperty('edges');
+    expect(rawApp).not.toHaveProperty('chatConfig');
   });
+
+  it('rejects creating an app under a tool folder and a tool under an app folder', async () => {
+    const users = await getFakeUsers(1);
+    const member = users.members[0];
+
+    const appFolder = await MongoApp.create({
+      name: 'app-folder',
+      type: AppTypeEnum.folder,
+      teamId: member.teamId,
+      tmbId: member.tmbId
+    });
+    const toolFolder = await MongoApp.create({
+      name: 'tool-folder',
+      type: AppTypeEnum.toolFolder,
+      teamId: member.teamId,
+      tmbId: member.tmbId
+    });
+
+    // 普通应用不能放进工具文件夹
+    const appIntoToolFolder = await Call<CreateAppBodyType, EmptyRequestParams, string>(
+      createapi.default,
+      {
+        auth: member,
+        body: {
+          nodes: [],
+          name: 'app-in-tool-folder',
+          type: AppTypeEnum.simple,
+          parentId: String(toolFolder._id)
+        }
+      }
+    );
+    expect(appIntoToolFolder.error).toBe(AppErrEnum.parentFolderTypeMismatch);
+
+    // 工具不能放进普通应用文件夹
+    const toolIntoAppFolder = await Call<CreateAppBodyType, EmptyRequestParams, string>(
+      createapi.default,
+      {
+        auth: member,
+        body: {
+          nodes: [],
+          name: 'tool-in-app-folder',
+          type: AppTypeEnum.workflowTool,
+          parentId: String(appFolder._id)
+        }
+      }
+    );
+    expect(toolIntoAppFolder.error).toBe(AppErrEnum.parentFolderTypeMismatch);
+
+    // 同树创建仍然正常
+    const validCreate = await Call<CreateAppBodyType, EmptyRequestParams, string>(
+      createapi.default,
+      {
+        auth: member,
+        body: {
+          nodes: [],
+          name: 'app-in-app-folder',
+          type: AppTypeEnum.simple,
+          parentId: String(appFolder._id)
+        }
+      }
+    );
+    expect(validCreate.error).toBeUndefined();
+  });
+
+  it('filters out unauthorized and non-existent resources from initial version snapshot without blocking app creation', async () => {
+    const [creator, otherMember] = (await getFakeUsers(2)).members;
+    const [authorizedDataset, unauthorizedDataset] = await MongoDataset.create([
+      {
+        name: 'authorized-dataset',
+        teamId: creator.teamId,
+        tmbId: creator.tmbId,
+        vectorModel: 'text-embedding-3-small',
+        agentModel: 'gpt-4o-mini'
+      },
+      {
+        name: 'unauthorized-dataset',
+        teamId: otherMember.teamId,
+        tmbId: otherMember.tmbId,
+        vectorModel: 'text-embedding-3-small',
+        agentModel: 'gpt-4o-mini'
+      }
+    ]);
+
+    const appId = await createapi.onCreateApp({
+      name: 'imported-workflow',
+      type: AppTypeEnum.workflow,
+      teamId: creator.teamId,
+      tmbId: creator.tmbId,
+      nodes: [
+        {
+          nodeId: 'dataset-search-node',
+          flowNodeType: FlowNodeTypeEnum.datasetSearchNode,
+          name: 'Dataset Search',
+          inputs: [
+            {
+              key: NodeInputKeyEnum.datasetSelectList,
+              label: 'Dataset Select',
+              renderTypeList: [FlowNodeInputTypeEnum.selectDataset],
+              value: [
+                { datasetId: String(authorizedDataset._id) },
+                { datasetId: String(unauthorizedDataset._id) },
+                { datasetId: String(new Types.ObjectId()) }
+              ]
+            }
+          ],
+          outputs: []
+        }
+      ] as unknown as AppVersionSchemaType['nodes']
+    });
+
+    const version = await MongoAppVersion.findOne({ appId }).lean();
+    expect(version?.nodes).toHaveLength(1);
+    expect(version?.resources).toEqual([{ type: 'dataset', id: String(authorizedDataset._id) }]);
+  });
+});
+
+describe('app creation inheritPermission', () => {
+  /** 父 folder + read 协作者：子应用 ACL 可直接对比是否合并了父级快照。 */
+  const setupParentFolder = async () => {
+    const users = await getFakeUsers(2);
+    const [owner, collaborator] = users.members;
+    const teamId = users.owner.teamId;
+    await MongoResourcePermission.findOneAndUpdate(
+      { resourceType: 'team', teamId, resourceId: null, tmbId: owner.tmbId },
+      { permission: TeamAppCreatePermissionVal },
+      { upsert: true }
+    );
+    const parent = await MongoApp.create({
+      name: 'permission-parent-folder',
+      type: AppTypeEnum.folder,
+      teamId,
+      tmbId: owner.tmbId
+    });
+    await MongoResourcePermission.create([
+      {
+        resourceType: PerResourceTypeEnum.app,
+        teamId,
+        resourceId: String(parent._id),
+        tmbId: owner.tmbId,
+        permission: OwnerRoleVal
+      },
+      {
+        resourceType: PerResourceTypeEnum.app,
+        teamId,
+        resourceId: String(parent._id),
+        tmbId: collaborator.tmbId,
+        permission: ReadRoleVal
+      }
+    ]);
+    return { owner, collaborator, teamId, parent };
+  };
+
+  const appPermissions = async ({ teamId, appId }: { teamId: string; appId: string }) => {
+    const rows = await MongoResourcePermission.find(
+      { resourceType: PerResourceTypeEnum.app, teamId, resourceId: appId },
+      'tmbId permission'
+    ).lean();
+    return rows.map((row) => `${String(row.tmbId)}:${row.permission}`).sort();
+  };
+
+  const createChild = async ({
+    owner,
+    parentId,
+    inheritPermission
+  }: {
+    owner: parseHeaderCertRet;
+    parentId: string;
+    inheritPermission?: boolean;
+  }) =>
+    Call<CreateAppBodyType, EmptyRequestParams, string>(createapi.default, {
+      auth: owner,
+      body: {
+        nodes: [],
+        name: 'permission-child',
+        type: AppTypeEnum.simple,
+        parentId,
+        inheritPermission
+      }
+    });
+
+  it('inherits the parent snapshot when inheritPermission is omitted', async () => {
+    const { owner, collaborator, teamId, parent } = await setupParentFolder();
+
+    const res = await createChild({ owner, parentId: String(parent._id) });
+
+    expect(res.code).toBe(200);
+    const app = await MongoApp.findById(res.data).lean();
+    expect(app?.inheritPermission).toBe(true);
+    await expect(appPermissions({ teamId, appId: String(app._id) })).resolves.toEqual(
+      [
+        `${String(owner.tmbId)}:${OwnerRoleVal}`,
+        `${String(collaborator.tmbId)}:${ReadRoleVal}`
+      ].sort()
+    );
+  });
+
+  it('writes only the owner snapshot for an independent app', async () => {
+    const { owner, teamId, parent } = await setupParentFolder();
+
+    const res = await createChild({
+      owner,
+      parentId: String(parent._id),
+      inheritPermission: false
+    });
+
+    expect(res.code).toBe(200);
+    const app = await MongoApp.findById(res.data).lean();
+    expect(app?.inheritPermission).toBe(false);
+    await expect(appPermissions({ teamId, appId: String(app._id) })).resolves.toEqual([
+      `${String(owner.tmbId)}:${OwnerRoleVal}`
+    ]);
+  });
+});
+
+describe('generic app creation folder depth', () => {
+  it('validates a parent created in the same transaction', async () => {
+    const { owner } = await getFakeUsers(1);
+    const { mongoSessionRun } = await vi.importActual<
+      typeof import('@fastgpt/service/common/mongo/sessionRun')
+    >('@fastgpt/service/common/mongo/sessionRun');
+    const props = { teamId: owner.teamId, tmbId: owner.tmbId, type: AppTypeEnum.folder };
+    const childId = await mongoSessionRun(async (session) => {
+      const parentId = await createapi.onCreateApp({ ...props, name: 'parent', session });
+      return createapi.onCreateApp({ ...props, name: 'child', parentId, session });
+    });
+    expect((await MongoApp.findById(childId).lean())?.ancestorIds).toHaveLength(1);
+  });
+
+  it.each([AppTypeEnum.folder, AppTypeEnum.toolFolder])(
+    'enforces the depth boundary for %s and still permits leaves',
+    async (type) => {
+      const { owner } = await getFakeUsers(1);
+      const ids: string[] = [];
+      for (let i = 0; i < getTestInstanceConfig().resource.maxFolderDepth - 1; i++) {
+        const folder = await MongoApp.create({
+          name: `level-${i}`,
+          type,
+          parentId: ids.at(-1) ?? null,
+          teamId: owner.teamId,
+          tmbId: owner.tmbId
+        });
+        ids.push(String(folder._id));
+      }
+      const lastFolder = await Call(createapi.default, {
+        auth: owner,
+        body: { name: 'last-folder', type, parentId: ids.at(-1) }
+      });
+      expect(lastFolder.code).toBe(200);
+      expect((await MongoApp.findById(lastFolder.data).lean())?.ancestorIds.map(String)).toEqual(
+        ids
+      );
+      const overflow = await Call(createapi.default, {
+        auth: owner,
+        body: { name: 'overflow', type, parentId: lastFolder.data }
+      });
+      expect(overflow.error).toBe(CommonErrEnum.folderDepthLimit);
+      expect(await MongoApp.countDocuments({ name: 'overflow' })).toBe(0);
+      const leaf = await Call(createapi.default, {
+        auth: owner,
+        body: {
+          name: 'leaf',
+          type: type === AppTypeEnum.folder ? AppTypeEnum.simple : AppTypeEnum.workflowTool,
+          parentId: lastFolder.data
+        }
+      });
+      expect(leaf.code).toBe(200);
+      const historical = await MongoApp.create({
+        name: 'historical-deep-folder',
+        type,
+        parentId: lastFolder.data,
+        teamId: owner.teamId,
+        tmbId: owner.tmbId
+      });
+      const deepLeaf = await Call(createapi.default, {
+        auth: owner,
+        body: {
+          name: 'invalid-deep-leaf',
+          type: type === AppTypeEnum.folder ? AppTypeEnum.simple : AppTypeEnum.workflowTool,
+          parentId: String(historical._id)
+        }
+      });
+      expect(deepLeaf.error).toBe(CommonErrEnum.folderDepthLimit);
+      expect(await MongoApp.countDocuments({ name: 'invalid-deep-leaf' })).toBe(0);
+    }
+  );
 });

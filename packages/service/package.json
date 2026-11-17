@@ -11,7 +11,7 @@
     "test:integration:watch": "vitest -c vitest.integration.config.ts"
   },
   "engines": {
-    "node": ">=22.23.2",
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1",
     "pnpm": "10.x"
   },
   "dependencies": {
@@ -19,6 +19,7 @@
     "@fastgpt-sdk/otel": "workspace:*",
     "@fastgpt-sdk/sandbox-adapter": "workspace:*",
     "@fastgpt-sdk/storage": "workspace:*",
+    "@langfuse/otel": "5.11.1",
     "@fastgpt/dal": "workspace:*",
     "@fastgpt/global": "workspace:*",
     "@fastgpt-sdk/anydoc": "catalog:",
@@ -45,6 +46,7 @@
     "gpt-tokenizer": "catalog:",
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.6",
+    "i18next": "catalog:",
     "iconv-lite": "^0.6.3",
     "joplin-turndown-plugin-gfm": "^1.0.12",
     "ipaddr.js": "catalog:",
@@ -59,7 +61,7 @@
     "mime-types": "catalog:",
     "minio": "catalog:",
     "mongoose": "catalog:",
-    "multer": "2.2.0",
+    "multer": "2.5.0",
     "mysql2": "^3.23.1",
     "node-cron": "^3.0.3",
     "p-limit": "^7.2.0",
@@ -71,6 +73,8 @@
     "proxy-addr": "catalog:",
     "proxy-agent": "catalog:",
     "proxy-from-env": "^1.1.0",
+    "safe-regex": "^2.1.1",
+    "sharp": "0.35.5",
     "turndown": "^7.1.2",
     "undici": "catalog:",
     "winston": "^3.17.0",

@@ -1,10 +1,9 @@
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
-import type { ChatHistoryItemResType, ChatItemMiniType } from '@fastgpt/global/core/chat/type';
+import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import { hasContextCheckpoint } from '@fastgpt/global/core/chat/utils';
-import { getChildrenResponses } from '@fastgpt/global/core/chat/utils/mergeNode';
 import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
-import type { DispatchFlowResponse, RuntimeNodeResponseSummary } from '../type';
+import type { DispatchFlowResponse } from '../type';
 import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
 import type { SystemVariablesType } from '../../types/runtime';
@@ -16,199 +15,52 @@ import {
   SseResponseEventEnum
 } from '@fastgpt/global/core/workflow/runtime/constants';
 import { type SearchDataResponseItemType } from '@fastgpt/global/core/dataset/type';
-import { getMCPToolRuntimeNode } from '@fastgpt/global/core/app/tool/mcpTool/utils';
+import {
+  getMCPToolRuntimeNode,
+  parsetMcpToolConfig
+} from '@fastgpt/global/core/app/tool/mcpTool/utils';
 import {
   getHTTPToolRuntimeSchemas,
   getHTTPToolRuntimeNode,
-  parseHttpToolConfig
+  parseHttpToolConfig,
+  pathData2ToolList
 } from '@fastgpt/global/core/app/tool/httpTool/utils';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { getMCPChildren } from '../../../app/mcp';
+import { getMCPChildren, MCPClient } from '../../../app/mcp';
 import { getSystemToolRunTimeNodeFromSystemToolset } from '../../utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
 import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 import type { McpToolConfigType } from '@fastgpt/global/core/app/tool/mcpTool/type';
-import type { McpToolSetRuntimeConfigType } from '@fastgpt/global/core/workflow/type/node';
-import type { WorkflowResponseType } from '../type';
+import {
+  HttpToolSetNodeConfigSchema,
+  McpToolSetNodeConfigSchema,
+  type McpToolSetRuntimeConfigType
+} from '@fastgpt/global/core/workflow/type/node';
+import type { WorkflowResponseType } from '@fastgpt/global/core/workflow/runtime/sse';
 import { getLogger, LogCategories } from '../../../../common/logger';
-import { parsetMcpToolConfig } from '@fastgpt/global/core/app/tool/mcpTool/utils';
+
 import { getHTTPToolList } from '../../../app/http';
+import { getWorkflowResourceContext } from '../../utils/context';
+import { filterWorkflowToolList } from '../../resource/context';
+import { loadWorkflowAppResource } from '../../resource/service';
+import { axios } from '../../../../common/api/axios';
+import { getSecretValue } from '../../../../common/secret/utils';
+import { checkUrlSafety } from '../../../../common/system/utils';
 import { getLastInteractiveValue } from '@fastgpt/global/core/workflow/runtime/utils';
 import {
   getSavedToolInputSelectedType,
   initToolInputsTypeByDefaultMode,
   normalizeFlowNodeInputType
 } from '@fastgpt/global/core/app/formEdit/utils';
-import { jsonSchema2NodeInput } from '@fastgpt/global/core/app/jsonschema';
-import { authAppByTmbId } from '../../../../support/permission/app/auth';
-import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
-
-/**
- * 创建 runtime nodeResponse 的轻量汇总对象。
- *
- * 该 summary 用于在 dispatch 过程中传递父流程需要的运行信号，避免把完整
- * nodeResponses 长时间保留在内存里。
- */
-export const createRuntimeNodeResponseSummary = (): RuntimeNodeResponseSummary => ({
-  responseIds: [],
-  finishedNodeIds: [],
-  hasError: false,
-  hasLoopRunBreak: false,
-  hasToolStop: false,
-  hasNestedEnd: false
-});
-
-/**
- * 增量更新父 workflow 运行控制需要的临时字段。
- *
- * 完整 nodeResponse 会由 writer 及时落库并释放；父节点只需要这些信号来判断
- * nestedEnd 输出、错误、loop break、tool stop、完成节点和 child 统计。
- * 调用方每处理完一批 nodeResponse，就把当前 summary 和本批响应传进来，返回新的
- * summary，避免重新保存或扫描完整 nodeResponse 列表。
- */
-export const summarizeRuntimeNodeResponses = (
-  currentSummary: RuntimeNodeResponseSummary | undefined,
-  nodeResponses: ChatHistoryItemResType[] = []
-): RuntimeNodeResponseSummary => {
-  const initialSummary = currentSummary
-    ? {
-        ...currentSummary,
-        responseIds: [...currentSummary.responseIds],
-        finishedNodeIds: [...currentSummary.finishedNodeIds]
-      }
-    : createRuntimeNodeResponseSummary();
-
-  const responseIdsWithConcreteParent = new Set(
-    nodeResponses
-      .map((response) => response.parentId)
-      .filter((parentId): parentId is string => !!parentId)
-  );
-  // 已进入 currentSummary 的 response id 不能再次计入统计，避免重复事件或分批更新导致
-  // points/responseCount 被累加两次。
-  const countedIds = new Set(initialSummary.responseIds);
-
-  const addResponseToSummary = (
-    summary: RuntimeNodeResponseSummary,
-    response: ChatHistoryItemResType
-  ) => {
-    if (response.id && countedIds.has(response.id)) {
-      return summary;
-    }
-    if (response.id) {
-      countedIds.add(response.id);
-    }
-
-    if (response.id) {
-      summary.responseIds.push(response.id);
-    }
-    if (response.nodeId) {
-      summary.finishedNodeIds.push(response.nodeId);
-    }
-    if (response.error || response.errorText) {
-      summary.hasError = true;
-      summary.errorText = getErrText(response.error || response.errorText);
-    }
-    if (response.moduleType === FlowNodeTypeEnum.loopRunBreak) {
-      summary.hasLoopRunBreak = true;
-    }
-    if (response.toolStop) {
-      summary.hasToolStop = true;
-    }
-    if (response.moduleType === FlowNodeTypeEnum.nestedEnd) {
-      summary.hasNestedEnd = true;
-      summary.nestedEndOutput = response.loopOutputValue;
-    }
-    if (response.moduleType === FlowNodeTypeEnum.pluginOutput && response.pluginOutput) {
-      summary.pluginOutput = response.pluginOutput;
-    }
-
-    const children = getChildrenResponses(response);
-    const hasConcreteChild =
-      children.length > 0 || (response.id ? responseIdsWithConcreteParent.has(response.id) : false);
-    // 已有实际 child response 时，父 response 上的 child 汇总只作为兼容字段，不能再重复累加。
-    const totalPoints = response.totalPoints || 0;
-    const childTotalPoints = hasConcreteChild ? 0 : response.childTotalPoints || 0;
-    const childResponseCount = hasConcreteChild ? 0 : response.childResponseCount || 0;
-    summary.totalPoints = (summary.totalPoints || 0) + totalPoints;
-    summary.childTotalPoints = (summary.childTotalPoints || 0) + totalPoints + childTotalPoints;
-    summary.childResponseCount = (summary.childResponseCount || 0) + 1 + childResponseCount;
-
-    children.forEach((child) => {
-      addResponseToSummary(summary, child);
-    });
-
-    return summary;
-  };
-
-  return nodeResponses.reduce<RuntimeNodeResponseSummary>(
-    (summary, response) => addResponseToSummary(summary, response),
-    initialSummary
-  );
-};
-
-/**
- * 合并多个子流程或并行分支返回的轻量 nodeResponse summary。
- *
- * 这里不重新扫描完整 nodeResponses，只把各分支已汇总出的控制信号、计费点数和
- * response 计数累加到同一个 summary 中。
- */
-export const mergeRuntimeNodeResponseSummary = (
-  ...summaries: (RuntimeNodeResponseSummary | undefined)[]
-): RuntimeNodeResponseSummary =>
-  summaries.reduce<RuntimeNodeResponseSummary>((merged, summary) => {
-    if (!summary) return merged;
-
-    merged.responseIds.push(...summary.responseIds);
-    merged.finishedNodeIds.push(...summary.finishedNodeIds);
-    merged.hasError ||= summary.hasError;
-    merged.errorText = summary.errorText || merged.errorText;
-    merged.hasLoopRunBreak ||= summary.hasLoopRunBreak;
-    merged.hasToolStop ||= summary.hasToolStop;
-    merged.hasNestedEnd ||= summary.hasNestedEnd;
-    if (summary.nestedEndOutput !== undefined) {
-      merged.nestedEndOutput = summary.nestedEndOutput;
-    }
-    if (summary.pluginOutput !== undefined) {
-      merged.pluginOutput = summary.pluginOutput;
-    }
-    merged.totalPoints = (merged.totalPoints || 0) + (summary.totalPoints || 0);
-    merged.childTotalPoints = (merged.childTotalPoints || 0) + (summary.childTotalPoints || 0);
-    merged.childResponseCount =
-      (merged.childResponseCount || 0) + (summary.childResponseCount || 0);
-
-    return merged;
-  }, createRuntimeNodeResponseSummary());
-
-/**
- * 从 dispatch response 中取得 nodeResponse summary。
- *
- * 新流程会优先返回 runtimeNodeResponseSummary；旧逻辑或兼容路径只携带
- * nodeResponses 时，会现场扫描一次并生成等价 summary。
- */
-export const getRuntimeNodeResponseSummary = (response: {
-  runtimeNodeResponseSummary?: RuntimeNodeResponseSummary;
-  nodeResponses?: ChatHistoryItemResType[];
-}): RuntimeNodeResponseSummary => {
-  if (!response) return createRuntimeNodeResponseSummary();
-
-  if (
-    response.runtimeNodeResponseSummary &&
-    (response.runtimeNodeResponseSummary.responseIds.length > 0 ||
-      response.runtimeNodeResponseSummary.finishedNodeIds.length > 0 ||
-      response.runtimeNodeResponseSummary.hasError ||
-      response.runtimeNodeResponseSummary.hasLoopRunBreak ||
-      response.runtimeNodeResponseSummary.hasToolStop ||
-      response.runtimeNodeResponseSummary.hasNestedEnd ||
-      response.runtimeNodeResponseSummary.pluginOutput !== undefined ||
-      response.runtimeNodeResponseSummary.totalPoints !== undefined ||
-      response.runtimeNodeResponseSummary.childTotalPoints !== undefined ||
-      response.runtimeNodeResponseSummary.childResponseCount !== undefined)
-  ) {
-    return response.runtimeNodeResponseSummary;
-  }
-
-  return summarizeRuntimeNodeResponses(undefined, response.nodeResponses);
-};
+import { jsonSchema2NodeInput, str2OpenApiSchema } from '@fastgpt/global/core/app/jsonschema';
+import {
+  getInlineToolSetChildNodeId,
+  getToolSetChildDescription
+} from '@fastgpt/global/core/app/tool/utils';
+import {
+  bundleOpenAPISchema,
+  parseOpenAPISchemaString
+} from '@fastgpt/global/common/string/swagger';
 
 /**
  * 构造 workflow SSE 写入函数。
@@ -419,30 +271,59 @@ export const getHistories = (
   return [...systemHistories, ...filterHistories];
 };
 
+const getInteractiveChainStartIndex = (histories: ChatItemMiniType[] = []) => {
+  const lastAIIndex = histories.findLastIndex((item) => item.obj === ChatRoleEnum.AI);
+  if (lastAIIndex < 0) return -1;
+  if (!getLastInteractiveValue(histories)) return -1;
+
+  let startIndex = lastAIIndex;
+  for (let index = lastAIIndex - 1; index >= 0; index--) {
+    if (histories[index].obj !== ChatRoleEnum.Human) continue;
+    startIndex = index;
+    // 紧邻交互之后的 Human 是该工具的回答，继续回溯到本次任务的原始输入。
+    const previous = histories[index - 1];
+    if (!previous || !getLastInteractiveValue([previous])) break;
+  }
+
+  return startIndex;
+};
+
+/**
+ * 移除 histories 末尾未完成的交互链，返回进入本次交互前的历史记录。
+ *
+ * 交互节点在恢复完成并继续流向下游节点或下一轮循环迭代时，需清理本次运行暂停期间
+ * 写入的临时交互记录，避免下游节点把自身输入误当作上一交互节点的回答。
+ */
+export const removeUnfinishedInteractiveHistories = (
+  histories: ChatItemMiniType[] = []
+): ChatItemMiniType[] => {
+  const startIndex = getInteractiveChainStartIndex(histories);
+  return startIndex >= 0 ? histories.slice(0, startIndex) : histories;
+};
+
 /**
  * Agent loop 的交互恢复上下文不能被 history=0 一并裁掉。
  *
- * 普通请求仍严格遵守 history 配置；仅当零历史窗口的最后一轮确实包含未完成交互时，
- * 临时保留最近一轮，让 provider 能读取 providerState 或恢复原 tool call。
+ * 普通请求遵守 history 配置。未完成交互以原始 Human 为窗口边界，保留当时的历史及
+ * 连续交互链，避免交互回答消耗 recent-N 窗口；已有 checkpoint 时从该压缩点恢复。
  */
 export const getAgentLoopHistories = (
   history?: ChatItemMiniType[] | number,
   histories: ChatItemMiniType[] = []
 ) => {
   const filteredHistories = getHistories(history, histories);
-  if (history !== 0 || filteredHistories.length > 0) return filteredHistories;
+  const startIndex = Array.isArray(history) ? -1 : getInteractiveChainStartIndex(histories);
+  if (startIndex < 0) return filteredHistories;
 
-  const lastAIIndex = histories.findLastIndex((item) => item.obj === ChatRoleEnum.AI);
-  if (lastAIIndex < 0) return filteredHistories;
-
-  const lastAIMessage = histories[lastAIIndex];
-  if (!getLastInteractiveValue([lastAIMessage])) return filteredHistories;
-
-  const lastHumanIndex = histories
-    .slice(0, lastAIIndex)
-    .findLastIndex((item) => item.obj === ChatRoleEnum.Human);
-
-  return lastHumanIndex < 0 ? [lastAIMessage] : [histories[lastHumanIndex], lastAIMessage];
+  const originalHistories = getHistories(history, histories.slice(0, startIndex));
+  const checkpointIndex = histories.findLastIndex(hasContextCheckpoint);
+  if (checkpointIndex >= startIndex) {
+    return [
+      ...originalHistories.filter((item) => item.obj === ChatRoleEnum.System),
+      ...histories.slice(checkpointIndex)
+    ];
+  }
+  return [...originalHistories, ...histories.slice(startIndex)];
 };
 
 /**
@@ -477,21 +358,83 @@ export const filterSystemVariables = (variables: Record<string, any>): SystemVar
   };
 };
 
+/** HTTP 错误摘要已下沉到 common/api/httpError，供 HTTP 节点与工具调用共用。 */
+export { formatHttpError } from '../../../../common/api/httpError';
+
 /**
- * 将 HTTP 请求异常整理成可序列化、可展示的错误摘要。
- *
- * Axios 等请求库的原始错误通常包含循环引用和大量配置对象，这里只保留排查请求失败所需的
- * method、status、code 和响应数据。
+ * Expand a ToolSet into runtime-only child nodes without persisting default-mode changes.
+ * HTTP children retain their per-input mode; other ToolSet types keep the legacy forced mode.
  */
-export const formatHttpError = (error: any) => {
+const initToolSetChildNode = (node: RuntimeNodeItemType): RuntimeNodeItemType => {
+  const isHttpToolChild = Boolean(node.toolConfig?.httpTool);
+
   return {
-    message: getErrText(error),
-    data: error?.response?.data,
-    name: error?.name,
-    method: error?.config?.method,
-    code: error?.code,
-    status: error?.status
+    ...node,
+    inputs: initToolInputsTypeByDefaultMode(
+      node.inputs.map((input) => ({
+        ...input,
+        ...(isHttpToolChild ? {} : { defaultToAgentGenerated: true })
+      })),
+      {
+        forceDefaultMode: !isHttpToolChild,
+        allowUserChatInputAgentGenerated: true
+      }
+    )
   };
+};
+
+/** 本地摘要仅覆盖同名远端工具的描述，不能限制远端当前工具列表。 */
+const mergeToolSetChildDescriptions = <T extends { name: string; description?: string }>({
+  toolList,
+  summaries
+}: {
+  toolList: T[];
+  summaries: { name: string; description?: string }[];
+}) => {
+  const descriptionMap = new Map(
+    summaries.map(({ name, description }) => [name, description] as const)
+  );
+  return toolList.map((tool) => ({
+    ...tool,
+    description: getToolSetChildDescription(descriptionMap.get(tool.name), tool.description)
+  }));
+};
+
+/** 按执行时鉴权发现内联 MCP 工具；摘要只覆盖描述，完整定义仅用于本轮临时子节点。 */
+export const getInlineMcpToolSetRuntimeNodes = async ({
+  toolSetNode,
+  resolveReference
+}: {
+  toolSetNode: RuntimeNodeItemType;
+  resolveReference?: Parameters<typeof getSecretValue>[0]['resolveReference'];
+}): Promise<RuntimeNodeItemType[]> => {
+  const mcpToolSet = McpToolSetNodeConfigSchema.parse(toolSetNode.toolConfig?.mcpToolSet);
+  const remoteToolList = await new MCPClient({
+    url: mcpToolSet.url,
+    headers: getSecretValue({
+      storeSecret: mcpToolSet.headerSecret ?? undefined,
+      ...(resolveReference ? { resolveReference } : {})
+    })
+  }).getTools();
+  const toolList = mergeToolSetChildDescriptions({
+    toolList: remoteToolList,
+    summaries: mcpToolSet.toolList
+  });
+
+  return toolList.map((tool) => {
+    const node = initToolSetChildNode(
+      getMCPToolRuntimeNode({
+        nodeId: getInlineToolSetChildNodeId({ toolSetNodeId: toolSetNode.nodeId, tool }),
+        toolsetName: toolSetNode.name,
+        avatar: toolSetNode.avatar,
+        tool,
+        url: mcpToolSet.url,
+        headerSecret: mcpToolSet.headerSecret ?? undefined
+      })
+    );
+    node.inputs = node.inputs.map((input) => normalizeFlowNodeInputType(input, { isTool: true }));
+    return node;
+  });
 };
 
 /**
@@ -501,13 +444,14 @@ export const formatHttpError = (error: any) => {
  * - 将当前工具输入与最新 MCP/HTTP resource schema 合并，并保留最终 selectedType。
  * - 将 ToolSet 节点展开为具体 Tool 节点，并把原来指向 ToolSet 的边改接到子工具节点。
  * - 为 MCP/HTTP Tool 节点补充原始 jsonSchema 和描述，供模型 tool call 生成参数时使用。
+ * - 保留内联 MCP 聚合连接，供 ToolCall 使用已就绪的上游鉴权延迟展开。
  */
 export const rewriteRuntimeWorkFlow = async ({
   teamId,
   tmbId,
   nodes,
   edges,
-  lang
+  lang: _lang
 }: {
   teamId: string;
   tmbId: string;
@@ -563,41 +507,23 @@ export const rewriteRuntimeWorkFlow = async ({
     );
   };
 
-  /**
-   * Expand a ToolSet into runtime-only child nodes without persisting default-mode changes.
-   * HTTP children retain their per-input mode; other ToolSet types keep the legacy forced mode.
-   */
-  const initToolSetChildNode = (node: RuntimeNodeItemType): RuntimeNodeItemType => {
-    const isHttpToolChild = Boolean(node.toolConfig?.httpTool);
-
-    return {
-      ...node,
-      inputs: initToolInputsTypeByDefaultMode(
-        node.inputs.map((input) => ({
-          ...input,
-          ...(isHttpToolChild ? {} : { defaultToAgentGenerated: true })
-        })),
-        {
-          forceDefaultMode: !isHttpToolChild,
-          allowUserChatInputAgentGenerated: true
-        }
-      )
-    };
-  };
-
   const getAuthorizedToolSet = async (toolSetId: string) => {
     try {
-      return (
-        await authAppByTmbId({
-          tmbId,
-          appId: toolSetId,
-          per: ReadPermissionVal
-        })
-      ).app;
+      return await loadWorkflowAppResource({ appId: toolSetId, tmbId, type: 'tool' });
     } catch {
       return undefined;
     }
   };
+
+  /** 历史外部 ToolSet 可能缺少嵌套 ID，运行时回退到父节点 pluginId。 */
+  const getToolSetReferenceId = (toolSet: unknown, pluginId: string) =>
+    typeof toolSet === 'object' &&
+    toolSet !== null &&
+    'toolId' in toolSet &&
+    typeof toolSet.toolId === 'string' &&
+    toolSet.toolId
+      ? toolSet.toolId
+      : pluginId;
 
   type RuntimeMcpTool = McpToolConfigType & {
     url?: string;
@@ -614,6 +540,33 @@ export const rewriteRuntimeWorkFlow = async ({
       const nodeIdsToRemove = new Set<string>();
 
       for (const toolSetNode of toolSetNodes) {
+        if (!toolSetNode.pluginId && toolSetNode.toolConfig?.mcpToolSet) {
+          // 暂停快照可能只有未展开的子工具边；先还原聚合连接，待 ToolCall 执行前再展开。
+          const nodeIds = new Set(nodes.map((node) => node.nodeId));
+          const inlineMcpChildIds = new Set(
+            (toolSetNode.toolConfig.mcpToolSet.toolList ?? []).map((tool) =>
+              getInlineToolSetChildNodeId({ toolSetNodeId: toolSetNode.nodeId, tool })
+            )
+          );
+          for (const edge of [...edges]) {
+            const legacyChildId = edge.target.startsWith(toolSetNode.nodeId)
+              ? edge.target.slice(toolSetNode.nodeId.length)
+              : '';
+            const isLegacyChildId = /^\d+$/.test(legacyChildId) && !nodeIds.has(edge.target);
+            const isUnresolvedInlineChildId =
+              inlineMcpChildIds.has(edge.target) && !nodeIds.has(edge.target);
+            if (
+              edge.targetHandle === NodeOutputKeyEnum.selectedTools &&
+              (isLegacyChildId || isUnresolvedInlineChildId) &&
+              !edges.some(
+                (item) => item.source === edge.source && item.target === toolSetNode.nodeId
+              )
+            ) {
+              edges.push({ ...edge, target: toolSetNode.nodeId });
+            }
+          }
+          continue;
+        }
         nodeIdsToRemove.add(toolSetNode.nodeId);
 
         const systemToolId = toolSetNode.toolConfig?.systemToolSet?.toolId;
@@ -624,6 +577,17 @@ export const rewriteRuntimeWorkFlow = async ({
         // ToolSet 只是编辑态聚合节点，运行态需要把入口边复制到每个实际工具节点。
         const pushEdges = (nodeId: string) => {
           for (const inEdge of incomingEdges) {
+            if (
+              edges.some(
+                (edge) =>
+                  edge.source === inEdge.source &&
+                  edge.sourceHandle === inEdge.sourceHandle &&
+                  edge.target === nodeId &&
+                  edge.targetHandle === NodeOutputKeyEnum.selectedTools
+              )
+            ) {
+              continue;
+            }
             edges.push({
               source: inEdge.source,
               target: nodeId,
@@ -638,61 +602,145 @@ export const rewriteRuntimeWorkFlow = async ({
         if (systemToolId) {
           const children = await getSystemToolRunTimeNodeFromSystemToolset({
             toolSetNode,
-            teamId,
-            lang
+            teamId
           });
           children.forEach((node) => {
             const runtimeNode = initToolSetChildNode(node);
             nodes.push(runtimeNode);
             pushEdges(runtimeNode.nodeId);
           });
-        } else if (mcpToolsetVal) {
-          // 旧调试状态可能仍携带空 toolId，占位值不能阻止按 pluginId 加载资源。
-          const toolSetId =
-            ('toolId' in mcpToolsetVal ? mcpToolsetVal.toolId : undefined) || toolSetNode.pluginId;
-          if (!toolSetId) continue;
-
+        } else if (mcpToolsetVal && toolSetNode.pluginId) {
+          const toolSetId = getToolSetReferenceId(mcpToolsetVal, toolSetNode.pluginId);
           const app = await getAuthorizedToolSet(toolSetId);
           if (!app) continue;
-          const toolList = (await getMCPChildren(app)) as RuntimeMcpTool[];
+          const toolList = filterWorkflowToolList({
+            context: getWorkflowResourceContext(),
+            appId: String(app._id),
+            tools: (await getMCPChildren(app)) as RuntimeMcpTool[]
+          });
 
+          const savedDescriptionMap = new Map(
+            (mcpToolsetVal.toolList ?? []).map((tool) => [tool.name, tool.description])
+          );
           toolList.forEach((tool, index) => {
+            const runtimeTool = {
+              ...tool,
+              description: getToolSetChildDescription(
+                savedDescriptionMap.get(tool.name),
+                tool.description
+              )
+            };
             const newToolNode = initToolSetChildNode(
               getMCPToolRuntimeNode({
                 nodeId: `${toolSetNode.nodeId}${index}`,
                 toolSetId,
                 toolsetName: toolSetNode.name,
                 avatar: toolSetNode.avatar,
-                tool
+                tool: runtimeTool
               })
             );
             nodes.push(newToolNode);
             pushEdges(newToolNode.nodeId);
           });
         } else if (httpToolsetVal) {
-          const toolSetId =
-            ('toolId' in httpToolsetVal ? httpToolsetVal.toolId : undefined) ||
-            toolSetNode.pluginId;
-          if (!toolSetId) continue;
+          if (!toolSetNode.pluginId) {
+            const httpToolSet = HttpToolSetNodeConfigSchema.parse(httpToolsetVal);
+            if (!httpToolSet.apiSchemaUrl) throw new Error('HTTP tool set schema URL is missing');
+            const nodeIds = new Set(nodes.map((node) => node.nodeId));
 
-          const app = await getAuthorizedToolSet(toolSetId);
-          if (!app) continue;
-
-          const toolList = await getHTTPToolList(app);
-
-          toolList.forEach((tool: HttpToolConfigType, index: number) => {
-            const newToolNode = initToolSetChildNode(
-              getHTTPToolRuntimeNode({
-                tool,
-                nodeId: `${toolSetNode.nodeId}${index}`,
-                avatar: toolSetNode.avatar,
-                toolSetId,
-                toolsetName: toolSetNode.name
-              })
+            await checkUrlSafety(httpToolSet.apiSchemaUrl, 'OpenAPI Schema URL');
+            const { data: downloadedSchema } = await axios.get<string>(httpToolSet.apiSchemaUrl, {
+              responseType: 'text',
+              maxRedirects: 0,
+              timeout: 30000,
+              transformResponse: (value) => value
+            });
+            const bundledSchema = await bundleOpenAPISchema(
+              parseOpenAPISchemaString(downloadedSchema)
             );
-            nodes.push(newToolNode);
-            pushEdges(newToolNode.nodeId);
-          });
+            const apiSchemaStr = JSON.stringify(bundledSchema);
+            if (!apiSchemaStr) throw new Error('Failed to serialize HTTP tool schema');
+
+            const apiSchema = await str2OpenApiSchema(apiSchemaStr);
+            const parsedToolList = await pathData2ToolList(apiSchema.pathData);
+            if (parsedToolList.length !== apiSchema.pathData.length) {
+              throw new Error('Failed to parse HTTP tool schema');
+            }
+            const toolList = mergeToolSetChildDescriptions({
+              toolList: parsedToolList,
+              summaries: httpToolSet.toolList
+            });
+
+            toolList.forEach((tool, index) => {
+              const runtimeNode = getHTTPToolRuntimeNode({
+                tool,
+                nodeId: getInlineToolSetChildNodeId({ toolSetNodeId: toolSetNode.nodeId, tool }),
+                avatar: toolSetNode.avatar,
+                toolSetId: 'inline',
+                toolsetName: toolSetNode.name
+              });
+              const { headerSecret: _headerSecret, ...toolWithoutHeaderSecret } = tool;
+              runtimeNode.toolConfig = {
+                ...runtimeNode.toolConfig,
+                httpTool: {
+                  ...toolWithoutHeaderSecret,
+                  baseUrl: httpToolSet.baseUrl?.trim() || apiSchema.serverPath,
+                  apiSchemaStr,
+                  customHeaders: httpToolSet.customHeaders,
+                  headerSecret: httpToolSet.headerSecret ?? undefined
+                }
+              };
+
+              const newToolNode = initToolSetChildNode(runtimeNode);
+              nodes.push(newToolNode);
+              const legacyChildId = `${toolSetNode.nodeId}${index}`;
+              if (!nodeIds.has(legacyChildId)) {
+                edges.forEach((edge) => {
+                  if (
+                    edge.target === legacyChildId &&
+                    edge.targetHandle === NodeOutputKeyEnum.selectedTools
+                  ) {
+                    edge.target = newToolNode.nodeId;
+                  }
+                });
+              }
+              pushEdges(newToolNode.nodeId);
+            });
+          } else {
+            const toolSetId = getToolSetReferenceId(httpToolsetVal, toolSetNode.pluginId);
+            const app = await getAuthorizedToolSet(toolSetId);
+            if (!app) continue;
+
+            const toolList = filterWorkflowToolList({
+              context: getWorkflowResourceContext(),
+              appId: String(app._id),
+              tools: await getHTTPToolList(app)
+            });
+
+            const savedDescriptionMap = new Map(
+              (httpToolsetVal.toolList ?? []).map((tool) => [tool.name, tool.description])
+            );
+            toolList.forEach((tool: HttpToolConfigType, index: number) => {
+              const runtimeTool = {
+                ...tool,
+                description: getToolSetChildDescription(
+                  savedDescriptionMap.get(tool.name),
+                  tool.description
+                )
+              };
+              const newToolNode = initToolSetChildNode(
+                getHTTPToolRuntimeNode({
+                  tool: runtimeTool,
+                  nodeId: `${toolSetNode.nodeId}${index}`,
+                  avatar: toolSetNode.avatar,
+                  toolSetId,
+                  toolsetName: toolSetNode.name
+                })
+              );
+              nodes.push(newToolNode);
+              pushEdges(newToolNode.nodeId);
+            });
+          }
         }
       }
 
@@ -719,7 +767,7 @@ export const rewriteRuntimeWorkFlow = async ({
     const parseMcpToolConfigs = mcpToolNodes
       .map((node) => {
         const mcpTool = node.toolConfig?.mcpTool;
-        return mcpTool ? parsetMcpToolConfig(mcpTool) : undefined;
+        return mcpTool && 'toolId' in mcpTool ? parsetMcpToolConfig(mcpTool) : undefined;
       })
       .filter(Boolean) as { toolsetId: string; toolName: string }[];
     // 批量获取 toolset，避免每个工具节点都单独查询一次数据库。
@@ -733,6 +781,7 @@ export const rewriteRuntimeWorkFlow = async ({
     const toolListMap = new Map<string, RuntimeMcpTool[]>();
     await Promise.all(
       toolsets.map(async (toolset) => {
+        // 单工具补齐只读取定义，执行入口会按具体 toolName 完成资源鉴权。
         const toolList = (await getMCPChildren(toolset)) as RuntimeMcpTool[];
         toolListMap.set(String(toolset._id), toolList);
       })
@@ -740,6 +789,7 @@ export const rewriteRuntimeWorkFlow = async ({
     mcpToolNodes.forEach((node) => {
       const mcpTool = node.toolConfig?.mcpTool;
       if (!mcpTool) return;
+      if (!('toolId' in mcpTool)) return;
       const parseResult = parsetMcpToolConfig(mcpTool);
       if (!parseResult) return;
       const toolList = toolListMap.get(parseResult.toolsetId);
@@ -747,7 +797,10 @@ export const rewriteRuntimeWorkFlow = async ({
       const toolRaw = toolList.find((tool) => tool.name === parseResult.toolName);
       if (!toolRaw) return;
       node.jsonSchema = toolRaw.inputSchema;
-      node.intro = toolRaw.description;
+      // 空字符串代表用户主动清空，历史缺失值才使用工具定义描述。
+      if (node.intro !== '' && !node.intro) {
+        node.intro = toolRaw.description;
+      }
       mergeToolNodeInputs({ node, jsonSchema: toolRaw.inputSchema, schemaType: 'mcp' });
     });
   };
@@ -788,7 +841,10 @@ export const rewriteRuntimeWorkFlow = async ({
       if (!toolRaw) return;
       const { inputSchema, requestSchema } = getHTTPToolRuntimeSchemas(toolRaw);
       node.jsonSchema = requestSchema;
-      node.intro = toolRaw.description;
+      // 空字符串代表用户主动清空，历史缺失值才使用工具定义描述。
+      if (node.intro !== '' && !node.intro) {
+        node.intro = toolRaw.description;
+      }
       mergeToolNodeInputs({
         node,
         jsonSchema: inputSchema,
@@ -815,27 +871,31 @@ export const rewriteRuntimeWorkFlow = async ({
 /**
  * 生成节点执行失败时的标准返回结构。
  *
- * 同一份错误会被写入节点输出、nodeResponse 和 toolResponse，兼容普通节点执行、
- * 前端节点详情展示以及 tool call 调用方读取错误的不同路径。
+ * error 保留错误分支可引用的输出，rawError 独立保留原始异常供分类和日志判断。
+ * 展示文本可独立覆盖，例如 HTTP 节点会补充响应体摘要；不覆盖原始异常。
+ * nodeResponse/toolResponse 只接收可展示数据，避免异常堆栈和 cause 进入持久化或模型上下文。
  */
 export const getNodeErrResponse = <TError extends Record<string, any> = Record<string, never>>({
   error,
+  errorText: displayErrorText,
   customErr,
   responseData,
   runTimes,
   system_memories
 }: {
-  error: any;
+  error: unknown;
+  errorText?: string;
   customErr?: TError;
   [DispatchNodeResponseKeyEnum.nodeResponse]?: Record<string, any>;
   [DispatchNodeResponseKeyEnum.runTimes]?: number;
   [DispatchNodeResponseKeyEnum.memories]?: Record<string, any>;
 }) => {
-  const errorText = getErrText(error);
+  const errorText = displayErrorText ?? getErrText(error);
 
   return {
     [DispatchNodeResponseKeyEnum.runTimes]: runTimes,
     [DispatchNodeResponseKeyEnum.memories]: system_memories,
+    rawError: error,
     error: {
       [NodeOutputKeyEnum.errorText]: errorText,
       ...(typeof customErr === 'object' ? customErr : {})

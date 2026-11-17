@@ -2,6 +2,9 @@
 
 状态：modelId 迁移已实现；客户端模型目录后续重构待实现
 
+后续管理员按稳定 `_id` 修改 `model` 的需求与实施草案见
+[管理员修改系统模型调用标识](./system-model-identifier-update.md)。该方案尚未实施；本文的稳定 modelId 约束继续有效。
+
 最后核对：2026-08-30
 
 后续客户端模型目录、接口收敛、本地缓存和 version 设计以
@@ -64,7 +67,6 @@
 | `model`    | provider 侧路由名称，例如 `gpt-4o` | 否；仅兼容旧引用和 provider 请求                             |
 | `name`     | 用户可见展示名                     | 否                                                           |
 | `scope`    | 模型实例作用域                     | 本轮固定为 `system`，后续可扩展 `team`                       |
-| `isCustom` | 是否不在插件模板中                 | 运行时根据模板匹配结果派生，不能表示所有权，不能参与身份判断 |
 
 核心约束：
 
@@ -96,10 +98,7 @@ type SystemModelDocument = {
   requestUrl?: string;
   requestAuth?: string;
 
-  charsPointsPrice?: number;
-  priceTiers?: ModelPriceTier[];
-  inputPrice?: number;
-  outputPrice?: number;
+  pricing?: ModelPricingType;
 
   config: ModelConfig;
 };
@@ -107,7 +106,6 @@ type SystemModelDocument = {
 type RuntimeSystemModel = Omit<SystemModelDocument, '_id'> & {
   modelId: string;
   avatar?: string;
-  isCustom?: boolean;
 };
 ```
 
@@ -115,7 +113,7 @@ type RuntimeSystemModel = Omit<SystemModelDocument, '_id'> & {
 
 - 顶层字段回答“这是谁、由谁提供、是否启用、如何连接、如何计费”。
 - `config` 回答“这个类型的模型支持什么，以及调用时如何构造参数”。
-- `modelId`、`avatar`、`isCustom` 是派生字段，不在 MongoDB 中重复保存。
+- `modelId`、`avatar` 是派生字段，不在 MongoDB 中重复保存。
 - `metadata` 只作为迁移期 legacy 字段保留，新写入不再产生 `metadata`。
 
 不在 MongoDB 中重复保存 `modelId`；运行时和 API 返回时由 `_id` 映射得到。这样只有一个真实主键来源，避免 `_id` 与 `modelId` 不一致。
@@ -194,18 +192,18 @@ Mongoose 顶层字段应显式声明，`config` 可以使用 `Schema.Types.Mixed
 插件 SDK 1.1.0 的模型协议仍是扁平结构。各类型共同提供：
 
 - 身份/展示字段：`type`、`provider`、`model`、`name`。
-- 初始价格字段：`charsPointsPrice`、`inputPrice`、`outputPrice`。
+- 当前初始价格仅接受 `pricing`；旧 SDK 的根级价格不会进入业务 Schema，也不参与运行期计费，详见[模型计价设计](./model-token-price-unit.md)。
 - LLM 能力字段：`maxContext`、`maxTokens`、`quoteMaxToken`、温度/返回格式/多模态/推理/工具调用能力、`defaultSystemChatPrompt`、`defaultConfig`、`fieldMap` 等。
 - Embedding 能力字段：`defaultToken`、`maxToken`、`weight`、`hidden`、`normalization`、`defaultConfig`、`dbConfig`、`queryConfig`。
 - Rerank 能力字段：`maxToken`；TTS 能力字段：`voices`；STT 没有额外能力字段。
 
-插件协议不提供 `scope`、`isActive`、`testMode`、默认模型标记、`requestUrl`、`requestAuth` 和 `priceTiers`。其中 `scope` 在本轮固定写为 `system`，其余均为 FastGPT 数据库业务字段。
+插件协议不提供 `scope`、`isActive`、`testMode`、默认模型标记、`requestUrl` 和 `requestAuth`。其中 `scope` 在本轮固定写为 `system`，其余均为 FastGPT 数据库业务字段。
 
 插件数据进入系统时，只允许由一个 normalize 函数完成以下转换，数据库、API 和缓存不得各自实现字段分拣：
 
 1. `maxTokens` 映射为 `config.maxResponse`，其余类型能力字段放入对应 `config`。
 2. `type/provider/model/name` 保留为顶层初始化字段。
-3. 插件的旧价格字段保留为顶层初始化价格，不放入 `config`。
+3. 只接受模板的新 `pricing` 价格结构，不放入 `config`；旧价格仅存在于迁移专属解析器。
 4. 插件中的 deprecated 场景开关只用于旧数据兼容，不进入新的 canonical schema。
 
 模型加载阶段不得再使用 `{ ...pluginModel, ...dbModel }` 合并整个对象。数据库文档是可独立运行的完整实例和唯一权威来源；插件模板只在首次物化时提供身份、展示、价格和 `config` 初始值：
@@ -219,7 +217,7 @@ Mongoose 顶层字段应显式声明，`config` 可以使用 `Schema.Types.Mixed
 | `isActive/testMode`、默认标记、连接信息 | FastGPT 默认值或管理员配置 | 只读 DB，插件不参与                             |
 | 价格字段                                | 插件模板初始化             | DB 权威，插件更新不覆盖管理员价格               |
 | `config`                                | 插件能力配置初始化         | 只读 DB 完整快照；模板变化不隐式合并            |
-| `avatar/isCustom`                       | 不持久化                   | 分别由 provider 和是否命中插件模板派生          |
+| `avatar`                                | 不持久化                   | 由 provider 派生                                |
 
 加载时不做 `config` 合并。`defaultConfig`、`fieldMap`、`dbConfig`、`queryConfig`、数组以及 `false`、`0` 等值全部按数据库快照解释；配置不完整或非法时保留上一版运行时缓存并暴露配置错误，不能从插件或其他模型借默认值。
 
@@ -260,12 +258,12 @@ defineIndex(SystemModelSchema, {
 
 不能只建立无 partial filter 的 `{ scope, model }` 唯一索引，否则所有团队模型仍会在全平台共享一组唯一空间，与未来的“团队内唯一”冲突。
 
-### 5.6 `scope` 与 `isCustom`
+### 5.6 `scope` 与模板解绑
 
 - 本轮 `ai_models` 中的所有模型都属于平台系统模型，包括管理员自行添加、未命中插件模板的模型；创建和迁移统一写入 `scope: system`。
 - 本轮输入 Schema 将 `scope` 收紧为 literal `system`，不允许管理员 API 写入团队作用域。未来团队安装需求再扩展这一边界。
-- `isCustom = true` 的唯一含义是“该系统模型不在当前插件模板列表中”；命中模板则为 `false`。它不表示私有模型、创建者或所有权。
-- `isCustom` 只在运行时根据 `model` 是否命中插件模板派生，不持久化，也不得用于访问控制或唯一索引；命中后若 `type` 不一致，应作为模板/数据库配置错误单独报告，不能把它伪装成自定义模型。
+- 模型创建完成后即与 Plugin 模板解绑，所有已安装模型都按独立实例管理。
+- 因此不再提供 `isCustom`：当前模板是否存在是动态外部状态，既不能描述实例来源，也不能用于删除、编辑、访问控制或唯一索引。
 
 ## 6. 模型加载、缓存与查找
 
@@ -333,7 +331,6 @@ const ModelReferenceSchema = z
 | `POST /core/dataset/create`     | `vlmModelId`                    | `vlmModel`                    | 两者都缺少时使用默认 VLM            |
 | `POST /core/dataset/searchTest` | `rerankModelId`                 | `rerankModel`                 | 仅启用 Rerank 时解析                |
 | `POST /core/dataset/searchTest` | `datasetSearchExtensionModelId` | `datasetSearchExtensionModel` | 仅启用问题扩展时解析                |
-| `POST /core/dataset/searchTest` | `datasetDeepSearchModelId`      | `datasetDeepSearchModel`      | 仅启用深度搜索时解析                |
 
 表内每组字段都必须把 `modelId` 和 deprecated `model` 一起传给统一的 `getXXModelData`，不得在 API handler 中先用 `modelId ?? model` 压成单个字符串。这样才能区分“没有传 `modelId`”与“传入的 `modelId` 无效”，并保证后者立即报“模型不存在”而不回退。
 
@@ -475,7 +472,6 @@ const displayModel =
 | `embeddingModel`              | `embeddingModelId`              |
 | `rerankModel`                 | `rerankModelId`                 |
 | `datasetSearchExtensionModel` | `datasetSearchExtensionModelId` |
-| `datasetDeepSearchModel`      | `datasetDeepSearchModelId`      |
 
 旧 key 必须继续保留在 Workflow input 常量、类型、Zod Schema、模板反序列化和 Dispatcher 读取分支中，并标记 deprecated；本轮不能通过 rename 或删除旧 input 实现迁移。`datasetParams` 复合对象内的同名字段也遵循相同规则。
 
@@ -489,18 +485,19 @@ const displayModel =
 
 - 新建节点和新模板只产生新 ID key，不需要额外双写旧 key。
 - 数据库批量迁移脚本只回填 ID sibling，不删除历史 key，便于回滚；业务写入边界的 `formatModels` 则产出只含 ID key 的规范节点。
-- `formatModels` 只在服务端写入边界执行，客户端不依赖分页模型列表做身份迁移。画布恢复在模板补齐前按原始 key 去重：存在 canonical input 时删除所有 legacy input；只有静态 legacy input 时复用 canonical 模板槽位但保留旧 key，等待保存边界解析；动态 legacy input 可原样迁移到 canonical key。静态旧 `model` 仅在同名、同类型 active 模型存在时转换为 `modelId`；已有动态 `modelId` 时直接保留；已有静态 `modelId` 时严格按 ID 校验，不允许借旧 `model` 修复。
-- `formatModels` 按写入场景显式选择三种策略：`preserve` 只规范字段名并保留无法解析的原值；`fallback` 回退同类型模型；`validate` 严格校验开启功能的静态模型。三种策略都不做成员模型权限判断。
-- 自动保存和保存版本使用 `preserve`：有效旧模型名仍转换成 ID；无效静态值原样写入 canonical `modelId`，不报错且不回退。应用创建、复制和转化使用 `fallback`：无效静态值优先回退到有效的系统默认同类型模型，系统默认无效时再回退第一个 active 同类型模型。发布使用 `validate`：开启功能的无效静态模型聚合报错；功能关闭时不报错，并按相同默认优先级回退。动态引用和模板表达式在所有策略下都只迁移字段名、不做静态校验。
+- `formatModels` 在服务端写入/调试边界与前端导入边界执行，传入 `modelHandle.getActiveModels()`（客户端导入传入当前可用列表）。画布恢复在模板补齐前按原始 key 去重：存在 canonical input 时删除所有 legacy input；只有静态 legacy input 时复用 canonical 模板槽位但保留旧 key，等待保存边界解析；动态 legacy input 可原样迁移到 canonical key。
+- **系统模型与团队模型边界**：在 `formatModels`、前端 `modelData`/`modelReference` 以及导出辅助函数（`addModelNamesToWorkflow`、`addModelNamesToAppForm`）中，只有显式传入的 `modelId` 允许同时命中系统模型（`scope = 'system'`）与团队私有模型（`scope = 'team'`）；**任何通过旧 `model` 名称的兼容提取/导入跨环境恢复（`matchedModelByName`）以及向默认模型或首个同类型模型的回退（`getFallbackModelId`），都必须严格过滤 `isSystemModel(item)`，绝不允许命中或回退到团队私有模型**；导出补充 `model` 名称时也只为系统模型补充，团队私有模型只导出 `modelId`。
+- `formatModels` 按场景显式选择四种策略：`preserve` 规范字段名、转换有效 legacy 系统 `model` 并为已开启的空可选槽位补齐系统默认 `modelId`，保留其他无法解析的原值；`fallback` 回退同类型系统模型；`validate` 为已开启的空可选槽位补齐系统默认 `modelId`，并严格校验开启功能的静态模型；`import` 用于跨环境 JSON 导入（优先 `modelId`，未命中再按 `model` 匹配当前环境系统模型，均未命中则置为 `undefined` 等待模板初始化系统默认模型）。四种策略都不做成员模型权限判断（权限校验由写入口与运行时的资源鉴权独立负责，见 [模型鉴权收敛设计](./model-permission-auth.md) 与 [应用资源鉴权设计](../app/app-resource-permission.md)）。
+- 自动保存、保存版本以及工作流调试资源上下文（`prepareAppWorkflowResources`）使用 `preserve`：有效旧系统模型名转换成 ID，已开启但留空的可选模型槽位（如问题引导、TTS、查询扩展）物化为系统默认模型 ID，无效非空静态值原样写入 canonical `modelId`（不报错且不回退）。模板解析、应用创建、复制及转换使用 `fallback`：有效引用保持不变，无效静态值优先回退到有效的同类型系统默认模型，系统默认无效时再回退第一个 active 同类型系统模型；模型回退不处理成员权限不足，权限仍由对应资源鉴权入口校验。用户主动发布使用 `validate`：已开启的空可选槽位先补齐系统默认模型 ID，仍无效的开启功能静态模型聚合报错；功能关闭时不报错并保留原值。动态引用和模板表达式在所有策略下都只迁移字段名、不做静态校验。
 - 编辑或保存存量 Workflow 时，会将命中的 deprecated input 原位转换为 ID input，不再双写旧 key。
-- 运行时没有任何兼容性任意回退：只要 `modelId` 字段存在（包括空字符串）就仅按 ID 解析；只有字段为 `undefined` 才允许按 deprecated `model` 精确查找。ID/名称为空、无效、停用或类型错误均抛错，统一由客户端显示“xxx 模型已停用”。
+- 运行时没有任何兼容性任意回退：只要 `modelId` 字段存在（包括空字符串）就仅按 ID 解析；只有字段为 `undefined` 才允许按 deprecated `model` 精确查找系统模型。ID/名称为空、无效、停用或类型错误均抛错，统一由客户端显示“xxx 模型已停用”。
 
 引用类型 input 的 value 保留原引用路径，仅将旧 key 改为 ID key。运行时引用结果统一按 `modelId` 解释；若上游仍输出旧 `model` 字符串，则直接报“模型不存在”。
 
 ### 7.5 需要覆盖的调用链
 
 - LLM：AI Chat、Agent、问题分类、内容提取、工具调用、上下文压缩、辅助生成、Skill 调试。
-- Dataset：向量生成、文本余弦、图片理解、查询扩展、深度搜索、rerank、训练和重建 embedding。
+- Dataset：向量生成、文本余弦、图片理解、查询扩展、rerank、训练和重建 embedding。
 - Audio：站内 TTS/STT 配置与调用。
 - Evaluation：创建、执行、重试、列表和用量。
 - 模型管理：配置接口统一移动到 `/admin/settings/model/*`；create 与 update 分离，detail、update、delete、test、updateDefault 等接口按 modelId 定位，管理列表返回 modelId。
@@ -527,6 +524,9 @@ const displayModel =
 - 不在本轮增加“创建者即所有者”、团队成员 groupId、跨成员私有模型授权等规则。
 
 ## 9. 客户端可用模型获取优化
+
+> [!NOTE]
+> 本节为 modelId 迁移第一阶段的分页过渡设计；后续已演进为按身份缓存与版本握手的完整客户端模型目录（`/core/ai/model/catalog` 与 `/core/ai/model/list`）以及服务端模型鉴权收敛，当前最新实现以 [客户端模型目录设计](./client-model-catalog.md)、[模型鉴权收敛设计](./model-permission-auth.md) 与 [应用资源鉴权设计](../app/app-resource-permission.md) 为准。
 
 ### 9.1 服务端接口
 
@@ -555,6 +555,9 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 - 已有选中值通过 `getMyModel` 恢复，并与发现请求并行。若选中模型的 provider 不在可用 `providers` 中，保留异常 value 并显示“xxx 模型已停用”，候选列表使用第一个可用 Provider。
 - 不能先对全局模型列表切片再做权限过滤，否则会造成页大小不稳定、total 泄漏和空页。
 - 普通分页使用稳定排序，例如 provider order、`name`、`modelId`，保证翻页期间顺序确定；`pageSize` 设置合理上限，建议默认 20、最大 50。
+
+> 以下缓存与权限边界描述为本迁移版本的历史设计；当前缓存结构、失效方式和服务端模型鉴权以 [模型鉴权收敛设计](./model-permission-auth.md) 为准。
+
 - 移除客户端 `versionKey/isRefreshed` 握手。服务端通过 `TmpDataEnum.MyModels` 按 `{ teamId, tmbId }` 缓存成员可用的 `modelId` 集合，固定 TTL 为一小时；`getMyModels` 和 `getMyModel` 共用该缓存，客户端不维护账号级完整模型缓存。本版本不增加 `permissionVersion`。
 - 任意成功的模型新增、更新、启用、停用或删除，在 active 列表重载成功后删除全部 `TmpDataEnum.MyModels` 缓存。新模型在未配置协作者权限时默认可用，如果只清理当前团队或当前成员，其他成员的旧缓存将遗漏该模型；若插件失败导致重载失败，则保留旧 active 列表和旧缓存。
 - 模型协作者权限以及影响协作者身份的团队成员、组织、用户组发生变更时，删除对应团队的全部 `TmpDataEnum.MyModels` 缓存。权限写入与缓存删除使用同一 session；删除后由下一次读取惰性重建。
@@ -590,10 +593,10 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 公开响应使用独立 `PublicPriceSystemModelSchema`，只包含：
 
 - 所有类型共有 `name`、`provider`、`type`、`testMode`。
-- LLM 仅增加运行时归一化后的 `priceTiers`，以及 `config.maxContext/vision/audio/video/reasoning`。
-- Embedding/Rerank 仅增加 `charsPointsPrice` 和 `config.maxToken`；TTS/STT 仅增加 `charsPointsPrice`，不返回空 `config`。
+- LLM 仅增加 `pricing.tiers`，以及 `config.maxContext/vision/audio/video/reasoning`。
+- Embedding/Rerank 仅增加 `pricing.unitPrice` 和 `config.maxToken`；TTS/STT 仅增加 `pricing.unitPrice`，不返回空 `config`。
 
-不得返回 `modelId/model/avatar/inputPrice/outputPrice`、`requestUrl/requestAuth`、默认 system prompt、`defaultConfig/fieldMap/dbConfig/queryConfig`、voices、默认模型标记、权限信息或其他管理字段。价格页改为给展示组件显式传入这份公开列表，不再从全局模型 store 读取。该常规公共接口需要完整 Zod contract、响应 parse 和 OpenAPI 文档；因为没有入参，不创建空 Query Schema，也不调用空的 `parseApiInput`。
+不得返回 `modelId/model/avatar`、旧根级价格字段、`requestUrl/requestAuth`、默认 system prompt、`defaultConfig/fieldMap/dbConfig/queryConfig`、voices、默认模型标记、权限信息或其他管理字段。价格页改为给展示组件显式传入这份公开列表，不再从全局模型 store 读取。该常规公共接口需要完整 Zod contract、响应 parse 和 OpenAPI 文档；因为没有入参，不创建空 Query Schema，也不调用空的 `parseApiInput`。
 
 ## 10. OpenAPI 与跨仓库改动
 
@@ -610,40 +613,38 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 
 ### 11.1 模型结构接管与资源迁移
 
-旧版 `cleanSystemModelConfigs` 不再提供。新版本不修改 `system_models`：阻塞升级任务在内存中把全部旧记录转换为 canonical 结构，并在单个事务中按 `{ scope: system, model }` 把缺失模型追加到 `ai_models`。同名目标记录保留现有 `_id`，其余字段由旧表 canonical 配置完整替换；旧表独有记录沿用旧 `_id` 新增；目标表独有记录不删除。system 默认配置以已有且仍有效的槽位为准，旧表 `isDefault*` 只补齐缺失或失效槽位。成功结果分别记录旧表原始记录数、新表最终 system 模型数，以及按名称去重后已在新表中落位的旧模型数；同名替换属于成功落位而不是新增。升级状态表是唯一执行标记。单模型新增/更新和 JSON 批量更新只接受 canonical 数据；JSON 中没有 `modelId` 的旧记录直接过滤。JSON 的未知 `modelId` 表示跨实例导入：目标端按 `model` 复用已有系统实例或创建新实例。
+旧版 `cleanSystemModelConfigs` 不再提供。新版本不修改 `system_models`：启动阻塞升级任务在单个事务中把旧记录转换为 canonical 结构并按 `model` 合并到 `ai_models`。同名目标保留现有 `_id`，其余配置由旧表覆盖；旧表独有模型沿用旧 `_id` 新增；新表独有模型保留。已有且有效的默认槽位优先，旧表 `isDefault*` 只补齐缺失或失效槽位。升级状态表仍是迁移 Runner 是否调度任务的唯一依据。单模型新增/更新和 JSON 批量更新只接受 canonical 数据；JSON 中没有 `modelId` 的旧记录直接过滤。JSON 的未知 `modelId` 表示跨实例导入：目标端按 `model` 复用已有系统实例或创建新实例。
 
-启动迁移、插件模板刷新、自动预装策略和数据库实例加载必须保持四个独立职责：
+启动迁移、动态模板读取和数据库实例加载必须保持三个独立职责：
 
-1. `bootstrapAIModelsFromLegacy` 只由阻塞升级任务调用；它不读取升级状态、不保存 checkpoint、不生成缓存，也不由模型加载、定时刷新或管理接口调用。它先读取并全量校验旧表与插件类型，再在单事务中读取目标模型和默认配置、解析身份冲突、批量插入旧表独有模型、按目标 `_id` 替换同名模型配置，最后合并默认槽位。目标表独有模型不更新或删除；任务因节点退出被 lease 接管后可以确定性重复调用，事务失败不会留下部分结果。
-2. `refreshModelTemplates` 只获取并校验插件模板候选快照；启动失败则阻止启动，热刷新失败则保留上一版模板和 active 缓存，不触发任何数据库变更。
-3. `syncPreinstalledSystemModels` 只负责本版本“插件模板缺失实例自动预装”的兼容策略，按 `{ scope, model }` 创建缺失实例，不更新或删除已有实例。PR2 改为模板显式安装时只替换这一层。
-4. `loadInstalledModels` 只读取并严格解析数据库实例与 system scope 默认配置，在局部构建 list/map/defaults 后原子发布；不 repair、不拉插件、不创建或删除模型。管理员提交和数据库 Change Stream 只触发这一层。
+1. `bootstrapAIModelsFromLegacy` 只由启动阻塞升级任务调用；它不读取升级状态、不保存 checkpoint、不生成缓存，也不由模型加载、定时刷新或管理接口调用。它先读取并全量校验旧表与插件类型，再在单事务中读取最新目标快照，按 `model` 更新同名实例、插入缺失实例并合并默认槽位，与目录修订号递增原子提交。任务因节点退出被 lease 接管后可以确定性重复调用，事务失败不会留下部分结果。
+2. `refreshModelTemplates` 只在管理员打开模板列表和提交模板安装时实时获取并校验候选快照，不缓存、不触发数据库变更，也不参与启动加载。
+3. `loadInstalledModels` 只读取并严格解析数据库实例与 system scope 默认配置，在局部构建 list/map/defaults 后原子发布；不 repair、不拉插件、不创建或删除模型。管理员写入提交后刷新本节点；其他节点通过运行期目录修订号检查触发这一层，不依赖模型集合 Change Stream。
 
-启动编排为：先执行正常的 `preload providers -> refresh templates -> sync preinstalled -> load installed`，让升级脚本可以使用模型缓存；随后升级 runner 获取 lease。模型迁移任务执行 `preload providers -> refresh templates -> bootstrap legacy -> sync preinstalled -> load installed`：`bootstrap legacy` 在事务中补充旧表独有模型，并保留同名目标 `_id`、用旧表 canonical 配置替换其余字段，避免启动阶段自动预装配置覆盖升级前设置；任务在返回成功前重新发布模型缓存。其他节点轮询到阻塞任务成功后即可进入 ready，无需为迁移额外重复加载一次模型，因为各节点启动阶段已经发布缓存，而模型数据库变更由既有同步机制传播。迁移失败时事务不留下部分数据，节点保持 not ready，owner 持续持有 lease 并等待修复后重启；运行期模板刷新为 `refresh templates -> sync preinstalled -> load installed`，管理员写入为 `validate/preflight -> transaction -> load installed`。
+启动只预加载 Provider 并读取已安装模型，不请求 Plugin 模板。模型迁移任务在旧表非空时读取 Plugin 模板用于兼容性修复，再执行 `bootstrap legacy -> load installed`；旧表为空时直接以空模板执行。`bootstrap legacy` 在事务内读取最新目标快照并完成覆盖、插入和默认配置合并。迁移失败时事务不留下部分数据。管理员模板安装为 `实时拉取模板 -> 校验/过滤 -> 先绑定渠道 -> MongoDB 事务批量创建 -> load installed`；跨 AIProxy 与 MongoDB 不做分布式补偿。
 
 4163 资源回填拆成模型权限、Dataset、Evaluation 和 App 四个非阻塞升级任务，其中 App 任务包含 `apps/app_versions/app_templates` 三个阶段，并在最终结果中分别展示三个阶段的处理数量，不再用一个合计数掩盖各类数据规模。四个任务分别重新读取 `ai_models`，按 `_id` 的固定 `endId/lastId` 游标增量补充 ID sibling；Usage 历史记录不回填。无法解析的历史业务引用保留原值并跳过，不视为任务异常；CAS 冲突、文档解析或数据库写入等真实执行异常进入独立失败记录表并继续当前批次和后续任务，任务最终保持 `failed`，管理员修复后通过通用页面触发断点重试。
 
 4162 只负责团队、协作者以及 App、Dataset、AgentSkill 等通用权限引用清理，不读取 `ai_models`，也不判断模型权限的 `resourceId`。模型权限运行时只读取 `resourceId`，因此 4163 在同一阶段先按 `resourceName` 补 ID，再删除仍无法映射到 `ai_models` 的模型权限；删除使用读取快照约束，避免覆盖并发写入。
 
-升级任务的 Mongo 状态只能通过 Runner 注入的 Context 写入。每批遵循“业务 CAS 写入 → 完整失败快照 → checkpoint”的顺序；管理员重试或 running lease 接管时先重试失败快照，再从 checkpoint 继续。四项任务均为 `blockStartup: false, onFailure: continue`，因此局部坏数据不会阻塞节点 ready 或后续升级任务。
+升级任务的 Mongo 状态只能通过 Runner 注入的 Context 写入。每批遵循“业务 CAS 写入 → 完整失败快照 → checkpoint”的顺序；管理员重试或 running lease 接管时先重试失败快照，再从 checkpoint 继续。四项任务均在后台执行，并通过 `dependsOn` 等待旧系统模型迁移成功；局部坏数据只影响当前任务及显式依赖它的后续任务，不阻塞节点 ready 或无关升级任务。
 
 ### 11.2 执行顺序
 
 ```text
 部署启动
-  -> 加载模型 Provider 与插件模板
-  -> 自动预装插件模型并发布初始模型缓存（不创建 system 默认记录）
-  -> 升级 runner 按注册表顺序检查首个未成功任务并获取 lease
-  -> 成功读取完整插件模型列表（失败则实例不 ready）
+  -> 预加载模型 Provider 并发布已安装模型初始缓存（不请求模板、不自动预装）
+  -> 升级 runner 优先调度启动阻塞任务及完整依赖闭包，跳过无关任务
+  -> 旧表非空时读取插件模型列表以修复历史字段；失败则实例不 ready
   -> 一次读取全部 system_models，在内存中转换并严格校验
   -> 单事务读取现有 system 模型与默认配置，按 model 解析最终模型 ID
-  -> 同名模型保留目标 ID 并用旧表 canonical 配置替换其余字段，只批量新增旧表独有模型，保留目标表独有模型
-  -> 在同一事务保留已有有效默认槽位，并用旧 isDefault* 标记补齐其余槽位
-  -> 物化缺失的插件系统模型
-  -> 重新加载 active 模型并失效配置/成员模型缓存
-  -> 标记阻塞升级任务成功；此时节点已满足 ready 条件
-  -> 升级 runner 继续自动执行资源回填，执行时机与节点进入 ready 没有先后保证
-  -> 其他节点轮询到阻塞任务成功状态后进入 ready
+  -> 同名模型保留目标 ID 并用旧表 canonical 配置替换其余字段，只新增旧表独有模型，保留目标表独有模型
+  -> 同一事务保留已有有效默认槽位，以旧 isDefault* 补缺，并递增目录修订号
+  -> 执行节点重新加载已安装模型，runner 标记任务成功
+  -> 所有 App 节点观察完整启动链成功后，分别重载本地模型缓存
+  -> 启动业务消费者，随后启用普通及独立后台迁移，完成 App 初始化
+
+启动链明确失败：保持续租与未就绪，页面不可用；日志排查并修复后重启 lease owner，过期后原子接管。
 
 升级 runner 按注册表顺序继续资源回填
   -> 按 resourceName 回填模型 permission.resourceId
@@ -658,7 +659,7 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 
 ### 11.3 迁移规则
 
-- `system_models -> ai_models + ai_default_models` 的执行资格只来自通用升级状态，不使用业务表作为初始化标记。任务执行一次旧表读取、一次事务、一次目标快照读取、一次缺失模型批量插入和一次默认配置 upsert，不分批也不保存 checkpoint；它不会清空或更新已有模型。
+- `system_models -> ai_models + ai_default_models` 的执行资格只来自通用升级状态，不使用业务表作为初始化标记。任务执行一次旧表读取、一次事务和一次目标快照读取；同名模型更新、缺失模型插入及默认配置 upsert 原子完成，不分批也不保存 checkpoint，且不会清空或删除新表独有模型。
 - 模型结构归一化优先级为 `canonical config > 旧顶层字段 > metadata`；同层冲突记入报告。
 - 根据模型 `type` 使用白名单把类型特有字段写入 `config`，未知字段不自动搬运。
 - 新代码只写 `ai_models` 的 canonical 顶层字段和 `config`；不再写 `metadata`、默认标记或顶层类型特有字段。
@@ -666,7 +667,9 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 - 任一旧记录无法转换或出现重复 `_id` 时，在开启写事务前失败，目标表不发生变更；重复 `model` 按 `_id` 升序读取，后一个记录覆盖前一个记录并保留其 `_id` 与配置。
 - 多实例并发由通用升级 runner 的 lease 保证同一时刻只有一个 owner 执行；owner 异常退出后由 lease 接管。事务保证模型与默认配置原子合并，接管后的全量重算会得到相同结果。
 - 4163 先检查已有静态 `modelId`：只要它指向符合类型要求的系统模型就保持不变，不按启停状态过滤，也不能被 legacy 名称覆盖，确保重复执行幂等。动态 `modelId` 不做校验，直接保留。
-- 4163 已有静态 ID 有效时原样保留；ID 缺失或无效时尝试按 legacy 名称、类型和能力精确匹配，仍无法解析则保留现场并跳过，不写失败记录。Dataset 和 Evaluation 不主动补默认模型；其中 Dataset 的 VLM 是可选项，没有可解析来源时不写 `vlmModelId`。App、AppVersion 和 AppTemplate 只处理已经开启的可选功能：优先有效 ID，其次 legacy 名称，再使用有效系统默认模型，默认无效时按 `_id` 稳定选择首个兼容模型；功能关闭、动态引用或不存在兼容模型时保持原样。扫描工作流时同时把已废弃的 `flowNodeType: userGuide` 降级为 `emptyNode`，但保留节点其余字段。迁移 CAS 对所有 `*Id` 快照在 Mongo 内统一转成字符串比较，兼容历史字段以 BSON ObjectId 保存、当前 Schema 已改成 String 的情况。迁移不使用当前完整 Workflow Schema 重新解析历史快照，避免其他无关的废弃节点或 IO 枚举被误报为模型迁移失败。运行时和普通写入链仍遵守各自更严格的校验策略，不复用迁移容错语义。
+- 4163 已有静态 ID 有效时原样保留；ID 缺失或无效时尝试按 legacy 名称、类型和能力精确匹配。Evaluation 和 Dataset 向量模型不补默认，无法解析时保留现场并跳过，不写失败记录。
+- Dataset 理解模型同样先检查有效 ID，再检查 legacy 名称。文本理解无法解析时使用 `datasetTextLLM`，旧名称为空也补默认；图片理解在 ID 无效且旧名称为空时结束，否则无法解析时使用 `datasetImageLLM`。空值统一使用 `isEmptyModelValue` 判断。已配置的默认模型只校验类型和能力，不校验启用状态；仅未配置默认模型时，按 `_id` 升序选择首个启用的兼容模型。默认配置失效或没有兼容候选时保留现场，不生成 ID。
+- App、AppVersion 和 AppTemplate 只处理已经开启的可选功能：优先有效 ID，其次 legacy 名称，再使用有效系统默认模型，默认无效时按 `_id` 稳定选择首个兼容模型；功能关闭、动态引用或不存在兼容模型时保持原样。扫描工作流时同时把已废弃的 `flowNodeType: userGuide` 降级为 `emptyNode`，但保留节点其余字段。迁移 CAS 对所有 `*Id` 快照在 Mongo 内统一转成字符串比较，兼容历史字段以 BSON ObjectId 保存、当前 Schema 已改成 String 的情况。迁移不使用当前完整 Workflow Schema 重新解析历史快照，避免其他无关的废弃节点或 IO 枚举被误报为模型迁移失败。运行时和普通写入链仍遵守各自更严格的校验策略，不复用迁移容错语义。
 - Workflow 的 legacy `model` input 如果是引用类型、数组引用或模板表达式，原值复制到 `modelId` sibling，不做静态模型校验；4163 保留旧 input 便于回滚，普通保存则只保留 canonical ID key。
 - 模型权限单独遵循身份映射规则：有效 `resourceId` 保留；否则按 `resourceName` 精确映射任意现存系统模型；仍无法映射则作为悬空权限删除。权限不允许使用同类型候选回退。
 - 所有集合的回填写入都对读取过的 legacy 源字段和待写目标字段做快照 CAS；Workflow 整体数组按读取快照匹配。并发保存导致的未命中记为 conflict，可通过重跑收敛，不能覆盖用户刚保存的数据。
@@ -680,7 +683,7 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 
 - 旧记录迁移时保留 legacy 字段，因此回滚旧镜像仍能读取这些旧记录。
 - 新版本创建的记录只写 modelId，旧镜像无法读取这部分新记录。
-- 资源引用回填在新版本部署完成后执行；普通业务引用在回填前兼容读取 legacy 字段。模型协作者权限只过滤客户端目录，后端执行链暂不鉴权，这是跨越迁移窗口持续生效的已确认临时产品边界，而不是缓存 TTL 或发布窗口内的偶发弱一致性。新写入仍只写 modelId，故不能在会同时处理写请求的新旧应用实例之间长期滚动混跑。
+- 资源引用回填在新版本部署完成后执行；普通业务引用在回填前兼容读取 legacy 字段。模型权限与资源声明遵循“**如果有 `modelId` 就提取并检查，只有旧 `model`（无 `modelId`）就绕过资源提取与权限检查**”的统一规则（详见 [模型鉴权收敛设计](./model-permission-auth.md) 与 [应用资源鉴权设计](../app/app-resource-permission.md)），保证存量未回填旧配置在迁移窗口内可继续运行。新写入仍只写 modelId，故不能在会同时处理写请求的新旧应用实例之间长期滚动混跑。
 - FastGPT 与 Pro 滚动发布期间，新 Usage 的 modelId 可能暂时无法被旧侧展示解析；该短窗口仅影响模型归因展示，金额和 token 不受影响，已明确接受，不增加双写。
 - 如果部署要求新旧实例长期混跑，就必须临时双写 legacy 字段；这与“新保存只有 modelId”的已确认要求冲突，需要另行决策，不能隐式实现。
 
@@ -756,7 +759,7 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 ## 14. 风险与后续清理
 
 - 插件模型未物化会导致部分模型没有 ID，因此插件列表获取失败必须阻止启动；运行时重载失败则保留上一版 active 模型，不进入半更新状态。
-- 本版本不增加 `permissionVersion`，模型选择权限只在获取模型时提示且后端执行链不校验；一小时 TTL 作为兜底，正确性主要依赖模型变更后的全量缓存删除和权限变更后的团队缓存删除。
+- 成员模型目录缓存结合 `catalogVersion` 与团队级失效清理（详见 [模型鉴权收敛设计](./model-permission-auth.md)），一小时 TTL 作为兜底。
 - new-write-only-ID 使旧镜像不能读取升级后新数据，发布流程必须接受这一限制。
 - Workflow 是动态结构，单靠 TypeScript 无法证明无遗漏，必须同时做迁移样本和静态 key 审计。
 - config 嵌套会影响当前所有 `modelData.maxContext/vision/...` 调用点，必须通过静态审计确保没有继续读取旧顶层类型字段。
@@ -787,13 +790,14 @@ export const GetMyModelsResponseSchema = PaginationResponseSchema(ClientModelIte
 
 ### 14.2 与团队安装的边界
 
-团队安装引入后，`model` 名称不再足以表示全局身份，因此当前兼容必须遵守以下边界：
+团队安装引入后，`model` 名称不再足以表示全局身份，因此当前兼容与回退必须遵守以下边界：
 
-1. 旧 `model` 查找和 4163 中的 `resourceName -> resourceId` 映射始终只允许命中 `scope=system`；运行时权限不读取 `resourceName`，也不得按名称选择团队模型。
-2. 团队模型从第一版开始只持久化、传输和授权 `modelId`，不新增团队级名称 fallback。
-3. 如果统一模型缓存未来同时装载系统与团队模型，兼容名称索引必须与 ID 索引物理隔离，或继续放在只含系统模型的 Map 中；不能建立无 scope 的全局 `model:<name>` 索引。
-4. 模型配置 JSON 的名称对齐只用于管理员导入系统模型。团队安装应使用模板 ID、安装记录 ID 或其他明确身份，不能复用这条跨实例名称匹配规则。
-5. PR2 应先移除“插件模板自动预装全部系统模型”的策略，否则团队安装阶段会同时存在平台自动安装和团队显式安装两套所有权语义。
+1. 旧 `model` 查找、`formatModels`（含 `import` 跨环境导入恢复）、前端 `modelData`/`modelReference`、导出补充 `model` 名称（`addModelNamesToWorkflow`/`addModelNamesToAppForm`）以及 4163 中的 `resourceName -> resourceId` 映射始终只允许命中 `scope=system`（`isSystemModel`）；运行时权限不读取 `resourceName`，也不得按名称选择或导出团队模型。
+2. 默认模型计算（服务端 `resolveEffectiveDefaultModelIds`、客户端 `getModelDefault`、`formatModels` 中的 `getFallbackModelId` 以及 4170 迁移回退）始终只允许使用或回退到 `scope=system` 的系统模型，绝不能回退到团队私有模型（`scope=team`）。
+3. 团队模型从第一版开始只持久化、传输和授权 `modelId`，不新增团队级名称 fallback。
+4. `ModelHandle` 同时装载系统与团队模型时，兼容名称索引 `modelsByName` 与默认模型 `defaultModels` 严格只收录系统模型；不建立包含团队模型的 `model:<name>` 索引。
+5. 模型配置 JSON 的名称对齐只用于管理员导入系统模型。团队安装使用独立创建与 `modelId` 身份，不复用跨实例名称匹配规则。
+6. PR2 应先移除“插件模板自动预装全部系统模型”的策略，否则团队安装阶段会同时存在平台自动安装和团队显式安装两套所有权语义。
 
 ### 14.3 建议清理顺序与验证门槛
 

@@ -1,30 +1,33 @@
-import { DatasetSourceReadTypeEnum } from '@fastgpt/global/core/dataset/constants';
-import { rawText2Chunks, readDatasetSourceRawText } from '@fastgpt/service/core/dataset/read';
 import { NextAPI } from '@/service/middleware/entry';
-import type { ApiRequestProps } from '@fastgpt/next/type';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
-import { authDatasetFileKey } from '@fastgpt/service/support/permission/auth/file';
-import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
-import { isAuthorizedDatasetFileS3Key } from '@fastgpt/service/common/s3/sources/dataset/key';
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
+import { DatasetSourceReadTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import {
   computedCollectionChunkSettings,
   getLLMMaxChunkSize,
   maxPreviewChunkCount
 } from '@fastgpt/global/core/dataset/training/utils';
-import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import type { ApiRequestProps } from '@fastgpt/next/type';
 import {
-  getDatasetAgentModel,
-  getDatasetEmbeddingModel
-} from '@fastgpt/service/core/dataset/model';
-import { replaceS3KeyToPreviewUrl } from '@fastgpt/service/core/dataset/utils';
-import { addDays } from 'date-fns';
-import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+  createDatasetFileS3KeyFilter,
+  isAuthorizedDatasetFileS3Key
+} from '@fastgpt/service/common/s3/sources/dataset/key';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
+import { getDatasetModelReference } from '@fastgpt/service/core/dataset/model';
+import { rawText2Chunks, readDatasetSourceRawText } from '@fastgpt/service/core/dataset/read';
+import { authDatasetFileKey } from '@fastgpt/service/support/permission/auth/file';
+import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import { getDatasetIultmzhFileParseConfig } from '@fastgpt/service/thirdProvider/sangfor/parseConfig';
+
 import {
   GetPreviewChunksBodySchema,
   GetPreviewChunksResponseSchema,
   type GetPreviewChunksBody,
   type GetPreviewChunksResponse
 } from '@fastgpt/global/openapi/core/dataset/file/api';
+import { replaceS3KeysToPreviewUrls } from '@fastgpt/service/common/s3/utils/preview';
+import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { addDays } from 'date-fns';
 
 async function handler(
   req: ApiRequestProps<GetPreviewChunksBody>
@@ -73,11 +76,16 @@ async function handler(
   if (fileAuthRes && String(fileAuthRes.tmbId) !== String(tmbId) && !fileAuthRes.isRoot) {
     return Promise.reject(CommonErrEnum.unAuthFile);
   }
-
+  const modelHandle = await getTeamModelHandle({ teamId });
+  const agentModelData = modelHandle.getModelData(getDatasetModelReference(dataset, 'agent'), {
+    type: 'llm'
+  });
   const formatChunkSettings = computedCollectionChunkSettings({
     ...chunkSettings,
-    llmModel: getDatasetAgentModel(dataset),
-    vectorModel: getDatasetEmbeddingModel(dataset)
+    llmModel: agentModelData,
+    vectorModel: modelHandle.getModelData(getDatasetModelReference(dataset, 'embedding'), {
+      type: 'embedding'
+    })
   });
 
   const { rawText } = await readDatasetSourceRawText({
@@ -88,6 +96,8 @@ async function handler(
     selector,
     externalFileId,
     customPdfParse,
+    // 解析开关仅对外部解析路径生效;非 customPdfParse 时传 undefined,rawText 缓存沿用旧 key
+    sangforFileParseConfig: customPdfParse ? getDatasetIultmzhFileParseConfig(dataset) : undefined,
     apiDatasetServer: dataset.apiDatasetServer,
     datasetId
   });
@@ -99,18 +109,27 @@ async function handler(
     chunkSize: formatChunkSettings.chunkSize,
     paragraphChunkDeep: formatChunkSettings.paragraphChunkDeep,
     paragraphChunkMinSize: formatChunkSettings.paragraphChunkMinSize,
-    maxSize: getLLMMaxChunkSize(getDatasetAgentModel(dataset)),
+    maxSize: getLLMMaxChunkSize(agentModelData),
     overlapRatio,
     customReg: formatChunkSettings.chunkSplitter ? [formatChunkSettings.chunkSplitter] : [],
+    chunkSettingMode: formatChunkSettings.chunkSettingMode,
+    trainingType: formatChunkSettings.trainingType,
     maxChunks: maxPreviewChunkCount
   });
 
-  const chunksWithJWT = await Promise.all(
-    chunks.slice(0, 10).map(async (chunk) => ({
-      q: await replaceS3KeyToPreviewUrl(chunk.q, addDays(new Date(), 1)),
-      a: await replaceS3KeyToPreviewUrl(chunk.a, addDays(new Date(), 1))
-    }))
+  const previewChunks = chunks.slice(0, 10);
+  const previewTexts = previewChunks.flatMap(({ q, a }) => [q, a]);
+  const previewTextsWithUrls = await replaceS3KeysToPreviewUrls(
+    previewTexts,
+    addDays(new Date(), 1),
+    {
+      filter: createDatasetFileS3KeyFilter(datasetId)
+    }
   );
+  const chunksWithJWT = previewChunks.map((chunk, index) => ({
+    q: previewTextsWithUrls[index * 2] ?? chunk.q,
+    a: previewTextsWithUrls[index * 2 + 1] ?? chunk.a
+  }));
 
   return GetPreviewChunksResponseSchema.parse({
     chunks: chunksWithJWT,

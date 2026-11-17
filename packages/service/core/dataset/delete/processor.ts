@@ -2,6 +2,7 @@ import type { Processor } from '@fastgpt/dal/redis/bullmq';
 import { addDatasetDeleteJob, type DatasetDeleteJobData } from './index';
 import { delDatasetRelevantData, findDatasetAndAllChildren } from '../controller';
 import { MongoDatasetCollectionTags } from '../tag/schema';
+import { MongoDatasetCollectionTagsV2 } from '../tag/schemaV2';
 import { removeDatasetSyncJobScheduler } from '../datasetSync';
 import { mongoSessionRun } from '../../../common/mongo/sessionRun';
 import { MongoDataset } from '../schema';
@@ -10,6 +11,7 @@ import { MongoDatasetTraining } from '../training/schema';
 import { getLogger, LogCategories } from '../../../common/logger';
 import { resourcePermissionRepo } from '../../../support/permission/repository/resourcePermissionRepo';
 import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
+import { removeDatasetVectorIndexes } from '../vectorData/service';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.COLLECTION);
 
@@ -76,7 +78,7 @@ export const deleteTeamAllDatasets = async (teamId: string) => {
   });
 };
 
-// 批量删除函数
+/** 等专属索引清理完成再删除业务数据和知识库本体，避免失败后失去重试清理所需的记录。 */
 const deleteDatasets = async ({
   teamId,
   datasets
@@ -86,8 +88,16 @@ const deleteDatasets = async ({
 }) => {
   const datasetIds = datasets.map((d) => d._id);
 
+  // DDL 可能等待在途建图或旧事务，必须放在 Mongo 事务和其他清理之前。
+  await removeDatasetVectorIndexes({ teamId, datasetIds });
+
   // delete collection.tags
   await MongoDatasetCollectionTags.deleteMany({
+    teamId,
+    datasetId: { $in: datasetIds }
+  });
+
+  await MongoDatasetCollectionTagsV2.deleteMany({
     teamId,
     datasetId: { $in: datasetIds }
   });
@@ -159,6 +169,8 @@ export const datasetDeleteProcessor: Processor<DatasetDeleteJobData> = async (jo
         markedDatasetIds: markedForDelete.map((d) => d._id),
         totalDatasetIds: datasets.map((d) => d._id)
       });
+      // 软删除标记是禁止后续建图的业务屏障；未提交标记时不能越过索引清理开始物理删除。
+      throw new Error('Dataset deletion requires every dataset to be marked for deletion');
     }
 
     // 3. 执行真正的删除操作（只删除已经标记为 deleteTime 的数据）

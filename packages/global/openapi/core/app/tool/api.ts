@@ -1,3 +1,4 @@
+import { requiredAlternatives } from '../../../../common/zod/openapi';
 import z from 'zod';
 import {
   FlowNodeTemplateTypeSchema,
@@ -11,6 +12,7 @@ import { BoolSchema } from '../../../../common/zod';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import { AppTypeEnum } from '../../../../core/app/constants';
 import { ToolSetToolSummarySchema } from '../../../../core/app/tool/toolSet/type';
+import { LanguageSchema } from '../../../../common/i18n/type';
 
 /* ============================================================================
  * API: 获取工具集子工具摘要
@@ -47,11 +49,7 @@ export const GetToolSetChildrenResponseSchema = z.object({
 });
 export type GetToolSetChildrenResponseType = z.infer<typeof GetToolSetChildrenResponseSchema>;
 
-const ToolNodeTemplateListItemSchema = NodeTemplateListItemTypeSchema.extend({
-  toolDescription: z.string().optional().meta({
-    description: '工具调用描述'
-  })
-}).catchall(z.any());
+const ToolNodeTemplateListItemSchema = NodeTemplateListItemTypeSchema.catchall(z.any());
 
 const ToolPreviewNodeResponseSchema = FlowNodeTemplateTypeSchema.omit({
   // Runtime-only predicate; functions cannot be represented in OpenAPI or JSON.
@@ -160,7 +158,8 @@ const GetPreviewNodeBaseQuerySchema = z.object({
   source: z.string().optional().meta({
     example: 'debug:tmbId:tmb_xxx',
     description: '工具来源。调试状态下显式传入 debug source，不再拼接到 appId 中'
-  })
+  }),
+  lang: LanguageSchema.optional().meta({ description: '预览文案语言；缺省使用当前请求语言' })
 });
 
 export const GetPreviewNodeQuerySchema = z.union([
@@ -198,6 +197,7 @@ export const GetPreviewNodeQueryOpenAPISchema = GetPreviewNodeBaseQuerySchema.ex
       '是否获取最新版本 ID，与 versionId 必须二选一。只能传 true，表示返回最新版节点数据并带上具体 version'
   })
 }).meta({
+  ...requiredAlternatives([['versionId'], ['getLatestVersion']], true),
   description:
     'OpenAPI 文档参数模型。运行时仍由 GetPreviewNodeQuerySchema 校验 versionId/getLatestVersion 的二选一约束。'
 });

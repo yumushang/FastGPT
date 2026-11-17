@@ -1,3 +1,5 @@
+import { AgentAskInteractiveSchema } from '@fastgpt/global/core/ai/agent/type';
+import { parseAgentAskArguments } from '@fastgpt/global/core/ai/agent/utils';
 import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
@@ -5,16 +7,13 @@ import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type
 import type { AgentLoopEvent } from '../../../../../../ai/llm/agentLoop/interface';
 import { AgentNodeResponseDisplay } from '../../domain/constants';
 import { parseJsonArgs } from '../../../../../../ai/utils';
-import {
-  appendAgentLoopCoreChildNodeResponses,
-  withAgentLoopCoreChildTotalPoints
-} from './children';
+import { stripAgentLoopCoreChildTotalPoints } from './children';
 import { createAgentLoopCoreCompressNodeResponse } from './compress';
 import type { AgentLoopCoreToolDisplayInfo } from '../../domain/toolInfo';
 
 type ToolRunEndEvent = Extract<AgentLoopEvent, { type: 'tool_run_end' }>;
 type PlanOperationEvent = Extract<AgentLoopEvent, { type: 'plan_operation' }>;
-type AskStartEvent = Extract<AgentLoopEvent, { type: 'ask_start' }>;
+type ToolInteractiveEvent = Extract<AgentLoopEvent, { type: 'tool_interactive' }>;
 type ToolResponseCompressEvent = NonNullable<ToolRunEndEvent['toolResponseCompress']>;
 type AgentPlanStatus = NonNullable<ChatHistoryItemResType['agentPlanStatus']>;
 
@@ -27,9 +26,12 @@ export type CreateAgentLoopCoreNodeResponseEventCollectorParams = {
   node: {
     nodeId: string;
     flowNodeType: FlowNodeTypeEnum;
+    catchError?: boolean;
   };
   nodeResponses?: ChatHistoryItemResType[];
   appendNodeResponse?: (nodeResponse: ChatHistoryItemResType) => void;
+  /** ToolCall 的主模型 response 由外层 nodeResponse 承载，内部 loop 只收集工具相关 response。 */
+  collectAgentCallNodeResponse?: boolean;
   getToolInfo: (name: string) => AgentLoopCoreToolDisplayInfo;
 };
 
@@ -48,6 +50,7 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
   node,
   nodeResponses,
   appendNodeResponse,
+  collectAgentCallNodeResponse = true,
   getToolInfo
 }: CreateAgentLoopCoreNodeResponseEventCollectorParams) => {
   const appendedCallIds = new Set<string>();
@@ -132,7 +135,7 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
     appendedCallIds.add(event.id);
 
     append(
-      withAgentLoopCoreChildTotalPoints({
+      stripAgentLoopCoreChildTotalPoints({
         id: `${node.nodeId}-plan-${event.id}`,
         nodeId: `${node.nodeId}-plan-${event.id}`,
         moduleName: AgentNodeResponseDisplay.plan.moduleName,
@@ -145,20 +148,22 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
     );
   };
 
-  const appendAskNodeResponse = (event: AskStartEvent) => {
-    if (!event.id) return;
-    if (appendedCallIds.has(event.id)) return;
-    appendedCallIds.add(event.id);
+  const appendAskNodeResponse = (event: ToolInteractiveEvent) => {
+    const parsed = AgentAskInteractiveSchema.safeParse(event.interactive);
+    if (!parsed.success || parsed.data.params.toolCallId !== event.call.id) return;
+    const ask = parseAgentAskArguments(parsed.data.params.arguments);
+    if (!ask || appendedCallIds.has(event.call.id)) return;
+    appendedCallIds.add(event.call.id);
 
     append(
-      withAgentLoopCoreChildTotalPoints({
-        id: `${node.nodeId}-ask-${event.id}`,
-        nodeId: `${node.nodeId}-ask-${event.id}`,
+      stripAgentLoopCoreChildTotalPoints({
+        id: `${node.nodeId}-ask-${event.call.id}`,
+        nodeId: `${node.nodeId}-ask-${event.call.id}`,
         moduleName: AgentNodeResponseDisplay.ask.moduleName,
         moduleType: node.flowNodeType,
         moduleLogo: AgentNodeResponseDisplay.ask.moduleLogo,
-        runningTime: event.seconds,
-        textOutput: event.ask.questions.map((question) => question.question).join('\n')
+        runningTime: 0,
+        textOutput: ask.questions.map((question) => question.question).join('\n')
       })
     );
   };
@@ -166,6 +171,7 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
   const appendAgentCallNodeResponse = (
     event: Extract<AgentLoopEvent, { type: 'llm_request_end' }>
   ) => {
+    if (!collectAgentCallNodeResponse) return;
     if (appendedLlmRequestIds.has(event.requestId)) return;
     appendedLlmRequestIds.add(event.requestId);
 
@@ -186,7 +192,13 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
       finishReason: event.finishReason,
       textOutput: event.answerText,
       reasoningText: event.reasoningText,
-      ...(event.error ? { errorText: getErrText(event.error) } : {})
+      firstTokenTime: event.firstTokenTime,
+      ...(event.error
+        ? {
+            errorText: getErrText(event.error),
+            ...(node.catchError ? { errorCaptured: true } : {})
+          }
+        : {})
     });
   };
 
@@ -223,27 +235,27 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
         seconds: event.seconds,
         errorMessage: event.errorMessage
       });
-    const compressNodeResponse = event.toolResponseCompress
-      ? createToolResponseCompressNodeResponse(event.toolResponseCompress)
-      : undefined;
-
-    return appendAgentLoopCoreChildNodeResponses({
-      nodeResponse: {
-        ...toolNodeResponse,
-        runningTime: toolNodeResponse.runningTime ?? event.seconds,
-        toolRes: toolNodeResponse.toolRes ?? event.response,
-        totalPoints: toolNodeResponse.totalPoints ?? getUsageTotalPoints(usages),
-        ...(event.errorMessage ? { errorText: event.errorMessage } : {})
-      },
-      childrenResponses: compressNodeResponse ? [compressNodeResponse] : []
-    });
+    return {
+      ...toolNodeResponse,
+      runningTime: toolNodeResponse.runningTime ?? event.seconds,
+      toolRes: toolNodeResponse.toolRes ?? event.response,
+      totalPoints: toolNodeResponse.totalPoints ?? getUsageTotalPoints(usages),
+      ...(event.errorMessage ? { errorText: event.errorMessage } : {})
+    };
   };
 
   const appendToolNodeResponse = (event: ToolRunEndEvent) => {
     if (appendedCallIds.has(event.call.id)) return;
     appendedCallIds.add(event.call.id);
 
-    append(createToolNodeResponse(event));
+    const toolNodeResponse = createToolNodeResponse(event);
+    append(toolNodeResponse);
+    if (event.toolResponseCompress) {
+      append({
+        ...createToolResponseCompressNodeResponse(event.toolResponseCompress),
+        parentId: toolNodeResponse.id
+      });
+    }
     pendingToolResultMap.delete(event.call.id);
   };
 
@@ -261,7 +273,7 @@ export const createAgentLoopCoreNodeResponseEventCollector = ({
       case 'plan_operation':
         appendPlanOperationNodeResponse(event);
         return;
-      case 'ask_start':
+      case 'tool_interactive':
         appendAskNodeResponse(event);
         return;
       default:

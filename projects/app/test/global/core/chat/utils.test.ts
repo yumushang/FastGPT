@@ -1,14 +1,74 @@
 import { describe, expect, it } from 'vitest';
 import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
-import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
+import { SearchScoreTypeEnum } from '@fastgpt/global/core/dataset/constants';
+import type { ChatHistoryItemResType, ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import {
   SANDBOX_READ_FILE_TOOL_NAME,
   SANDBOX_SHELL_TOOL_NAME
 } from '@fastgpt/global/core/ai/sandbox/tools';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { addStatisticalDataToHistoryItem, getChatItemErrorText } from '@/global/core/chat/utils';
+import { filterNodeResponseTreeData } from '@fastgpt/global/core/chat/utils';
 
 describe('addStatisticalDataToHistoryItem', () => {
+  it.each([
+    { isToolCall: false, errorCaptured: false, visible: true },
+    { isToolCall: true, errorCaptured: false, visible: false },
+    { isToolCall: false, errorCaptured: true, visible: false }
+  ])(
+    'shows direct MCP errors only when uncaught: $isToolCall/$errorCaptured',
+    ({ isToolCall, errorCaptured, visible }) => {
+      const responseData: ChatHistoryItemResType[] = [
+        {
+          id: 'mcp-response',
+          nodeId: 'mcp-node',
+          moduleName: 'MCP tool',
+          moduleType: FlowNodeTypeEnum.tool,
+          isToolCall,
+          errorCaptured,
+          errorText: 'MCP requests through an HTTP proxy are not supported by SSRF protection'
+        }
+      ];
+      const expected = visible
+        ? { moduleName: 'MCP tool', errorText: responseData[0].errorText }
+        : undefined;
+      expect(getChatItemErrorText(responseData)).toEqual(expected);
+      expect(
+        getChatItemErrorText(filterNodeResponseTreeData({ nodeResponses: responseData }))
+      ).toEqual(expected);
+      expect(
+        addStatisticalDataToHistoryItem({ obj: ChatRoleEnum.AI, value: [], responseData }).errorText
+      ).toEqual(expected);
+    }
+  );
+
+  it.each([
+    ['workflow_cli_query', true],
+    ['workflow_cli_stage', true],
+    ['workflow_cli_commit', true],
+    ['workflow_builder_present_preview', false],
+    ['workflow_builder_cancel', false]
+  ])('marks Workflow Builder tool %s sandbox usage as %s', (functionName, expected) => {
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [
+        {
+          tools: [
+            {
+              id: `call-${functionName}`,
+              toolName: functionName,
+              toolAvatar: '',
+              functionName,
+              params: '{}'
+            }
+          ]
+        }
+      ]
+    };
+
+    expect(addStatisticalDataToHistoryItem(historyItem).useAgentSandbox === true).toBe(expected);
+  });
+
   it('marks sandbox usage from streaming tool call cards before responseData is loaded', () => {
     const historyItem: ChatItemMiniType = {
       obj: ChatRoleEnum.AI,
@@ -31,38 +91,6 @@ describe('addStatisticalDataToHistoryItem', () => {
   });
 
   it('marks sandbox usage when a nested response calls any sandbox tool', () => {
-    const historyItem: ChatItemMiniType = {
-      obj: ChatRoleEnum.AI,
-      value: [
-        {
-          text: {
-            content: 'done'
-          }
-        }
-      ],
-      responseData: [
-        {
-          id: 'agent-response',
-          nodeId: 'agent-node',
-          moduleName: 'Agent',
-          moduleType: FlowNodeTypeEnum.agent,
-          childrenResponses: [
-            {
-              id: 'sandbox-response',
-              nodeId: 'sandbox-node',
-              moduleName: 'Read file',
-              moduleType: FlowNodeTypeEnum.tool,
-              toolId: SANDBOX_READ_FILE_TOOL_NAME
-            }
-          ]
-        }
-      ]
-    };
-
-    expect(addStatisticalDataToHistoryItem(historyItem).useAgentSandbox).toBe(true);
-  });
-
-  it('marks sandbox usage when a childrenResponses item calls any sandbox tool', () => {
     const historyItem: ChatItemMiniType = {
       obj: ChatRoleEnum.AI,
       value: [
@@ -124,7 +152,7 @@ describe('addStatisticalDataToHistoryItem', () => {
                   datasetId: 'dataset-1',
                   collectionId: 'collection-1',
                   sourceName: 'doc.pdf',
-                  score: [{ type: 'embedding', value: 0.9, index: 0 }]
+                  score: [{ type: SearchScoreTypeEnum.embedding, value: 0.9, index: 0 }]
                 }
               ]
             }
@@ -160,7 +188,7 @@ describe('addStatisticalDataToHistoryItem', () => {
               datasetId: 'dataset-1',
               collectionId: 'collection-1',
               sourceName: 'doc.pdf',
-              score: [{ type: 'embedding', value: 0.9, index: 0 }]
+              score: [{ type: SearchScoreTypeEnum.embedding, value: 0.9, index: 0 }]
             }
           ]
         },
@@ -176,7 +204,7 @@ describe('addStatisticalDataToHistoryItem', () => {
               datasetId: 'dataset-1',
               collectionId: 'collection-1',
               sourceName: 'doc.pdf',
-              score: [{ type: 'embedding', value: 0.9, index: 0 }]
+              score: [{ type: SearchScoreTypeEnum.embedding, value: 0.9, index: 0 }]
             }
           ]
         }
@@ -365,7 +393,7 @@ describe('addStatisticalDataToHistoryItem', () => {
   });
 
   it('ignores a failed tool child when later tool calls complete', () => {
-    const responseData: NonNullable<ChatItemMiniType['responseData']> = [
+    const responseData: ChatHistoryItemResType[] = [
       {
         id: 'agent-response',
         nodeId: 'agent-node',
@@ -441,6 +469,118 @@ describe('addStatisticalDataToHistoryItem', () => {
     expect(addStatisticalDataToHistoryItem(historyItem).errorText).toBeUndefined();
   });
 
+  it('ignores flat tool execution errors without parentId (e.g. sandbox tools)', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'sandbox-tool-response',
+        nodeId: 'sandbox-tool-node',
+        moduleName: '虚拟机/列出目录',
+        moduleType: FlowNodeTypeEnum.tool,
+        toolInput: { path: '/user_files' },
+        toolRes: 'Tool error: file not found. lstat /user_files: no such file or directory',
+        errorText: 'Tool error: file not found. lstat /user_files: no such file or directory'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '该文件夹不存在。' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toBeUndefined();
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toBeUndefined();
+  });
+
+  it('ignores subApp tool execution errors without parentId carrying toolRes', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'subapp-tool-response',
+        nodeId: 'subapp-tool-node',
+        moduleName: '子应用工具',
+        moduleType: FlowNodeTypeEnum.appModule,
+        toolInput: { query: 'test' },
+        toolRes: 'Tool error: failed to execute sub-app',
+        errorText: 'Tool error: failed to execute sub-app'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '执行失败，已尝试备选方案。' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toBeUndefined();
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toBeUndefined();
+  });
+
+  it('preserves root node errors when flat tool responses are present', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'tool-response',
+        nodeId: 'tool-node',
+        moduleName: '虚拟机/列出目录',
+        moduleType: FlowNodeTypeEnum.tool,
+        toolRes: 'Tool error: file not found',
+        errorText: 'Tool error: file not found'
+      },
+      {
+        id: 'main-agent-response',
+        nodeId: 'main-agent-node',
+        moduleName: '主模型',
+        moduleType: FlowNodeTypeEnum.agent,
+        errorText: 'Quota exhausted'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toEqual({
+      moduleName: '主模型',
+      errorText: 'Quota exhausted'
+    });
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toEqual({
+      moduleName: '主模型',
+      errorText: 'Quota exhausted'
+    });
+  });
+
+  it('preserves root toolCall node errors when flat tool responses are present', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'tool-response',
+        nodeId: 'tool-node',
+        moduleName: '虚拟机/列出目录',
+        moduleType: FlowNodeTypeEnum.tool,
+        toolRes: 'Tool error: file not found',
+        errorText: 'Tool error: file not found'
+      },
+      {
+        id: 'main-toolcall-response',
+        nodeId: 'main-toolcall-node',
+        moduleName: '工具调用',
+        moduleType: FlowNodeTypeEnum.toolCall,
+        errorText: 'Sandbox capacity exceeded'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toEqual({
+      moduleName: '工具调用',
+      errorText: 'Sandbox capacity exceeded'
+    });
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toEqual({
+      moduleName: '工具调用',
+      errorText: 'Sandbox capacity exceeded'
+    });
+  });
+
   it('does not use HTTP result error as chat bubble error text when node error is absent', () => {
     const historyItem: ChatItemMiniType = {
       obj: ChatRoleEnum.AI,
@@ -497,7 +637,7 @@ describe('addStatisticalDataToHistoryItem', () => {
               datasetId: 'dataset-1',
               collectionId: 'collection-1',
               sourceName: 'doc.pdf',
-              score: [{ type: 'embedding', value: 0.9, index: 0 }]
+              score: [{ type: SearchScoreTypeEnum.embedding, value: 0.9, index: 0 }]
             }
           ]
         }
@@ -505,5 +645,59 @@ describe('addStatisticalDataToHistoryItem', () => {
     };
 
     expect(addStatisticalDataToHistoryItem(historyItem).totalQuoteList).toHaveLength(1);
+  });
+
+  it('preserves unhandled orphan child node error when parent container crashed', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'orphan-code-node',
+        nodeId: 'orphan-code-node',
+        moduleName: '代码运行',
+        moduleType: FlowNodeTypeEnum.code,
+        parentId: 'crashed-container',
+        errorText: 'Process killed: out of memory'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toEqual({
+      moduleName: '代码运行',
+      errorText: 'Process killed: out of memory'
+    });
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toEqual({
+      moduleName: '代码运行',
+      errorText: 'Process killed: out of memory'
+    });
+  });
+
+  it('preserves standalone canvas pluginModule error', () => {
+    const responseData: ChatHistoryItemResType[] = [
+      {
+        id: 'canvas-plugin-node',
+        nodeId: 'canvas-plugin-node',
+        moduleName: '插件模块',
+        moduleType: FlowNodeTypeEnum.pluginModule,
+        toolInput: { query: 'test' },
+        errorText: 'Plugin failed'
+      }
+    ];
+    const historyItem: ChatItemMiniType = {
+      obj: ChatRoleEnum.AI,
+      value: [{ text: { content: '' } }],
+      responseData
+    };
+
+    expect(getChatItemErrorText(responseData)).toEqual({
+      moduleName: '插件模块',
+      errorText: 'Plugin failed'
+    });
+    expect(addStatisticalDataToHistoryItem(historyItem).errorText).toEqual({
+      moduleName: '插件模块',
+      errorText: 'Plugin failed'
+    });
   });
 });

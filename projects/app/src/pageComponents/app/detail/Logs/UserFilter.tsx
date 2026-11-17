@@ -1,3 +1,4 @@
+import { formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import {
@@ -7,10 +8,13 @@ import {
   type MultiSelectFilterOption,
   type MultiSelectFilterValue
 } from '@fastgpt/web/components/common/TagFilter';
-import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { useScrollPagination } from '@fastgpt/web/hooks/useScrollPagination';
 import { getLogUsers } from '@/web/core/app/api/log';
-import type { LogUserType } from '@fastgpt/global/openapi/core/app/log/api';
-import dayjs from 'dayjs';
+import type {
+  GetLogUsersBody,
+  GetLogUsersResponse,
+  LogUserType
+} from '@fastgpt/global/openapi/core/app/log/api';
 import type { DateRangeType } from '@fastgpt/web/components/common/DateRangePicker';
 
 export type SelectedUserType = {
@@ -34,6 +38,8 @@ export const parseUserKey = (key: string): SelectedUserType => {
   return { outLinkUid: null, tmbId: null };
 };
 
+const USER_PAGE_SIZE = 20;
+
 const UserFilter = ({
   appId,
   dateRange,
@@ -50,36 +56,42 @@ const UserFilter = ({
   const { t } = useTranslation();
   const labels = useCommonFilterLabels();
   const [searchKey, setSearchKey] = useState('');
-  // 打开过一次后再跟 searchKey 发请求。manual + refreshDeps 不会自动 run。
+  // 用户打开过筛选器后，才允许日期、来源和搜索词变化触发请求。
   const [menuOpened, setMenuOpened] = useState(false);
 
-  const { data: usersData } = useRequest(
-    () =>
-      getLogUsers({
-        appId,
-        dateStart: dayjs(dateRange.from || new Date()).format(),
-        dateEnd: dayjs(dateRange.to || new Date()).format(),
-        searchKey: searchKey || undefined,
-        sources
-      }),
-    {
-      ready: menuOpened,
-      manual: false,
-      refreshDeps: [appId, dateRange.from, dateRange.to, searchKey, sources],
-      debounceWait: 300
-    }
+  const requestParams = useMemo<Omit<GetLogUsersBody, 'offset' | 'pageSize'>>(
+    () => ({
+      appId,
+      dateStart: formatToISOWithTimezone(dateRange.from),
+      dateEnd: formatToISOWithTimezone(dateRange.to),
+      searchKey: searchKey || undefined,
+      sources
+    }),
+    [appId, dateRange.from, dateRange.to, searchKey, sources]
   );
 
+  const {
+    data: users = [],
+    ScrollData,
+    isInitialLoading
+  } = useScrollPagination<GetLogUsersBody, GetLogUsersResponse>(getLogUsers, {
+    pageSize: USER_PAGE_SIZE,
+    params: requestParams,
+    disabled: !menuOpened,
+    refreshDeps: [menuOpened, requestParams],
+    debounceWait: 300,
+    showNoMoreTip: false
+  });
   const options = useMemo(
     () =>
-      (usersData?.list || [])
+      users
         .filter((item: LogUserType) => item.outLinkUid || item.tmbId)
         .map((item: LogUserType) => ({
           value: getUserKey(item),
           label: item.name,
           avatar: item.avatar
         })),
-    [usersData?.list]
+    [users]
   );
   const [rememberedOptions, setRememberedOptions] = useState<
     Array<MultiSelectFilterOption<string>>
@@ -126,6 +138,8 @@ const UserFilter = ({
       onSearchChange={setSearchKey}
       filterLocal={false}
       onOpen={() => setMenuOpened(true)}
+      ListContainer={ScrollData}
+      isLoading={isInitialLoading}
     />
   );
 };

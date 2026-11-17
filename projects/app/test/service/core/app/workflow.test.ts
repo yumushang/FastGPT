@@ -1,8 +1,9 @@
+import { setModelTestMap, getModelTestMap } from '@test/modelCache';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import type { SystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { AIModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import { getChatModelNameListByModules } from '@/service/core/app/workflow';
 
@@ -18,9 +19,8 @@ const activeModel = {
   name: 'GPT test',
   scope: 'system',
   isActive: true,
-  isCustom: false,
   config: {}
-} as SystemModelDataType;
+} as AIModelDataType;
 
 const createNode = ({
   value,
@@ -37,7 +37,7 @@ const createNode = ({
   }) as StoreNodeItemType;
 
 describe('getChatModelNameListByModules', () => {
-  const originalModelMap = global.systemModelMap;
+  const originalModelMap = getModelTestMap();
 
   beforeEach(() => {
     const disabledModel = {
@@ -46,38 +46,42 @@ describe('getChatModelNameListByModules', () => {
       model: 'disabled-model',
       name: 'Disabled model',
       isActive: false
-    } as SystemModelDataType;
+    } as AIModelDataType;
     const embeddingModel = {
       ...activeModel,
       modelId: embeddingModelId,
       model: 'embedding-model',
       name: 'Embedding model',
       type: ModelTypeEnum.embedding
-    } as SystemModelDataType;
+    } as AIModelDataType;
 
-    global.systemModelMap = new Map([
-      [`id:${activeModelId}`, activeModel],
-      [`model:${activeModel.model}`, activeModel],
-      [`id:${disabledModelId}`, disabledModel],
-      [`id:${embeddingModelId}`, embeddingModel]
-    ]);
+    setModelTestMap(
+      new Map([
+        [`id:${activeModelId}`, activeModel],
+        [`model:${activeModel.model}`, activeModel],
+        [`id:${disabledModelId}`, disabledModel],
+        [`id:${embeddingModelId}`, embeddingModel]
+      ])
+    );
   });
 
   afterEach(() => {
-    global.systemModelMap = originalModelMap;
+    setModelTestMap(originalModelMap);
   });
 
-  it('returns deduplicated display names for valid static LLM references', () => {
+  it('returns deduplicated display names for valid static LLM references', async () => {
     const nodes = [
       createNode({ value: activeModelId }),
       createNode({ value: activeModel.model, key: NodeInputKeyEnum.aiModel }),
       createNode({ value: activeModelId })
     ];
 
-    expect(getChatModelNameListByModules(nodes)).toEqual(['GPT test']);
+    expect(
+      await getChatModelNameListByModules(nodes, { teamId: '68ad85a7463006c963799a06' })
+    ).toEqual(['GPT test']);
   });
 
-  it('skips unresolved references without blocking chat initialization', () => {
+  it('skips unresolved references without blocking chat initialization', async () => {
     const nodes = [
       createNode({ value: 'missing-model-id' }),
       createNode({ value: disabledModelId }),
@@ -88,7 +92,8 @@ describe('getChatModelNameListByModules', () => {
       createNode({ value: activeModelId, flowNodeType: FlowNodeTypeEnum.pluginModule })
     ];
 
-    expect(() => getChatModelNameListByModules(nodes)).not.toThrow();
-    expect(getChatModelNameListByModules(nodes)).toEqual([]);
+    expect(
+      await getChatModelNameListByModules(nodes, { teamId: '68ad85a7463006c963799a06' })
+    ).toEqual([]);
   });
 });

@@ -1,28 +1,28 @@
+import { getDatasetModelReference } from '../dataset/model';
 import { MongoDataset } from '../dataset/schema';
-import { getDefaultEmbeddingModelData } from '../ai/model';
-import { desensitizeSystemModel } from '../ai/config/utils';
-import { getDatasetEmbeddingModel } from '../dataset/model';
 import { DatasetTypeEnum, DatasetTypeMap } from '@fastgpt/global/core/dataset/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
-import {
-  nodeInputIsReference,
-  projectExternalVariableInput
-} from '@fastgpt/global/core/workflow/utils';
+import { nodeInputIsReference } from '@fastgpt/global/common/workflow/reference';
+import { projectExternalVariableInput } from '@fastgpt/global/common/workflow/input';
 import {
   initAgentToolInputType,
   normalizeFlowNodeInputType
 } from '@fastgpt/global/core/app/formEdit/utils';
 import { getClientToolPreviewNode } from './tool/utils/client';
 import { authAppByTmbId } from '../../support/permission/app/auth';
+import { authDatasetByTmbId } from '../../support/permission/dataset/auth';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { getErrText } from '@fastgpt/global/common/error/utils';
+import { AppErrEnum } from '@fastgpt/global/common/error/code/app';
+import { PluginErrEnum } from '@fastgpt/global/common/error/code/plugin';
 import {
   isSystemOrCommercialToolId,
+  mergeToolSetChildDescriptions,
   splitCombineToolId
 } from '@fastgpt/global/core/app/tool/utils';
-import { AgentToolInputModeEnum } from '@fastgpt/global/core/app/tool/constants';
+import { AgentToolInputModeEnum, AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
 import { AgentToolSchema } from '@fastgpt/global/core/app/tool/type';
 import {
@@ -33,66 +33,136 @@ import {
   type SelectedAgentSkillItemType
 } from '@fastgpt/global/core/app/formEdit/type';
 import { authSkillByTmbId } from '../../support/permission/skill/auth';
+import { MongoAgentSkills } from '../ai/skill/model/schema';
+import { AgentSkillSourceEnum } from '@fastgpt/global/core/ai/skill/constants';
+import { SkillErrEnum } from '@fastgpt/global/common/error/code/skill';
+import { DatasetErrEnum } from '@fastgpt/global/common/error/code/dataset';
+import { getAppResourceKey, normalizeAppToolResource } from './resource/utils';
 import type {
   FlowNodeInputItemType,
   SelectedDatasetType
 } from '@fastgpt/global/core/workflow/type/io';
-import { formatToolInputSecrets } from './tool/secretConfig';
+import type { AppResourcesType } from '@fastgpt/global/core/app/type';
+import { formatToolConfigHeaderSecrets, formatToolInputSecrets } from './tool/secretConfig';
+import { storeSecretValue } from '../../common/secret/utils';
+import { StoreSecretValueTypeSchema } from '@fastgpt/global/common/secret/type';
 import z from 'zod';
 
 type DetailWorkflowNode = StoreNodeItemType;
 
 /**
- * 重写应用工作流节点，填充详细的元数据信息（如工具详情、技能详情、知识库详情）。
+ * 重写应用工作流节点并填充资源详情；工作流外部引用只返回摘要，ToolSet source app 保留自有鉴权配置。
  */
 export async function rewriteAppWorkflowToDetail({
   nodes,
   teamId,
   isRoot,
   ownerTmbId,
-  lang
+  viewerTmbId,
+  lang,
+  resources = []
 }: {
   nodes: DetailWorkflowNode[];
   teamId: string;
   isRoot: boolean;
   ownerTmbId: string;
+  /** 当前请求操作者；仅对快照外新增资源做 UI 侧权限提示。 */
+  viewerTmbId?: string;
   lang?: localeType;
+  resources?: AppResourcesType;
 }) {
+  // 快照内资源属于已确认的历史基线，不使用当前操作者或应用 owner 重新鉴权。
+  const snapshotResourceKeys = new Set(resources.map(getAppResourceKey));
+  const hasSnapshotResource = (type: 'agent' | 'tool' | 'dataset' | 'skill', id: string) =>
+    snapshotResourceKeys.has(getAppResourceKey({ type, id }));
   type SelectedDatasetSnapshot = Pick<SelectedDatasetType, 'datasetId'> &
     Partial<SelectedDatasetType>;
   const defaultDeletedDatasetAvatar = DatasetTypeMap[DatasetTypeEnum.dataset].avatar;
 
+  /**
+   * 校验快照引用的外部应用工具权限与存在状态。
+   * 返回值约定：
+   * - undefined: 鉴权通过或无需应用级鉴权；
+   * - 'tool_missing': 工具不存在或已被软删除；
+   * - 'resource_no_permission': 当前用户无权访问该工具。
+   */
+  const authSnapshotExternalTool = async ({
+    id,
+    resourceType
+  }: {
+    id: string;
+    resourceType: 'agent' | 'tool';
+  }): Promise<'resource_no_permission' | 'tool_missing' | undefined> => {
+    let parsed: ReturnType<typeof splitCombineToolId> | undefined;
+    try {
+      parsed = splitCombineToolId(id);
+    } catch {
+      // 无法被解析为有效 toolId 时，如果快照中有则放行，否则视为未授权
+      return !hasSnapshotResource(resourceType, id) ? 'resource_no_permission' : undefined;
+    }
+
+    // 系统工具或商业版公共工具无需应用级鉴权
+    if (
+      parsed.source === AppToolSourceEnum.systemTool ||
+      parsed.source === AppToolSourceEnum.commercial ||
+      parsed.source === AppToolSourceEnum.community
+    ) {
+      return undefined;
+    }
+
+    const normalizedResource = normalizeAppToolResource(id);
+    const targetAppId = normalizedResource?.id ?? parsed.authAppId ?? parsed.pluginId;
+    if (!targetAppId) return 'tool_missing';
+
+    const resourceInSnapshot = hasSnapshotResource(resourceType, targetAppId);
+    if ((!viewerTmbId || resourceInSnapshot) && !isRoot) return undefined;
+
+    try {
+      await authAppByTmbId({
+        tmbId: viewerTmbId ?? ownerTmbId,
+        appId: targetAppId,
+        per: ReadPermissionVal,
+        isRoot
+      });
+      return undefined;
+    } catch (error) {
+      // 区分资源已删除/不存在与无访问权限
+      if (error === AppErrEnum.unExist) {
+        return 'tool_missing';
+      }
+      return 'resource_no_permission';
+    }
+  };
+
   const loadToolNode = async ({
     id,
     versionId,
-    source
+    source,
+    resourceType = 'tool',
+    metadataLocale
   }: {
     id: string;
     versionId?: string;
     source?: string;
+    resourceType?: 'agent' | 'tool';
+    metadataLocale?: localeType;
   }) => {
-    const { authAppId } = splitCombineToolId(id);
+    const authError = await authSnapshotExternalTool({ id, resourceType });
+    if (authError) {
+      return {
+        success: false,
+        error: authError
+      };
+    }
 
     try {
-      const [preview] = await Promise.all([
-        getClientToolPreviewNode({
-          appId: id,
-          versionId,
-          lang,
-          source,
-          teamId
-        }),
-        ...(authAppId
-          ? [
-              authAppByTmbId({
-                tmbId: ownerTmbId,
-                appId: authAppId,
-                per: ReadPermissionVal,
-                isRoot
-              })
-            ]
-          : [])
-      ]);
+      const preview = await getClientToolPreviewNode({
+        appId: id,
+        versionId,
+        lang: metadataLocale ?? 'en',
+        source,
+        teamId
+      });
 
       return {
         success: true,
@@ -101,7 +171,10 @@ export async function rewriteAppWorkflowToDetail({
     } catch (error) {
       return {
         success: false,
-        error: getErrText(error, '', lang)
+        error:
+          error === PluginErrEnum.unExist || error === AppErrEnum.unExist
+            ? 'tool_missing'
+            : getErrText(error, '', lang)
       };
     }
   };
@@ -110,33 +183,92 @@ export async function rewriteAppWorkflowToDetail({
     skillId: StoredSelectedAgentSkillItemTypeSchema.shape.skillId
   });
 
+  /**
+   * 通用外部资源快照解析驱动：
+   * 负责统一处理资源快照基线判断（hasSnapshotResource）、Viewer 鉴权与 DB 查询（均包含 deleteTime: null）、
+   * 统一未授权与缺失错误映射（resource_no_permission / resource_missing），以及失效时保留快照元数据。
+   */
+  const resolveSnapshotResource = async <TSnapshot, TViewerLive, TDbLive, TOutput>({
+    resourceType,
+    resourceId,
+    snapshot,
+    fetchLiveByViewer,
+    fetchLiveFromDb,
+    unAuthError,
+    formatLive,
+    formatFallback
+  }: {
+    resourceType: 'agent' | 'tool' | 'skill' | 'dataset';
+    resourceId: string;
+    snapshot: TSnapshot;
+    fetchLiveByViewer?: () => PromiseLike<TViewerLive>;
+    fetchLiveFromDb?: () => PromiseLike<TDbLive | null | undefined>;
+    unAuthError: unknown;
+    formatLive: (live: TViewerLive | TDbLive) => TOutput;
+    formatFallback: (
+      snapshot: TSnapshot,
+      error: 'resource_no_permission' | 'resource_missing'
+    ) => TOutput;
+  }): Promise<TOutput> => {
+    const resourceInSnapshot = hasSnapshotResource(resourceType, resourceId);
+    let live: TViewerLive | TDbLive | null | undefined;
+    let isNoPermission = false;
+
+    try {
+      if (viewerTmbId && !resourceInSnapshot) {
+        live = await fetchLiveByViewer?.();
+      } else {
+        live = await fetchLiveFromDb?.();
+      }
+    } catch (error) {
+      isNoPermission = error === unAuthError;
+    }
+
+    if (live) {
+      return formatLive(live);
+    }
+
+    return formatFallback(snapshot, isNoPermission ? 'resource_no_permission' : 'resource_missing');
+  };
+
   const loadAgentSkill = async (
     selectedSkill: AgentSkillSnapshot
   ): Promise<SelectedAgentSkillItemType> => {
-    try {
-      const { skill } = await authSkillByTmbId({
-        tmbId: ownerTmbId,
-        skillId: selectedSkill.skillId,
-        per: ReadPermissionVal,
-        isRoot
-      });
-
-      return {
+    const skillId = String(selectedSkill.skillId);
+    return resolveSnapshotResource({
+      resourceType: 'skill',
+      resourceId: skillId,
+      snapshot: selectedSkill,
+      fetchLiveByViewer: async () =>
+        (
+          await authSkillByTmbId({
+            tmbId: viewerTmbId!,
+            skillId,
+            per: ReadPermissionVal,
+            isRoot
+          })
+        ).skill,
+      fetchLiveFromDb: () =>
+        MongoAgentSkills.findOne({
+          _id: skillId,
+          deleteTime: null,
+          ...(isRoot ? {} : { $or: [{ teamId }, { source: AgentSkillSourceEnum.system }] })
+        }).lean(),
+      unAuthError: SkillErrEnum.unAuthSkill,
+      formatLive: (skill) => ({
         skillId: String(skill._id),
         name: skill.name,
         description: skill.description,
-        avatar: skill.avatar,
-        isDeleted: false
-      };
-    } catch {
-      return {
-        skillId: selectedSkill.skillId,
-        name: selectedSkill.name ?? 'Invalid',
-        description: selectedSkill.description ?? '',
-        avatar: selectedSkill.avatar,
-        isDeleted: true
-      };
-    }
+        avatar: skill.avatar
+      }),
+      formatFallback: (snapshot, error) => ({
+        skillId: snapshot.skillId,
+        name: snapshot.name ?? 'Invalid',
+        description: snapshot.description ?? '',
+        avatar: snapshot.avatar,
+        error
+      })
+    });
   };
   type ToolInputSnapshot = Pick<FlowNodeInputItemType, 'key' | 'renderTypeList'> &
     Partial<FlowNodeInputItemType>;
@@ -155,6 +287,9 @@ export async function rewriteAppWorkflowToDetail({
     const normalizedInput = normalizeFlowNodeInputType(
       {
         ...previewInput,
+        label: savedInput?.label ?? previewInput.label,
+        description: savedInput?.description ?? previewInput.description,
+        placeholder: savedInput?.placeholder ?? previewInput.placeholder,
         renderTypeList,
         selectedType: savedInput?.selectedType,
         defaultToAgentGenerated:
@@ -176,29 +311,51 @@ export async function rewriteAppWorkflowToDetail({
       snapshot: SelectedDatasetSnapshot
     ): Promise<SelectedDatasetType> => {
       const datasetId = String(snapshot.datasetId);
-      const dataset = await MongoDataset.findOne({
-        _id: datasetId,
-        ...(!isRoot && teamId && { teamId })
-      }).lean();
+      return resolveSnapshotResource({
+        resourceType: 'dataset',
+        resourceId: datasetId,
+        snapshot,
+        fetchLiveByViewer: async () =>
+          (
+            await authDatasetByTmbId({
+              tmbId: viewerTmbId!,
+              datasetId,
+              per: ReadPermissionVal,
+              isRoot
+            })
+          ).dataset,
+        fetchLiveFromDb: () =>
+          MongoDataset.findOne({
+            _id: datasetId,
+            deleteTime: null,
+            ...(!isRoot && teamId && { teamId })
+          }).lean(),
+        unAuthError: DatasetErrEnum.unAuthDataset,
+        formatLive: (dataset) => {
+          const modelReference = getDatasetModelReference(dataset, 'embedding');
 
-      if (dataset && !dataset.deleteTime) {
-        return {
-          datasetId: String(dataset._id),
-          avatar: dataset.avatar,
-          name: dataset.name,
-          vectorModel: getDatasetEmbeddingModel(dataset),
-          isDeleted: false
-        };
-      }
-
-      // 保存前会压缩成 { datasetId }，软删除或物理删除后没有快照时需要补齐合法占位。
-      return {
-        datasetId,
-        avatar: defaultDeletedDatasetAvatar,
-        name: snapshot.name || '',
-        vectorModel: snapshot.vectorModel || desensitizeSystemModel(getDefaultEmbeddingModelData()),
-        isDeleted: true
-      };
+          return {
+            datasetId: String(dataset._id),
+            avatar: dataset.avatar,
+            name: dataset.name,
+            // 详情接口只返回知识库绑定的模型引用，不因模型停用或下架阻断应用详情。
+            vectorModel: {
+              modelId: modelReference.modelId ?? undefined,
+              model: modelReference.model ?? ''
+            }
+          };
+        },
+        formatFallback: (snapshot, error) => ({
+          datasetId,
+          avatar: defaultDeletedDatasetAvatar,
+          name: snapshot.name || 'Invalid',
+          vectorModel: {
+            modelId: snapshot.vectorModel?.modelId,
+            model: snapshot.vectorModel?.model ?? ''
+          },
+          error
+        })
+      });
     };
 
     if (!value) return;
@@ -206,6 +363,12 @@ export async function rewriteAppWorkflowToDetail({
     return Promise.all(datasets.map(loadDatasetInfo));
   };
 
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const getToolSetReferenceId = (value: unknown) =>
+    isRecord(value) && typeof value.toolId === 'string' && value.toolId ? value.toolId : undefined;
+  type ExternalToolSetReferenceIds = Record<'mcpToolSet' | 'httpToolSet', string | undefined>;
+  const externalToolSetReferenceIds = new Map<DetailWorkflowNode, ExternalToolSetReferenceIds>();
   await Promise.all(
     nodes.map(async (node) => {
       if (node.flowNodeType !== FlowNodeTypeEnum.pluginInput) {
@@ -215,20 +378,35 @@ export async function rewriteAppWorkflowToDetail({
       }
 
       // Tool node
-      const toolId =
-        node.pluginId ??
-        node.toolConfig?.mcpTool?.toolId ??
-        node.toolConfig?.httpTool?.toolId ??
-        (node.toolConfig?.mcpToolSet && 'toolId' in node.toolConfig.mcpToolSet
-          ? node.toolConfig.mcpToolSet.toolId
-          : undefined) ??
-        (node.toolConfig?.httpToolSet && 'toolId' in node.toolConfig.httpToolSet
-          ? node.toolConfig.httpToolSet.toolId
-          : undefined);
+      const mcpTool = node.toolConfig?.mcpTool;
+      const httpTool = node.toolConfig?.httpTool;
+      const mcpToolSet = node.toolConfig?.mcpToolSet;
+      const httpToolSet = node.toolConfig?.httpToolSet;
+      const mcpToolSetId = getToolSetReferenceId(mcpToolSet) ?? node.pluginId;
+      const httpToolSetId = getToolSetReferenceId(httpToolSet) ?? node.pluginId;
+      if (node.pluginId) {
+        externalToolSetReferenceIds.set(node, {
+          mcpToolSet: mcpToolSetId,
+          httpToolSet: httpToolSetId
+        });
+      }
+      const toolId = (() => {
+        if (node.pluginId) {
+          if (mcpToolSet) return mcpToolSetId;
+          if (httpToolSet) return httpToolSetId;
+          return node.pluginId;
+        }
+        return (
+          (mcpTool && 'toolId' in mcpTool ? mcpTool.toolId : undefined) ??
+          (httpTool && 'toolId' in httpTool ? httpTool.toolId : undefined)
+        );
+      })();
       if (toolId) {
         const result = await loadToolNode({
           id: toolId,
           versionId: node.version ?? '',
+          resourceType: node.flowNodeType === FlowNodeTypeEnum.appModule ? 'agent' : 'tool',
+          metadataLocale: node.metadataLocale,
           source:
             node.source ??
             node.toolConfig?.systemTool?.source ??
@@ -240,13 +418,13 @@ export async function rewriteAppWorkflowToDetail({
           node.avatar = preview.avatar ?? node.avatar;
           node.isFolder = preview.isFolder;
           node.pluginData = {
-            name: preview.name,
+            name: node.pluginData?.name ?? preview.name,
             avatar: preview.avatar,
             status: preview.status,
             diagram: preview.diagram,
             userGuide: preview.userGuide,
             courseUrl: preview.courseUrl,
-            readmeUrl: preview.readmeUrl
+            readmeUrl: node.pluginData?.readmeUrl ?? preview.readmeUrl
           };
           node.versionLabel = preview.versionLabel;
           node.isLatestVersion = preview.isLatestVersion;
@@ -257,8 +435,19 @@ export async function rewriteAppWorkflowToDetail({
           node.hasTokenFee = preview.hasTokenFee;
           node.hasSystemSecret = preview.hasSystemSecret;
 
-          node.toolConfig = preview.toolConfig;
-          node.toolDescription = preview.toolDescription;
+          const { source } = splitCombineToolId(toolId);
+          if (
+            (source === AppToolSourceEnum.mcp || source === AppToolSourceEnum.http) &&
+            node.intro !== '' &&
+            !node.intro
+          ) {
+            node.intro = preview.intro;
+          }
+
+          node.toolConfig = mergeToolSetChildDescriptions({
+            savedToolConfig: node.toolConfig,
+            templateToolConfig: preview.toolConfig
+          });
 
           // Latest version
           if (!node.version) {
@@ -275,6 +464,8 @@ export async function rewriteAppWorkflowToDetail({
               const output = outputsMap.get(item.key);
               return {
                 ...item,
+                label: output?.label ?? item.label,
+                description: output?.description ?? item.description,
                 value: output?.value
               };
             });
@@ -309,7 +500,9 @@ export async function rewriteAppWorkflowToDetail({
               const result = await loadToolNode({
                 id: tool.id,
                 versionId: tool.version,
-                source: tool.source
+                source: tool.source,
+                resourceType: 'tool',
+                metadataLocale: tool.metadataLocale
               });
               if (result.success) {
                 const data = result.data!;
@@ -347,10 +540,19 @@ export async function rewriteAppWorkflowToDetail({
                   };
                 });
 
-                formatToolInputSecrets({ inputs: mergedInputs });
+                formatToolInputSecrets({ inputs: mergedInputs, flowNodeType: data.flowNodeType });
+                // 旧工具用英文重建缺失文案，但不把回退语言写成历史 metadataLocale。
+                const { metadataLocale: previewLocale, ...toolData } = data;
+                void previewLocale;
 
                 return {
-                  ...data,
+                  ...toolData,
+                  id: toolData.pluginId ?? toolData.id,
+                  ...(tool.metadataLocale !== undefined
+                    ? { metadataLocale: tool.metadataLocale }
+                    : {}),
+                  name: tool.name ?? data.name,
+                  avatar: tool.avatar ?? data.avatar,
                   source: tool.source ?? data.source,
                   toolConfig:
                     (tool.toolConfig?.mcpToolSet && 'toolId' in tool.toolConfig.mcpToolSet) ||
@@ -365,19 +567,20 @@ export async function rewriteAppWorkflowToDetail({
                   pluginId: tool.id,
                   source: tool.source,
                   version: tool.version ?? '',
+                  metadataLocale: tool.metadataLocale,
                   toolConfig: tool.toolConfig,
                   config: tool.config ?? {},
-                  inputs: tool.inputs ?? [],
+                  inputs: [],
+                  rawInputs: tool.inputs,
                   templateType: 'personalTool' as const,
                   flowNodeType: FlowNodeTypeEnum.tool,
-                  name: 'Invalid',
-                  avatar: '',
+                  name: tool.name ?? 'Invalid',
+                  avatar: tool.avatar ?? '',
                   intro: '',
                   showStatus: false,
                   weight: 0,
                   isTool: true,
                   outputs: [],
-                  configStatus: 'invalid' as const,
                   pluginData: {
                     error: result.error
                   }
@@ -406,14 +609,14 @@ export async function rewriteAppWorkflowToDetail({
         await Promise.all(
           node.inputs.map(async (input) => {
             if (nodeInputIsReference(input)) return;
-            // Agent
+            // Agent / DatasetSearch
             if (input.key === NodeInputKeyEnum.datasetSelectList) {
               const datasets = await formatSelectedDatasetValue(input.value);
               if (datasets) {
                 input.value = datasets;
               }
             }
-            // workflow
+            // Legacy Agent datasetParams
             if (input.key === NodeInputKeyEnum.datasetParams) {
               const datasetParams = input.value as AppFormEditFormType['dataset'] | undefined;
               if (datasetParams?.datasets) {
@@ -431,6 +634,117 @@ export async function rewriteAppWorkflowToDetail({
       }
     })
   );
+
+  // 外部引用只保留资源 ID 与展示摘要；inline ToolSet parent auth 则由本节点持有。
+  const stripHeaderSecret = (value: unknown) => {
+    if (!isRecord(value) || !('headerSecret' in value)) return value;
+    const sanitized = { ...value };
+    delete sanitized.headerSecret;
+    return sanitized;
+  };
+  const encryptToolHeaderSecret = (tool: unknown) => {
+    if (
+      !isRecord(tool) ||
+      !('headerSecret' in tool) ||
+      tool.headerSecret === null ||
+      tool.headerSecret === undefined
+    ) {
+      return tool;
+    }
+    const headerSecret = StoreSecretValueTypeSchema.safeParse(tool.headerSecret);
+    if (!headerSecret.success) return stripHeaderSecret(tool);
+    return { ...tool, headerSecret: storeSecretValue(headerSecret.data) };
+  };
+  const projectToolSetSummary = (toolSet: Record<string, unknown>, toolId?: string) => ({
+    ...(toolId ? { toolId } : {}),
+    ...(Array.isArray(toolSet.toolList)
+      ? {
+          toolList: toolSet.toolList.flatMap((tool) =>
+            isRecord(tool) && typeof tool.name === 'string' && typeof tool.description === 'string'
+              ? [{ name: tool.name, description: tool.description }]
+              : []
+          )
+        }
+      : {})
+  });
+  const clearToolCredentials = ({
+    toolConfig,
+    externalNodeReference = false,
+    referenceIds
+  }: {
+    toolConfig: unknown;
+    externalNodeReference?: boolean;
+    referenceIds?: ExternalToolSetReferenceIds;
+  }) => {
+    if (!isRecord(toolConfig)) return;
+
+    (['mcpTool', 'httpTool'] as const).forEach((key) => {
+      const tool = toolConfig[key];
+      if (isRecord(tool)) toolConfig[key] = stripHeaderSecret(tool);
+    });
+
+    (['mcpToolSet', 'httpToolSet'] as const).forEach((key) => {
+      const toolSet = toolConfig[key];
+      if (!isRecord(toolSet)) return;
+      if (externalNodeReference) {
+        const toolId =
+          referenceIds && Object.prototype.hasOwnProperty.call(referenceIds, key)
+            ? referenceIds[key]
+            : getToolSetReferenceId(toolSet);
+        toolConfig[key] = projectToolSetSummary(toolSet, toolId);
+        return;
+      }
+      const sanitizedToolSet = { ...toolSet };
+      if (Array.isArray(toolSet.toolList)) {
+        sanitizedToolSet.toolList = toolSet.toolList.map(encryptToolHeaderSecret);
+      }
+      toolConfig[key] = sanitizedToolSet;
+    });
+  };
+
+  nodes.forEach((node) => {
+    if (node.flowNodeType === FlowNodeTypeEnum.agent) {
+      const selectedTools = node.inputs.find(
+        (input) => input.key === NodeInputKeyEnum.selectedTools
+      );
+      if (
+        selectedTools &&
+        !nodeInputIsReference(selectedTools) &&
+        Array.isArray(selectedTools.value)
+      ) {
+        // 历史版本可能含明文；详情只输出安全包装，等待用户保存时再写回。
+        selectedTools.value.forEach((tool) => {
+          if (isRecord(tool)) formatToolConfigHeaderSecrets(tool.toolConfig);
+        });
+      }
+    }
+
+    clearToolCredentials({
+      toolConfig: node.toolConfig,
+      externalNodeReference: Boolean(node.pluginId),
+      referenceIds: externalToolSetReferenceIds.get(node)
+    });
+
+    const mcpToolSet = node.toolConfig?.mcpToolSet;
+    if (
+      mcpToolSet &&
+      'headerSecret' in mcpToolSet &&
+      mcpToolSet.headerSecret !== null &&
+      mcpToolSet.headerSecret !== undefined
+    ) {
+      mcpToolSet.headerSecret = storeSecretValue(mcpToolSet.headerSecret);
+    }
+
+    const httpToolSet = node.toolConfig?.httpToolSet;
+    if (
+      httpToolSet &&
+      'headerSecret' in httpToolSet &&
+      httpToolSet.headerSecret !== null &&
+      httpToolSet.headerSecret !== undefined
+    ) {
+      httpToolSet.headerSecret = storeSecretValue(httpToolSet.headerSecret);
+    }
+  });
 
   return nodes;
 }

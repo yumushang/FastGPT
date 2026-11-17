@@ -12,7 +12,7 @@ vi.mock('@/service/middleware/entry', () => ({
   NextAPI: (handler: unknown) => handler
 }));
 
-vi.mock('@/service/support/permission/auth/chat', () => ({
+vi.mock('@fastgpt/service/core/chat/auth', () => ({
   authChatTargetCrud: mocks.authChatTargetCrud
 }));
 
@@ -49,7 +49,7 @@ const mockChatItem = (chatItem: Record<string, any> | null) => {
 
 describe('getResData handler', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mocks.authChatTargetCrud.mockResolvedValue({
       sourceType: ChatSourceTypeEnum.app,
@@ -81,6 +81,60 @@ describe('getResData handler', () => {
       chatItemDataId: dataId,
       fallbackResponseData: [{ id: 'legacy-root' }]
     });
+  });
+
+  it.each([
+    ChatSourceTypeEnum.chatAgentHelper,
+    ChatSourceTypeEnum.workflowBuilder,
+    ChatSourceTypeEnum.skillEdit
+  ])('reads auxiliary generation details through the authorized %s target', async (sourceType) => {
+    mockChatItem({ obj: ChatRoleEnum.AI });
+    const sourceId = '507f1f77bcf86cd799439012';
+    mocks.authChatTargetCrud.mockResolvedValue({ sourceType, sourceId, showCite: true });
+    const target =
+      sourceType === ChatSourceTypeEnum.skillEdit
+        ? { skillId: sourceId }
+        : { appId: sourceId, sourceType };
+    await expect(
+      handler({ query: { ...target, chatId, dataId } } as ApiRequestProps)
+    ).resolves.toEqual([{ id: 'persisted-root' }]);
+    expect(mocks.authChatTargetCrud).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceType, sourceId, chatId, authToken: true })
+    );
+    expect(mocks.findChatItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: sourceId,
+        sourceType,
+        chatId,
+        dataId,
+        obj: ChatRoleEnum.AI
+      }),
+      expect.any(String)
+    );
+    expect(mocks.getChatItemResponseData).toHaveBeenCalledWith({
+      sourceType,
+      sourceId,
+      chatId,
+      chatItemDataId: dataId,
+      fallbackResponseData: undefined
+    });
+  });
+
+  it('does not read helper details when chat target authorization fails', async () => {
+    const error = new Error('Unauthorized');
+    mocks.authChatTargetCrud.mockRejectedValueOnce(error);
+    await expect(
+      handler({
+        query: {
+          sourceType: ChatSourceTypeEnum.chatAgentHelper,
+          appId,
+          chatId,
+          dataId
+        }
+      } as ApiRequestProps)
+    ).rejects.toBe(error);
+    expect(mocks.findChatItem).not.toHaveBeenCalled();
+    expect(mocks.getChatItemResponseData).not.toHaveBeenCalled();
   });
 
   it('passes empty legacy inline responseData as fallback', async () => {
@@ -123,5 +177,74 @@ describe('getResData handler', () => {
 
     await expect(callHandler()).resolves.toEqual([]);
     expect(mocks.getChatItemResponseData).not.toHaveBeenCalled();
+  });
+
+  it('preserves moderationRecords when caller has app write permission (canWrite: true)', async () => {
+    mockChatItem({
+      obj: ChatRoleEnum.AI
+    });
+    mocks.authChatTargetCrud.mockResolvedValue({
+      sourceType: ChatSourceTypeEnum.app,
+      sourceId: appId,
+      showCite: true,
+      canWrite: true
+    });
+    const responseWithModeration = [
+      {
+        id: 'node-1',
+        moduleName: 'AI 对话',
+        moduleType: 'chatNode',
+        error: '内容包含敏感信息，已拦截',
+        moderationRecords: [
+          {
+            stage: 'output',
+            verdict: 'block',
+            actionTaken: 'block',
+            hits: [{ label: 'contraband', score: 0.87 }],
+            keywords: ['博彩'],
+            content: '请生成一段 博彩 推广文案'
+          }
+        ]
+      }
+    ];
+    mocks.getChatItemResponseData.mockResolvedValue(responseWithModeration);
+
+    const res = await callHandler();
+    expect(res[0].moderationRecords).toHaveLength(1);
+    expect(res[0].moderationRecords?.[0]?.keywords).toEqual(['博彩']);
+  });
+
+  it('strips moderationRecords when caller does not have app write permission (canWrite: false)', async () => {
+    mockChatItem({
+      obj: ChatRoleEnum.AI
+    });
+    mocks.authChatTargetCrud.mockResolvedValue({
+      sourceType: ChatSourceTypeEnum.app,
+      sourceId: appId,
+      showCite: true,
+      canWrite: false
+    });
+    mocks.getChatItemResponseData.mockResolvedValue([
+      {
+        id: 'node-1',
+        moduleName: 'AI 对话',
+        moduleType: 'chatNode',
+        error: '内容包含敏感信息，已拦截',
+        moderationRecords: [
+          {
+            stage: 'output',
+            verdict: 'block',
+            actionTaken: 'block',
+            hits: [{ label: 'contraband', score: 0.87 }],
+            keywords: ['博彩'],
+            content: '请生成一段 博彩 推广文案'
+          }
+        ]
+      }
+    ]);
+
+    const res = await callHandler();
+    expect(res[0].error).toBe('内容包含敏感信息，已拦截');
+    expect(res[0].moderationRecords).toBeUndefined();
   });
 });

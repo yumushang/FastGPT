@@ -14,7 +14,7 @@ import {
   type TransitionWorkflowBodyType,
   type TransitionWorkflowResponseType
 } from '@fastgpt/global/openapi/core/app/common/api';
-import { decodeToolSetNodesFromStorage } from '@fastgpt/service/core/app/jsonSchemaStorage';
+import { getAppDraftWorkflow } from '@fastgpt/service/core/app/version/controller';
 
 async function handler(
   req: ApiRequestProps<TransitionWorkflowBodyType>
@@ -24,12 +24,17 @@ async function handler(
     bodySchema: TransitionWorkflowBodySchema
   }).body;
 
-  const { app, teamId, tmbId } = await authApp({
+  const { app, tmbId, isRoot } = await authApp({
     req,
     appId,
     authToken: true,
     per: OwnerPermissionVal
   });
+  const teamId = String(app.teamId);
+
+  // 当前前端只从 Simple App 表单调用；不在 API 层限制应用类型转换。
+
+  const draftWorkflow = await getAppDraftWorkflow(app._id, app);
   if (createNew) {
     const { appId } = await mongoSessionRun(async (session) => {
       // Copy avatar
@@ -45,11 +50,12 @@ async function handler(
         name: app.name + ' Copy',
         avatar,
         type: AppTypeEnum.workflow,
-        modules: decodeToolSetNodesFromStorage(app.modules),
-        edges: app.edges,
-        chatConfig: app.chatConfig,
-        teamId: app.teamId,
+        nodes: draftWorkflow.nodes,
+        edges: draftWorkflow.edges,
+        chatConfig: draftWorkflow.chatConfig,
+        teamId,
         tmbId,
+        isRoot,
         session
       });
       await getS3AvatarSource().refreshAvatar(avatar, undefined, session);
@@ -65,10 +71,13 @@ async function handler(
   await mongoSessionRun(async (session) => {
     await onUpdateAppWorkflow({
       appId,
-      modules: decodeToolSetNodesFromStorage(app.modules),
-      edges: app.edges,
-      chatConfig: app.chatConfig,
+      nodes: draftWorkflow.nodes,
+      edges: draftWorkflow.edges,
+      chatConfig: draftWorkflow.chatConfig,
+      resources: draftWorkflow.resources,
       teamId,
+      tmbId,
+      isRoot,
       session
     });
   });

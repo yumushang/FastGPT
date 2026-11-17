@@ -31,13 +31,57 @@ describe('string tools', () => {
 
   it('should normalize text formatting', () => {
     const input = '  你 好 \r\n\r\n\r\nfoo\x00bar  ';
-    expect(simpleText(input)).toBe('你 好 \n\nfoo bar');
-    expect(simpleText('a   b')).toBe('a   b');
+    expect(simpleText(input)).toBe('你好 \n\nfoo bar');
+    expect(simpleText('a   b')).toBe('a b');
+  });
+
+  it('should collapse blanks between chinese characters', () => {
+    expect(simpleText('中文  中文')).toBe('中文中文');
+    expect(simpleText('中文\t中文')).toBe('中文中文');
+    // 全角空格
+    expect(simpleText('中文　中文')).toBe('中文中文');
+    // 超过两个汉字时,每一处空白都要去掉,而不是隔一个去一个
+    expect(simpleText('中 文 字 符 串')).toBe('中文字符串');
+    expect(simpleText('产 品 说 明 书')).toBe('产品说明书');
+    expect(simpleText('这 是 一 段 中文')).toBe('这是一段中文');
+  });
+
+  it('should keep brackets and line indentation while normalizing blanks', () => {
+    expect(simpleText('参考 [[ 知识库 ]] 一节')).toBe('参考 [[ 知识库 ]] 一节');
+    expect(simpleText('{"matrix": [[]]}')).toBe('{"matrix": [[]]}');
+    expect(simpleText('中文 ]中文')).toBe('中文 ]中文');
+    expect(simpleText('def f():\n    return 1')).toBe('def f():\n    return 1');
+    expect(simpleText('line  \nnext')).toBe('line  \nnext');
   });
 
   it('should replace sensitive text', () => {
     expect(replaceSensitiveText('Visit https://example.com/path?x=1')).toBe('Visit https://xxx');
     expect(replaceSensitiveText('token ns-abc-123 and ns-xyz')).toBe('token xxx and xxx');
+    expect(replaceSensitiveText('svc.ns-abc123.svc.cluster.local:3000')).toBe(
+      'svc.xxx.svc.cluster.local:3000'
+    );
+    expect(replaceSensitiveText('Exceeded tokens-per-minute limit')).toBe(
+      'Exceeded tokens-per-minute limit'
+    );
+    expect(replaceSensitiveText('dns-server timeout on columns-a')).toBe(
+      'dns-server timeout on columns-a'
+    );
+  });
+
+  it('preserves JSON fields and escaped quotes after masking URLs', () => {
+    const text = JSON.stringify({
+      url: 'https://example.com/path',
+      detail: 'sku missing',
+      reason: 'see https://example.com/docs" retry'
+    });
+    const sanitized = replaceSensitiveText(text);
+
+    expect(JSON.parse(sanitized)).toEqual({
+      url: 'https://xxx',
+      detail: 'sku missing',
+      reason: 'see https://xxx" retry'
+    });
+    expect(replaceSensitiveText(sanitized)).toBe(sanitized);
   });
 
   it('should generate nanoid with lowercase prefix', () => {
@@ -70,6 +114,45 @@ describe('string tools', () => {
     expect(sliceJsonStr('prefix {"a":1')).toBe('prefix {"a":1');
   });
 
+  it('should stop at the end of the json, not at the last bracket in the text', () => {
+    // 模型常在 JSON 后面继续写解释,里面可能带括号
+    expect(sliceJsonStr('{"name":"get_weather"}\n\nI used the {city} you gave me.')).toBe(
+      '{"name":"get_weather"}'
+    );
+    expect(sliceJsonStr('{"a":1}\n{"b":2}')).toBe('{"a":1}');
+    expect(sliceJsonStr('```json\n{"a":1}\n```\nNote: {done}')).toBe('{"a":1}');
+    expect(sliceJsonStr('[1,2] and [3,4]')).toBe('[1,2]');
+  });
+
+  it('should not close the json on a bracket inside a string', () => {
+    expect(sliceJsonStr('{"a":"}"}')).toBe('{"a":"}"}');
+    expect(sliceJsonStr('{"a":"\\\\"}')).toBe('{"a":"\\\\"}');
+    expect(sliceJsonStr('{"nested":{"b":[1,{"c":2}]}} trailing')).toBe(
+      '{"nested":{"b":[1,{"c":2}]}}'
+    );
+    // 调用方用 JSON5 解析,单引号字符串同样要算在内
+    expect(sliceJsonStr("{name: 'a}b'} trailing")).toBe("{name: 'a}b'}");
+    expect(sliceJsonStr("1: {name: 'test_tool', arguments: {param: 'value', number: 42}}")).toBe(
+      "{name: 'test_tool', arguments: {param: 'value', number: 42}}"
+    );
+  });
+
+  it('should not close the json on a bracket inside a json5 comment', () => {
+    // 调用方用 JSON5 解析,注释里的括号不是结构括号
+    expect(sliceJsonStr('{a: 1, /* } */ b: 2}')).toBe('{a: 1, /* } */ b: 2}');
+    expect(sliceJsonStr('[1, /* ] */ 2]')).toBe('[1, /* ] */ 2]');
+    expect(sliceJsonStr('{a: 1, // }\n b: 2} trailing')).toBe('{a: 1, // }\n b: 2}');
+    expect(sliceJsonStr('[1, // ]\n 2] trailing')).toBe('[1, // ]\n 2]');
+    expect(sliceJsonStr('{a: 1, // }\r b: 2} trailing')).toBe('{a: 1, // }\r b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\r\n b: 2} trailing')).toBe('{a: 1, // }\r\n b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\u2028 b: 2} trailing')).toBe('{a: 1, // }\u2028 b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\u2029 b: 2} trailing')).toBe('{a: 1, // }\u2029 b: 2}');
+    // 字符串里的注释符号仍然是普通字符
+    expect(sliceJsonStr('{a: "/* }"} trailing')).toBe('{a: "/* }"}');
+    // 除号不是注释
+    expect(sliceJsonStr('{a: 1 / 2} trailing')).toBe('{a: 1 / 2}');
+  });
+
   it('should slice string with start and end', () => {
     expect(sliceStrStartEnd('abc', 2, 2)).toBe('abc');
     expect(sliceStrStartEnd(null, 2, 2)).toBe('');
@@ -78,13 +161,54 @@ describe('string tools', () => {
     );
   });
 
+  it('should not split a surrogate pair in the sliced preview', () => {
+    // `😀` 占 2 个 UTF-16 code unit。截断点落在代理对中间时，
+    // 原来的 str.slice 会保留半个字符（孤立代理项），渲染或送模型时变成 U+FFFD 乱码。
+    const hasLoneSurrogate = (text: string) =>
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+
+    const text = 'a😀b😀c';
+    expect(text.length).toBe(7);
+
+    // start=2 / end=2 正好切在两组代理对中间，两侧都只能放弃半个字符
+    expect(sliceStrStartEnd(text, 2, 2)).toBe('a\n\n...[hide 3 chars]...\n\nc');
+    expect(hasLoneSurrogate(sliceStrStartEnd(text, 2, 2))).toBe(false);
+
+    // readFiles 预览用 start=end=1000：第 1000 个 code unit 是代理对的前半部分
+    const longText = `${'a'.repeat(999)}😀${'b'.repeat(1000)}`;
+    const preview = sliceStrStartEnd(longText, 1000, 1000);
+    expect(hasLoneSurrogate(preview)).toBe(false);
+    expect(preview).toBe(`${'a'.repeat(999)}\n\n...[hide 1 chars]...\n\n${'b'.repeat(1000)}`);
+  });
+
   it('should format numbers with units', () => {
     expect(formatNumberWithUnit(0)).toBe('0');
     expect(formatNumberWithUnit(Number.NaN)).toBe('-');
     expect(formatNumberWithUnit(123456, 'zh-CN')).toBe('12.35万');
     expect(formatNumberWithUnit(-200000, 'zh-CN')).toBe('-20万');
+    expect(formatNumberWithUnit(100000000, 'zh-CN')).toBe('1亿');
+    expect(formatNumberWithUnit(123456, 'zh')).toBe('12.35万');
+    expect(formatNumberWithUnit(100000000, 'zh-Hant')).toBe('1億');
+    expect(formatNumberWithUnit(20000, 'zh-Hant')).toBe('2萬');
+    expect(formatNumberWithUnit(100000000, 'zh-tw')).toBe('1億');
+    expect(formatNumberWithUnit(20000, 'zh-hk')).toBe('2萬');
+    expect(formatNumberWithUnit(100000000, 'zh_hant_tw')).toBe('1億');
+    expect(formatNumberWithUnit(123456, 'ZH-CN')).toBe('12.35万');
     expect(formatNumberWithUnit(1200, 'en')).toBe('1.2K');
     expect(formatNumberWithUnit(1250000, 'en')).toBe('1.25M');
+    expect(formatNumberWithUnit(1500000000, 'en')).toBe('1.5B');
+    expect(formatNumberWithUnit(999, 'en')).toBe('999');
+  });
+
+  it('formatNumberWithUnit moves to the next unit when rounding reaches it', () => {
+    expect(formatNumberWithUnit(99999999, 'zh-CN')).toBe('1亿');
+    expect(formatNumberWithUnit(-99999999, 'zh-CN')).toBe('-1亿');
+    expect(formatNumberWithUnit(99999999, 'zh-Hant')).toBe('1億');
+    expect(formatNumberWithUnit(99994999, 'zh-CN')).toBe('9999.5万');
+    expect(formatNumberWithUnit(999999, 'en')).toBe('1M');
+    expect(formatNumberWithUnit(999999999, 'en')).toBe('1B');
+    expect(formatNumberWithUnit(999994, 'en')).toBe('999.99K');
+    expect(formatNumberWithUnit(9999, 'zh-CN')).toBe('9,999');
     expect(formatNumberWithUnit(999, 'en')).toBe('999');
   });
 });

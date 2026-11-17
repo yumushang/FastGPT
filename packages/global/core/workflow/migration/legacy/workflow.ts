@@ -1,7 +1,5 @@
-import type { CanonicalWorkflowData } from '../schema';
-import { CanonicalWorkflowDataSchema } from '../schema';
-import type { LegacyWorkflowDataInput } from './schema';
-import { LegacyWorkflowDataSchema } from './schema';
+import { type CanonicalWorkflowData, CanonicalWorkflowDataSchema } from '../schema';
+import { type LegacyWorkflowDataInput, LegacyWorkflowDataSchema } from './schema';
 import {
   migrateLegacyFlowNodeInputToCurrent,
   migrateLegacyHttpToolInputDefaultMode,
@@ -11,12 +9,13 @@ import { migrateSystemConfigToChatConfig } from './systemConfig';
 import { FlowNodeInputTypeEnum, FlowNodeTypeEnum } from '../../node/constant';
 import { NodeInputKeyEnum, NodeOutputKeyEnum, WorkflowIOValueTypeEnum } from '../../constants';
 import { StoreSecretValueTypeSchema } from '../../../../common/secret/type';
+import { migrateSecretStoreToCurrent, migrateWorkflowSecretValues } from '../secret';
+import { getElseIFLabel } from '../../../../common/workflow/condition';
 import {
-  getElseIFLabel,
   getHandleId,
   isValidReferenceValueFormat,
   nodeInputIsReference
-} from '../../utils';
+} from '../../../../common/workflow/reference';
 
 // 这些旧插件没有持久化 catchError，但当前运行时需要显式开启错误分支。
 const legacyCatchErrorPluginIds = new Set([
@@ -48,7 +47,10 @@ const migrateLegacyCanvasStructure = (workflow: CanonicalWorkflowData): Canonica
     const legacyMcpToolSet = shouldMigrateLegacyMcpToolSet
       ? (legacyToolSetValue as Record<string, unknown>)
       : undefined;
-    const legacyHeaderSecret = StoreSecretValueTypeSchema.safeParse(legacyMcpToolSet?.headerSecret);
+    // 只有已确认的旧 MCP 配置才迁移 headerSecret，避免扫描普通输入中的同名业务字段。
+    const legacyHeaderSecret = StoreSecretValueTypeSchema.safeParse(
+      migrateSecretStoreToCurrent(legacyMcpToolSet?.headerSecret)
+    );
     const inputs = node.inputs.map((input) => {
       // 文件列表实际是 JSON 数组；旧的单行 input 控件会导致编辑和解析类型不匹配。
       if (
@@ -198,7 +200,7 @@ export const migrateLegacyWorkflowStructureToCurrent = (
   input: LegacyWorkflowDataInput
 ): CanonicalWorkflowData => {
   // 先把输入收敛到只允许历史字段的边界，避免后续迁移函数处理任意脏数据。
-  const legacy = LegacyWorkflowDataSchema.parse(input);
+  const legacy = LegacyWorkflowDataSchema.parse(migrateWorkflowSecretValues(input));
   // 废弃的系统配置节点需要先合并到 chatConfig，再从画布中移除。
   const workflow = migrateSystemConfigToChatConfig(legacy);
   // 工具节点由 selectedTools 边识别，后续输入迁移需要据此决定默认来源。
@@ -218,15 +220,28 @@ export const migrateLegacyWorkflowStructureToCurrent = (
           !!node.toolConfig?.systemTool ||
           !!node.pluginId?.startsWith('systemTool-') ||
           !!node.pluginId?.startsWith('commercial-'));
-      const inputs = node.inputs.map((input) =>
-        migrateLegacyFlowNodeInputToCurrent(
+      const inputs = node.inputs.map((input) => {
+        const sourceInput = (() => {
+          // toolParams 的全部输入均由 Agent 工具调用生成。
+          if (node.flowNodeType === FlowNodeTypeEnum.toolParams) {
+            return {
+              ...input,
+              defaultToAgentGenerated: true,
+              selectedType: FlowNodeInputTypeEnum.agentGenerated
+            };
+          }
+
           // HTTP 468 的旧默认模式规则与普通工作流输入不同，先单独恢复再做通用归一。
-          node.flowNodeType === FlowNodeTypeEnum.httpRequest468
+          return node.flowNodeType === FlowNodeTypeEnum.httpRequest468
             ? migrateLegacyHttpToolInputDefaultMode(input)
-            : input,
-          { isTool, allowLegacyToolDescriptionFallback }
-        )
-      );
+            : input;
+        })();
+
+        return migrateLegacyFlowNodeInputToCurrent(sourceInput, {
+          isTool: isTool || node.flowNodeType === FlowNodeTypeEnum.toolParams,
+          allowLegacyToolDescriptionFallback
+        });
+      });
 
       const migratedInputs =
         node.flowNodeType === FlowNodeTypeEnum.agent

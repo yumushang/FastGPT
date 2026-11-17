@@ -5,7 +5,9 @@ import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import { getAgentLoopHistories } from '../../../utils';
 import { MongoDataset } from '../../../../../dataset/schema';
 import { filterDatasetsByTmbId } from '../../../../../dataset/utils';
-import type { DeployedSkillInfo } from '../../../../../ai/sandbox/interface/runtime';
+import { hasWorkflowResource } from '../../../../resource/context';
+import { getWorkflowResourceContext } from '../../../../utils/context';
+import type { DeployedSkillInfo } from '../../../../../ai/sandbox/application/runtime/skill/types';
 import {
   buildWorkflowAICurrentInputFiles,
   rewriteWorkflowAIHistoryMessageWithFiles,
@@ -34,19 +36,40 @@ export const loadAgentDatasetContext = async (
   if (selectedDataset.length === 0) return [];
 
   const datasetIds = selectedDataset.map((item) => item.datasetId);
-  const authorizedDatasetIds = authTmbId
-    ? await filterDatasetsByTmbId({
-        datasetIds,
+  const resourceContext = getWorkflowResourceContext();
+  const uncheckedDatasetIds = datasetIds.filter(
+    (id) => !hasWorkflowResource({ context: resourceContext, type: 'dataset', id })
+  );
+  let authorizedDatasetIds = datasetIds;
+  if (authTmbId) {
+    authorizedDatasetIds = await filterDatasetsByTmbId({
+      datasetIds,
+      tmbId
+    });
+  } else if (uncheckedDatasetIds.length > 0) {
+    const allowedUncheckedSet = new Set(
+      await filterDatasetsByTmbId({
+        datasetIds: uncheckedDatasetIds,
         tmbId
       })
-    : datasetIds;
+    );
+    authorizedDatasetIds = datasetIds.filter(
+      (id) => !uncheckedDatasetIds.includes(id) || allowedUncheckedSet.has(id)
+    );
+  }
   if (authorizedDatasetIds.length === 0) return [];
 
   const datasets = await MongoDataset.find(
     {
       _id: {
         $in: authorizedDatasetIds
-      }
+      },
+      ...(resourceContext &&
+      uncheckedDatasetIds.length === 0 &&
+      resourceContext.teamId &&
+      !resourceContext.isRoot
+        ? { teamId: resourceContext.teamId }
+        : {})
     },
     'name intro'
   ).lean();
@@ -81,11 +104,13 @@ export type UseUserContextResult = {
   getCurrentMessages: (params?: {
     skillInfos?: DeployedSkillInfo[];
     currentWorkingDirectory?: string;
-  }) => {
+  }) => Promise<{
     rewrittenHistories: ChatItemMiniType[];
     currentUserMessage: ChatItemMiniType;
-  };
+  }>;
 };
+
+const MAX_AGENT_HISTORIES = 50;
 
 /**
  * 准备 Agent 本轮 user context。
@@ -95,7 +120,7 @@ export type UseUserContextResult = {
  * 元信息后，再通过 getCurrentMessages 生成最终模型 messages。
  */
 export const useUserContext = async ({
-  history,
+  history = MAX_AGENT_HISTORIES,
   histories,
   currentFiles = [],
   currentUserInput,
@@ -123,13 +148,15 @@ export const useUserContext = async ({
 }): Promise<UseUserContextResult> => {
   const chatHistories = getAgentLoopHistories(history, histories);
 
-  const rewrittenHistories = chatHistories.map(
-    (message) =>
-      rewriteWorkflowAIHistoryMessageWithFiles({
+  const rewrittenHistories = await Promise.all(
+    chatHistories.map(async (message) => {
+      const res = await rewriteWorkflowAIHistoryMessageWithFiles({
         message,
         maxFileAmount,
         parseHistoryFiles
-      }).message
+      });
+      return res.message;
+    })
   );
 
   // 获取本轮的文件输入
@@ -144,7 +171,7 @@ export const useUserContext = async ({
       files: queryFiles
     })
   };
-  const currentInputFiles = buildWorkflowAICurrentInputFiles({
+  const currentInputFiles = await buildWorkflowAICurrentInputFiles({
     currentFiles,
     currentQuery,
     maxFileAmount
@@ -157,9 +184,9 @@ export const useUserContext = async ({
     chatHistories,
     currentFiles: currentInputFiles,
     queryInput,
-    getCurrentMessages: ({ skillInfos, currentWorkingDirectory } = {}) => {
+    getCurrentMessages: async ({ skillInfos, currentWorkingDirectory } = {}) => {
       // 当前 Human 才注入 sandbox、skill、知识库和当前时间，历史只保留稳定文件上下文。
-      const { message: currentUserMessage } = rewriteWorkflowAIUserMessageWithFiles({
+      const { message: currentUserMessage } = await rewriteWorkflowAIUserMessageWithFiles({
         message: currentMessage,
         maxFileAmount,
         files: currentInputFiles,

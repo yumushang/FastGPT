@@ -1,7 +1,11 @@
+import { getSystemInstanceConfig } from '../../../../common/system/systemInstanceConfig/runtime';
+import {
+  listRetainedTools,
+  getRetainedToolDetail
+} from '../../../../thirdProvider/fastgptPlugin/lifecycle';
 import { PluginErrEnum } from '@fastgpt/global/common/error/code/plugin';
 import { UserError } from '@fastgpt/global/common/error/utils';
 import type { LangEnum } from '@fastgpt/global/common/i18n/type';
-import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
 import {
   jsonSchema2SecretInput,
   nodeInputs2JsonSchema,
@@ -19,7 +23,11 @@ import {
   FlowNodeOutputTypeEnum,
   FlowNodeTypeEnum
 } from '@fastgpt/global/core/workflow/node/constant';
-import type { PluginListParamsType } from '@fastgpt/global/sdk/fastgpt-plugin';
+import type {
+  PluginListParamsType,
+  PluginPermissionEnumType,
+  ToolDetailType as SDKToolDetailType
+} from '@fastgpt/global/sdk/fastgpt-plugin';
 import { pluginClient, withPluginClientLocale } from '../../../../thirdProvider/fastgptPlugin';
 import { MongoSystemTool } from '../../../plugin/tool/systemToolSchema';
 import { MongoApp } from '../../schema';
@@ -40,7 +48,6 @@ import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import { MongoAppVersion } from '../../version/schema';
 import type { SystemPluginToolCollectionType } from '@fastgpt/global/core/plugin/tool/type';
 import type { AppToolRuntimeType } from '@fastgpt/global/core/app/tool/type';
-import type { PluginPermissionEnumType } from '@fastgpt/global/sdk/fastgpt-plugin';
 import { Types } from '../../../../common/mongo';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import {
@@ -60,14 +67,7 @@ type SystemToolRuntimeType = {
 
 type SystemToolDisplayChildType = Pick<
   SystemToolChildDetailType,
-  | 'id'
-  | 'name'
-  | 'status'
-  | 'description'
-  | 'toolDescription'
-  | 'icon'
-  | 'currentCost'
-  | 'systemKeyCost'
+  'id' | 'name' | 'status' | 'description' | 'icon' | 'currentCost' | 'systemKeyCost'
 >;
 
 type SystemToolDisplayInfoType = Pick<
@@ -82,7 +82,6 @@ type SystemToolDisplayInfoType = Pick<
   | 'intro'
   | 'author'
   | 'tags'
-  | 'toolDescription'
   | 'userGuide'
   | 'readmeUrl'
   | 'courseUrl'
@@ -311,8 +310,10 @@ export class SystemToolRepo {
     op,
     sources,
     tags,
-    lang
+    lang,
+    includeDisabled
   }: {
+    includeDisabled?: boolean;
     tags?: string[];
     op?: PluginListParamsType['op'];
     sources?: PluginListParamsType['sources'];
@@ -321,11 +322,13 @@ export class SystemToolRepo {
     // 1. get all tools from plugin by sources
     const filteredTags = tags ? filterPluginTags(tags) : undefined;
     const tools = await withPluginClientLocale(lang, () =>
-      pluginClient.listTools({
-        op,
-        sources,
-        tags: filteredTags
-      })
+      includeDisabled
+        ? listRetainedTools()
+        : pluginClient.listTools({
+            op,
+            sources,
+            tags: filteredTags
+          })
     );
 
     // 2. 加载数据库中的插件配置，将所有插件 normalize
@@ -337,14 +340,16 @@ export class SystemToolRepo {
       const item = SystemToolCodec.attachToolConfig({
         tool,
         config: isTeamSource ? undefined : getFirstSystemToolConfig(DBPluginsMap, tool.pluginId),
-        lang,
         source: tool.source
       });
 
       return {
         ...item,
         status: getVisiblePluginStatus({
-          status: item.status,
+          status:
+            'installationStatus' in tool && tool.installationStatus === 'disabled'
+              ? PluginStatusEnum.Offline
+              : item.status,
           source: tool.source
         })
       };
@@ -373,7 +378,8 @@ export class SystemToolRepo {
     source: toolSource = 'system',
     lang,
     fallbackLatestVersion = false,
-    maskSecrets = false
+    maskSecrets = false,
+    includeDisabled = false
   }: {
     pluginId: string;
     version?: string;
@@ -381,6 +387,7 @@ export class SystemToolRepo {
     lang?: `${LangEnum}`;
     fallbackLatestVersion?: boolean;
     maskSecrets?: boolean;
+    includeDisabled?: boolean;
   }): Promise<SystemToolDetailType> => {
     const isIsolatedSource = isIsolatedPluginSource(toolSource);
     const { pluginId: rawPluginId, source: idSource } = parseSystemToolId({
@@ -421,12 +428,11 @@ export class SystemToolRepo {
         id: pluginId,
         name: dbTool.customConfig.name,
         status: getVisiblePluginStatus({ status: dbTool.status, source: toolSource }),
-        toolDescription: dbTool.customConfig.toolDescription ?? dbTool.customConfig.intro ?? '',
         version: appVersion.versionId,
         versionLabel: appVersion.versionName,
         intro: dbTool.customConfig.intro ?? '',
         tags: dbTool.customConfig.tags ?? [],
-        author: dbTool.customConfig.author ?? global.feConfigs.systemTitle ?? '',
+        author: dbTool.customConfig.author ?? getSystemInstanceConfig().site.name ?? '',
         avatar: dbTool.customConfig.avatar ?? app.avatar ?? '',
         hasSystemSecret: false,
         systemSecretStatus: SystemToolCodec.getSystemSecretStatus({ hasSecret: false }),
@@ -449,13 +455,15 @@ export class SystemToolRepo {
 
     // System tool
     const pluginSource = getPluginClientSource({ idSource, runtimeSource: toolSource });
-    const tool = await withPluginClientLocale(lang, () =>
-      pluginClient.getTool({
-        pluginId: parentPluginId,
-        version,
-        source: pluginSource,
-        ...(fallbackLatestVersion ? { fallbackLatestVersion: true } : {})
-      })
+    const tool: SDKToolDetailType = await withPluginClientLocale(lang, () =>
+      includeDisabled
+        ? getRetainedToolDetail(parentPluginId, version)
+        : pluginClient.getTool({
+            pluginId: parentPluginId,
+            version,
+            source: pluginSource,
+            ...(fallbackLatestVersion ? { fallbackLatestVersion: true } : {})
+          })
     );
 
     const getToolParent = tool.isToolset && !getChildToolDetail;
@@ -487,12 +495,12 @@ export class SystemToolRepo {
 
           return {
             id: item.id,
-            name: parseI18nString(item.name, lang),
+            name: item.name,
             status: getVisiblePluginStatus({
               status: dbChild?.status,
               source: toolSource
             }),
-            description: parseI18nString(item.description, lang),
+            description: item.description,
             systemKeyCost: dbChild?.systemKeyCost ?? 0,
             currentCost: dbChild?.currentCost ?? 0,
             icon: item.icon,
@@ -533,7 +541,7 @@ export class SystemToolRepo {
 
     const toolDetail: SystemToolDetailType = {
       id: pluginId,
-      author: tool.author ?? global.feConfigs.systemTitle ?? '',
+      author: tool.author ?? getSystemInstanceConfig().site.name ?? '',
       avatar: childPluginId ? (child?.icon ?? tool.icon) : tool.icon,
       currentCost: dbTool?.currentCost ?? 0,
       hasSystemSecret,
@@ -545,14 +553,10 @@ export class SystemToolRepo {
       hasTokenFee: dbTool?.hasTokenFee ?? false,
       intro:
         dbTool?.customConfig?.intro ??
-        (childPluginId
-          ? parseI18nString(child?.description, lang)
-          : parseI18nString(tool.description, lang)),
+        (childPluginId ? (child!.description ?? '') : tool.description),
       isToolSet: tool.isToolset && !childPluginId,
       ...(children ? { children } : {}),
-      name:
-        dbTool?.customConfig?.name ??
-        parseI18nString(childPluginId ? child!.name : tool.name, lang),
+      name: dbTool?.customConfig?.name ?? (childPluginId ? child!.name : tool.name),
 
       status: getVisiblePluginStatus({
         status: dbTool?.status,
@@ -562,12 +566,10 @@ export class SystemToolRepo {
       tags: dbTool?.customConfig?.tags ?? tool.tags ?? [],
       source: tool.source,
       userGuide: dbTool?.customConfig?.userGuide,
-      toolDescription:
-        dbTool?.customConfig?.toolDescription ??
-        (childPluginId ? child!.toolDescription : tool.toolDescription),
       // courseUrl: dbTool?.customConfig?.courseUrl ?? tool.tutorialUrl,
       courseUrl: tool.tutorialUrl,
       readmeUrl: tool.readmeUrl,
+      readmeUrls: tool.readmeUrls,
       version: tool.version,
       hideTags: dbTool?.hideTags ?? [],
       promoteTags: dbTool?.promoteTags ?? [],
@@ -614,10 +616,8 @@ export class SystemToolRepo {
         avatar: exactDbTool.customConfig.avatar ?? '',
         name: exactDbTool.customConfig.name,
         intro: exactDbTool.customConfig.intro ?? '',
-        author: exactDbTool.customConfig.author ?? global.feConfigs.systemTitle ?? '',
+        author: exactDbTool.customConfig.author ?? getSystemInstanceConfig().site.name ?? '',
         tags: exactDbTool.customConfig.tags ?? [],
-        toolDescription:
-          exactDbTool.customConfig.toolDescription ?? exactDbTool.customConfig.intro ?? '',
         userGuide: exactDbTool.customConfig.userGuide,
         pluginOrder: exactDbTool.pluginOrder ?? 0,
         originCost: exactDbTool.originCost ?? 0,
@@ -659,8 +659,7 @@ export class SystemToolRepo {
       : getFirstSystemToolConfig(dbToolsMap, requestedParentPluginId);
     const parent = SystemToolCodec.attachToolConfig({
       tool,
-      config: parentConfig,
-      lang
+      config: parentConfig
     });
     parent.status = getVisiblePluginStatus({
       status: parent.status,
@@ -678,13 +677,12 @@ export class SystemToolRepo {
 
         return {
           id: item.id,
-          name: parseI18nString(item.name, lang),
+          name: item.name,
           status: getVisiblePluginStatus({
             status: childConfig?.status,
             source: isIsolatedSource ? source : undefined
           }),
-          description: parseI18nString(item.description, lang),
-          toolDescription: childConfig?.customConfig?.toolDescription ?? item.toolDescription,
+          description: item.description,
           icon: childIcon,
           currentCost: childConfig?.currentCost ?? 0,
           systemKeyCost: childConfig?.systemKeyCost ?? 0
@@ -702,7 +700,6 @@ export class SystemToolRepo {
         avatar: child.icon ?? parent.avatar,
         name: child.name,
         intro: child.description ?? '',
-        toolDescription: child.toolDescription ?? '',
         status: child.status,
         currentCost: child.currentCost,
         systemKeyCost: child.systemKeyCost
@@ -799,7 +796,8 @@ export class SystemToolRepo {
     );
 
     return versions.map((item) => ({
-      version: item.version
+      version: item.version,
+      versionDescription: item.versionDescription
     }));
   };
 

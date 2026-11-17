@@ -6,7 +6,8 @@ vi.mock('@fastgpt/service/support/permission/teamLimit', () => ({
 
 const runCodeMock = vi.fn();
 vi.mock('@fastgpt/service/thirdProvider/codeSandbox', () => ({
-  codeSandbox: { runCode: (...args: any[]) => runCodeMock(...args) }
+  codeSandbox: { runCode: (...args: any[]) => runCodeMock(...args) },
+  isCodeSandboxConfigured: () => true
 }));
 
 import { runWorkflow } from '@fastgpt/service/core/workflow/dispatch';
@@ -222,7 +223,6 @@ describe('newly connectable nodes as tools', () => {
               avatar: '',
               flowNodeType: FlowNodeTypeEnum.code,
               intro: '',
-              toolDescription: 'run code',
               inputs: codeNode.inputs
             } as any
           ],

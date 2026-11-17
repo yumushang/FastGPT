@@ -78,7 +78,7 @@ export const getWorkflowDebugRuntimeContext = ({
 }) => ({
   sourceTarget: { sourceType: ChatSourceTypeEnum.app, sourceId: appId },
   chatId: chatId ?? '',
-  outLinkAuthData: {},
+  outLinkAuthData: undefined,
   fileUploadMode: 'draft' as const
 });
 
@@ -129,6 +129,14 @@ export const createNextWorkflowDebugData = ({
   usageId: response.usageId,
   chatId: debugData.chatId
 });
+
+/** 根据节点自身的调试响应判断展示状态；已捕获的错误仍是该节点的执行失败。 */
+export const getWorkflowDebugNodeStatus = (
+  result: WorkflowDebugResponse['nodeResponses'][string]
+): 'success' | 'failed' | 'skipped' => {
+  if (result.type === 'skip') return 'skipped';
+  return result.response?.error || result.response?.errorText ? 'failed' : 'success';
+};
 
 export const WorkflowDebugContext = createContext<WorkflowDebugContextValue>({
   onNextNodeDebug: function (_debugData: DebugDataType): Promise<void> {
@@ -265,7 +273,7 @@ export const WorkflowDebugProvider = ({ children }: { children: React.ReactNode 
               data: {
                 ...node.data,
                 debugResult: {
-                  status: result.type === 'run' ? 'success' : 'skipped',
+                  status: getWorkflowDebugNodeStatus(result),
                   response: result.response,
                   showResult: true,
                   isExpired: false,

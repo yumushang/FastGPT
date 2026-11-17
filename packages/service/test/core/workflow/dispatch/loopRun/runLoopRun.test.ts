@@ -1,27 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createDefaultInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 import {
   FlowNodeOutputTypeEnum,
   FlowNodeTypeEnum
 } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import { LoopRunModeEnum } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRun';
+import { LoopRunModeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import type { RuntimeNodeItemType } from '@fastgpt/global/core/workflow/runtime/type';
 import type { WorkflowVariableStateLike } from '@fastgpt/service/core/workflow/types/runtime';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
 import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
 import type { DispatchFlowResponse } from '@fastgpt/service/core/workflow/dispatch/type';
-import { summarizeRuntimeNodeResponses } from '@fastgpt/service/core/workflow/dispatch/utils';
+import {
+  createNodeSummary,
+  createWorkflowRuntimeSummary,
+  summarizeRuntimeNodeResponses
+} from '@fastgpt/service/core/workflow/dispatch/utils/summary';
 
 const runWorkflowMock = vi.fn();
 
 vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
   runWorkflow: (args: any) => runWorkflowMock(args)
-}));
-
-// Shrink max iterations so overflow tests run fast.
-vi.mock('@fastgpt/service/env', () => ({
-  serviceEnv: { WORKFLOW_MAX_LOOP_TIMES: 5 }
 }));
 
 // Import after mocks so runLoopRun pulls the mocked modules.
@@ -147,7 +147,7 @@ const makeDispatchFlowResponse = (
     [DispatchNodeResponseKeyEnum.assistantResponses]: [],
     [DispatchNodeResponseKeyEnum.runTimes]: 1,
     [DispatchNodeResponseKeyEnum.newVariables]: {},
-    runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, nodeResponses),
+    workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, nodeResponses),
     durationSeconds: 0,
     ...rest
   } as DispatchFlowResponse;
@@ -198,6 +198,7 @@ const makeProps = (
     runtimeEdges: [],
     variableState: makeVariableState(),
     usagePush: vi.fn(),
+    nodeSummary: createNodeSummary(),
     lastInteractive: undefined,
     checkIsStopping: () => false
   } as any;
@@ -208,6 +209,12 @@ const makeProps = (
 describe('runLoopRun (integration with mocked runWorkflow)', () => {
   beforeEach(() => {
     runWorkflowMock.mockReset();
+    global.systemInstanceConfig = createDefaultInstanceConfig();
+    // 缩小实例配置中的迭代上限，保留溢出边界覆盖并避免依赖已退役的 ENV。
+    Object.assign(global.systemInstanceConfig.performance.workflow, {
+      maxLoopTimes: 5,
+      parallelMaxConcurrency: 5
+    });
   });
 
   afterEach(() => {
@@ -225,9 +232,16 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
             .find((n: any) => n.nodeId === 'startNode')
             ?.inputs.find((i: any) => i.key === NodeInputKeyEnum.nestedStartInput)?.value
         }`;
+      const nodeResponses = [makeResponseItem('startNode'), makeResponseItem('chatNode')];
       return Promise.resolve(
         makeDispatchFlowResponse({
-          nodeResponses: [makeResponseItem('startNode'), makeResponseItem('chatNode')]
+          workflowRuntimeSummary: {
+            ...createWorkflowRuntimeSummary(),
+            ...summarizeRuntimeNodeResponses(undefined, nodeResponses),
+            llmInputTokens: 5,
+            llmOutputTokens: 2
+          },
+          nodeResponses
         })
       );
     });
@@ -248,6 +262,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: undefined,
       checkIsStopping: () => false
     } as any;
@@ -255,6 +270,10 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     const result: any = await dispatchLoopRun(props);
 
     expect(runWorkflowMock).toHaveBeenCalledTimes(3);
+    expect(props.nodeSummary).toMatchObject({
+      llmInputTokens: 15,
+      llmOutputTokens: 6
+    });
     const nodeResponse = result[DispatchNodeResponseKeyEnum.nodeResponse];
     expect(nodeResponse.loopRunIterations).toBe(3);
     expect(nodeResponse.loopRunHistory).toHaveLength(3);
@@ -270,7 +289,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       return Promise.resolve(
         makeDispatchFlowResponse({
           [DispatchNodeResponseKeyEnum.newVariables]: {
-            runtimeOnly: { value: '', secret: 'encrypted-store-value' }
+            runtimeOnly: { secret: 'encrypted-store-value' }
           }
         })
       );
@@ -538,6 +557,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: undefined,
       checkIsStopping: () => false
     } as any;
@@ -600,14 +620,13 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     );
 
     const result: any = await dispatchLoopRun(props);
+
     expect(iter).toBe(3);
     expect(result[DispatchNodeResponseKeyEnum.nodeResponse].loopRunIterations).toBe(3);
   });
 
   it('conditional mode - 子节点 catchError=false 出错 → 当轮 break, 后续迭代不执行', async () => {
-    // 对齐 dispatch/index.ts 错误归一化后的 nodeResponse summary 形状：
-    // dispatcher 返回 `{error}` + catchError=false 会把 error 写回 nodeResponse，
-    // 所以 nodeResponse 项上 `r.error` 必定可见。用户场景：code 节点 iter=2 throw。
+    // 子流程通过顶层 error 透传原始异常，nodeResponse 仅保留展示文本。
     let iter = 0;
     runWorkflowMock.mockImplementation(() => {
       iter++;
@@ -645,6 +664,65 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     expect(result.error?.[NodeOutputKeyEnum.errorText]).toBe('111');
   });
 
+  it('publishes only display text on the failed iteration wrapper', async () => {
+    const nodeResponseSink = createNodeResponseSinkMock();
+    runWorkflowMock.mockResolvedValue(
+      makeDispatchFlowResponse({
+        nodeResponses: [makeResponseItem('startNode', { error: 'Invalid MCP URL' })],
+        workflowRuntimeSummary: {
+          ...createWorkflowRuntimeSummary(),
+          errorCount: 1,
+          errorText: 'Invalid MCP URL'
+        }
+      })
+    );
+    const props: any = makeProps({
+      [NodeInputKeyEnum.loopRunMode]: LoopRunModeEnum.array,
+      [NodeInputKeyEnum.loopRunInputArray]: ['first']
+    });
+    props.nodeResponseSink = nodeResponseSink;
+
+    await dispatchLoopRun(props);
+
+    const publishedResponses = nodeResponseSink.publish.mock.calls.flatMap(
+      ([items]: [{ response: any }[]]) => items.map((item) => item.response)
+    );
+    expect(publishedResponses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          error: 'Invalid MCP URL'
+        })
+      ])
+    );
+  });
+
+  it('stops on a current child business failure without reconstructing an exception', async () => {
+    runWorkflowMock.mockResolvedValue(
+      makeDispatchFlowResponse({
+        nodeResponses: [makeResponseItem('startNode', { error: 'database unavailable' })],
+        workflowRuntimeSummary: {
+          ...createWorkflowRuntimeSummary(),
+          errorText: 'database unavailable',
+          errorCount: 2
+        }
+      })
+    );
+
+    const result: any = await dispatchLoopRun(
+      makeProps({
+        [NodeInputKeyEnum.loopRunMode]: LoopRunModeEnum.array,
+        [NodeInputKeyEnum.loopRunInputArray]: ['first', 'second']
+      })
+    );
+
+    expect(Object.hasOwn(result, 'rawError')).toBe(false);
+    expect(result.error?.system_error_text).toBe('database unavailable');
+    expect(result.responseData.loopRunHistory).toMatchObject([
+      { iteration: 1, success: false, error: 'database unavailable' }
+    ]);
+    expect(runWorkflowMock).toHaveBeenCalledOnce();
+  });
+
   it('conditional mode - 无 break 节点 → precheck 返回 errorText 并不执行任何迭代', async () => {
     const props = makeProps({ [NodeInputKeyEnum.loopRunMode]: LoopRunModeEnum.conditional });
     const result: any = await dispatchLoopRun(props);
@@ -676,6 +754,8 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     expect(result.error?.[NodeOutputKeyEnum.errorText]).toBe(
       'workflow:loop_run_max_iterations_exceeded'
     );
+    expect(result.rawError).toBeInstanceOf(Error);
+    expect(result.rawError.message).toBe(result.error?.[NodeOutputKeyEnum.errorText]);
     const nodeResponse = result[DispatchNodeResponseKeyEnum.nodeResponse];
     expect(nodeResponse.loopRunIterations).toBe(5);
     expect(nodeResponse.loopRunHistory).toHaveLength(5);
@@ -718,6 +798,44 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     expect(nodeResponse.childTotalPoints).toBeUndefined();
   });
 
+  it.each([false, true])(
+    'resume error state is independent from pre-interrupt errors: current failure=%s',
+    async (failsNow) => {
+      const error = new Error('current system failure');
+      runWorkflowMock.mockResolvedValueOnce(
+        makeDispatchFlowResponse({
+          nodeResponses: [makeResponseItem('chatNode', failsNow ? { error: error.message } : {})]
+        })
+      );
+      const props = makeProps({
+        [NodeInputKeyEnum.loopRunMode]: LoopRunModeEnum.array,
+        [NodeInputKeyEnum.loopRunInputArray]: ['a'],
+        [NodeInputKeyEnum.childrenNodeIdList]: ['startNode', 'chatNode']
+      });
+      props.lastInteractive = {
+        type: 'loopRunInteractive',
+        params: {
+          loopHistory: [],
+          iteration: 1,
+          childrenResponse: { entryNodeIds: ['chatNode'] },
+          pendingIterationSummary: {
+            ...createWorkflowRuntimeSummary(),
+            finishedNodeIds: ['startNode'],
+            errorText: 'previous round failure',
+            errorCount: 1,
+            llmInputTokens: 10
+          }
+        }
+      };
+      const result = await dispatchLoopRun(props);
+      const history = result.responseData?.loopRunHistory;
+      expect(history?.[0].success).toBe(!failsNow);
+      expect(history?.[0].error).toBe(failsNow ? error.message : undefined);
+      expect(Object.hasOwn(result, 'rawError')).toBe(false);
+      expect(result.error?.system_error_text).toBe(failsNow ? error.message : undefined);
+    }
+  );
+
   it('lastInteractive 恢复 → 从中断轮次续跑, 保留已累积 loopHistory', async () => {
     // Resume at iteration 2 (0-based index 1). Prior history has 1 success entry.
     // The mocked runWorkflow returns success with break for iteration 2.
@@ -748,6 +866,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: {
         type: 'loopRunInteractive',
         params: {
@@ -774,6 +893,14 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     runWorkflowMock.mockImplementationOnce(() =>
       Promise.resolve(
         makeDispatchFlowResponse({
+          workflowRuntimeSummary: {
+            ...createWorkflowRuntimeSummary(),
+            childResponseCount: 2,
+            childTotalPoints: 9,
+            totalPoints: 5,
+            llmInputTokens: 7,
+            llmOutputTokens: 3
+          },
           nodeResponses: [
             makeResponseItem('userSelectNode', { totalPoints: 2 }),
             makeResponseItem('chatNode', { totalPoints: 3, childTotalPoints: 4 })
@@ -791,6 +918,8 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     const preInterruptSummary = summarizeRuntimeNodeResponses(undefined, [
       makeResponseItem('startNode', { totalPoints: 1 })
     ]);
+    preInterruptSummary.llmInputTokens = 100;
+    preInterruptSummary.llmOutputTokens = 50;
     const runtimeNodes = makeRuntimeNodes();
     const node = runtimeNodes[0];
     const props = {
@@ -805,6 +934,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: {
         type: 'loopRunInteractive',
         params: {
@@ -822,15 +952,20 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     const result: any = await dispatchLoopRun(props);
     const nodeResponse = result[DispatchNodeResponseKeyEnum.nodeResponse];
 
-    expect(nodeResponse.totalPoints).toBe(5);
+    expect(props.nodeSummary).toMatchObject({
+      llmInputTokens: 7,
+      llmOutputTokens: 3
+    });
+    expect(nodeResponse.totalPoints).toBeUndefined();
+    expect(props.nodeSummary.totalPoints).toBe(5);
     expect(nodeResponse.childTotalPoints).toBeUndefined();
     expect(nodeResponse.childResponseCount).toBe(3);
     expect(nodeResponseSink.publish).toHaveBeenCalledTimes(1);
     expect(nodeResponseSink.publish.mock.calls[0][0][0].response).toMatchObject({
       id: 'loop-parent-response:iter:1',
-      totalPoints: 5,
       childResponseCount: 2
     });
+    expect(nodeResponseSink.publish.mock.calls[0][0][0].response.totalPoints).toBeUndefined();
   });
 
   it('lastInteractive 恢复后续跑多轮 → 恢复后非终止轮不应再携带 lastInteractive', async () => {
@@ -864,6 +999,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: {
         type: 'loopRunInteractive',
         params: {
@@ -950,6 +1086,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       lastInteractive: undefined,
       checkIsStopping: () => false
     } as any;
@@ -1026,7 +1163,8 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     expect(nodeResponseSink.publish.mock.calls[0][0][0].response.childTotalPoints).toBeUndefined();
     expect(nodeResponseSink.publish.mock.calls[0][0][0].response.childrenResponses).toBeUndefined();
     expect(nodeResponse.loopRunDetail).toBeUndefined();
-    expect(nodeResponse.totalPoints).toBe(3);
+    expect(nodeResponse.totalPoints).toBeUndefined();
+    expect(props.nodeSummary.totalPoints).toBe(3);
     expect(nodeResponse.childTotalPoints).toBeUndefined();
   });
 
@@ -1192,6 +1330,7 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
       runtimeEdges: [],
       variableState: makeVariableState(),
       usagePush: vi.fn(),
+      nodeSummary: createNodeSummary(),
       checkIsStopping: () => false,
       lastInteractive: {
         type: 'loopRunInteractive',
@@ -1207,5 +1346,69 @@ describe('runLoopRun (integration with mocked runWorkflow)', () => {
     expect(runWorkflowMock).toHaveBeenCalledTimes(2);
     expect(chatEntryPerCall[0]).toBe(true);
     expect(chatEntryPerCall[1]).toBe(false);
+  });
+
+  it('每轮成功迭代将 system_memories 累积到下一轮，失败轮不提交，最终透出累积 delta', async () => {
+    let iter = 0;
+    const seenMemoriesPerIter: unknown[] = [];
+
+    runWorkflowMock.mockImplementation((args: any) => {
+      iter++;
+      const key = args.memoryState.getNodeMemoryKey({
+        runningAppInfo: { sourceType: 'app', sourceId: 'app_1' },
+        nodeId: 'extract1'
+      });
+      seenMemoriesPerIter.push(
+        args.memoryState.readNodeMemory({
+          runningAppInfo: { sourceType: 'app', sourceId: 'app_1' },
+          nodeId: 'extract1'
+        })
+      );
+
+      if (iter === 1) {
+        return Promise.resolve(
+          makeDispatchFlowResponse({
+            [DispatchNodeResponseKeyEnum.memories]: {
+              [key]: { step: 1 }
+            },
+            nodeResponses: [makeResponseItem('startNode'), makeResponseItem('chatNode')]
+          })
+        );
+      }
+
+      if (iter === 2) {
+        return Promise.resolve(
+          makeDispatchFlowResponse({
+            [DispatchNodeResponseKeyEnum.memories]: {
+              [key]: { step: 2 }
+            },
+            nodeResponses: [makeResponseItem('startNode'), makeResponseItem('chatNode')]
+          })
+        );
+      }
+
+      // iter === 3 fails: its memory write must be discarded
+      return Promise.resolve(
+        makeDispatchFlowResponse({
+          [DispatchNodeResponseKeyEnum.memories]: {
+            [key]: { step: 999 }
+          },
+          nodeResponses: [makeResponseItem('startNode', { error: 'boom' })]
+        })
+      );
+    });
+
+    const props = makeProps({
+      [NodeInputKeyEnum.loopRunMode]: LoopRunModeEnum.array,
+      [NodeInputKeyEnum.loopRunInputArray]: ['a', 'b', 'c'],
+      [NodeInputKeyEnum.childrenNodeIdList]: ['startNode', 'chatNode']
+    });
+
+    const result: any = await dispatchLoopRun(props);
+
+    expect(seenMemoriesPerIter).toEqual([undefined, { step: 1 }, { step: 2 }]);
+    expect(result[DispatchNodeResponseKeyEnum.memories]).toEqual({
+      'app:app_1:extract1': { step: 2 }
+    });
   });
 });

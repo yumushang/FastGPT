@@ -1,5 +1,6 @@
 import './mocks';
-import { existsSync, readFileSync } from 'fs';
+import { getSystemConfigRuntimeState } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
+import { resolveSystemInstanceConfig } from '@fastgpt/global/common/system/config/schema';
 
 import { connectMongo } from '@fastgpt/service/common/mongo/init';
 import { initGlobalVariables } from '@/service/common/system';
@@ -33,23 +34,12 @@ beforeAll(async () => {
   await connectMongo({ db: connectionLogMongo, url: inject('MONGODB_URI') });
 
   initGlobalVariables();
-  global.systemEnv = {} as any;
+  global.agentUserTmbIds = new Set();
+  global.systemInstanceConfig = resolveSystemInstanceConfig();
+  getSystemConfigRuntimeState().frontendContext = {};
 
-  // await getInitConfig();
-  if (existsSync('projects/app/.env.local')) {
-    const str = readFileSync('projects/app/.env.local', 'utf-8');
-    const lines = str.split('\n');
-    const systemEnv: Record<string, string> = {};
-    for (const line of lines) {
-      const [key, value] = line.split('=');
-      if (key && value && !key.startsWith('#')) {
-        systemEnv[key] = value;
-      }
-    }
-    global.systemEnv.oneapiUrl = systemEnv['OPENAI_BASE_URL'];
-    global.systemEnv.chatApiKey = systemEnv['CHAT_API_KEY'];
-  }
   global.feConfigs = {
+    limit: { uploadFileMaxAmount: 1000, uploadFileMaxSize: 1000 },
     isPlus: false
   } as any;
   await setupModels();
@@ -63,6 +53,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  global.agentUserTmbIds = global.agentUserTmbIds ?? new Set();
   // await connectMongo({ db: connectionMongo, url: inject('MONGODB_URI') });
   // await connectMongo({ db: connectionLogMongo, url: inject('MONGODB_URI') });
 

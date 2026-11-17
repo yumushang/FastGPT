@@ -1,10 +1,18 @@
 import { i18nT } from '../../common/i18n/utils';
+import type { I18nStringType } from '../../common/i18n/type';
 import type { CompletionUsage, ReasoningEffort } from './llm/type';
-import type {
-  EmbeddingSystemModelDataType,
-  LLMSystemModelDataType,
-  STTSystemModelDataType
-} from './model.schema';
+import type { EmbeddingModelDataType, LLMModelDataType, STTModelDataType } from './model/schema';
+
+/** 工具参数可能被输出上限截断时，回填给模型的未执行说明及重试指引。 */
+export const LLM_TOOL_CALL_ARGUMENTS_TRUNCATED_RESPONSE: I18nStringType = {
+  en: 'Tool not executed: the model reached its output token limit, so the tool arguments may be incomplete. No tools from this response were executed. Retry with shorter, complete arguments or split the task into smaller steps.',
+  'zh-CN':
+    '工具未执行：模型达到输出 token 上限，工具参数可能不完整。本次响应中的工具调用均未执行。请使用更短且完整的参数重试，或将任务拆分为更小的步骤。',
+  'zh-Hant':
+    '工具未執行：模型達到輸出 token 上限，工具參數可能不完整。本次回應中的工具呼叫均未執行。請使用更短且完整的參數重試，或將任務拆分為更小的步驟。',
+  'ko-KR':
+    '도구가 실행되지 않았습니다. 모델이 출력 토큰 한도에 도달하여 도구 인수가 불완전할 수 있습니다. 이 응답의 도구 호출은 모두 실행되지 않았습니다. 더 짧고 완전한 인수로 다시 시도하거나 작업을 더 작은 단계로 나누세요.'
+};
 
 export const getLLMDefaultUsage = (): CompletionUsage => {
   return {
@@ -28,7 +36,7 @@ export enum ModelScopeEnum {
   team = 'team'
 }
 
-export const defaultQAModels: LLMSystemModelDataType[] = [
+export const defaultQAModels: LLMModelDataType[] = [
   {
     type: ModelTypeEnum.llm,
     provider: 'OpenAI',
@@ -36,8 +44,7 @@ export const defaultQAModels: LLMSystemModelDataType[] = [
     name: 'gpt-5',
     modelId: '',
     scope: ModelScopeEnum.system,
-    isCustom: false,
-    charsPointsPrice: 0,
+    pricing: { tiers: [] },
     config: {
       maxContext: 16000,
       maxResponse: 16000,
@@ -53,7 +60,7 @@ export const defaultQAModels: LLMSystemModelDataType[] = [
   }
 ];
 
-export const defaultVectorModels: EmbeddingSystemModelDataType[] = [
+export const defaultVectorModels: EmbeddingModelDataType[] = [
   {
     type: ModelTypeEnum.embedding,
     provider: 'OpenAI',
@@ -61,8 +68,7 @@ export const defaultVectorModels: EmbeddingSystemModelDataType[] = [
     name: 'Embedding-2',
     modelId: '',
     scope: ModelScopeEnum.system,
-    isCustom: false,
-    charsPointsPrice: 0,
+    pricing: { unitPrice: 0 },
     config: {
       defaultToken: 500,
       maxToken: 3000,
@@ -71,16 +77,15 @@ export const defaultVectorModels: EmbeddingSystemModelDataType[] = [
   }
 ];
 
-export const defaultSTTModels: STTSystemModelDataType[] = [
+export const defaultSTTModels: STTModelDataType[] = [
   {
     type: ModelTypeEnum.stt,
     provider: 'OpenAI',
-    model: 'whisper-1',
-    name: 'whisper-1',
+    model: 'gpt-transcribe',
+    name: 'gpt-transcribe',
     modelId: '',
     scope: ModelScopeEnum.system,
-    isCustom: false,
-    charsPointsPrice: 0,
+    pricing: { type: 'duration', unitPrice: 0 },
     config: {}
   }
 ];

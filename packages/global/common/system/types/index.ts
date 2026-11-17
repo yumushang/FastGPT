@@ -1,235 +1,478 @@
-import type { SubPlanType } from '../../../support/wallet/sub/type';
-import type { AccountCancellationVerificationCapabilities } from '../../../support/user/account/cancellation/type';
+import { SubPlanSchema } from '../../../support/wallet/sub/type';
+import { z } from 'zod';
+import { BoolSchema, IntSchema, NumSchema, optionalNullToUndefined } from '../../zod';
+import type {
+  LicensePayload,
+  LicenseSchemaVersionType,
+  LicenseType,
+  LicenseFunctions,
+  LicenseFunctionKey,
+  LicenseLimits
+} from '../license/schema';
 
-export type NavbarItemType = {
-  id: string;
-  name: string;
-  avatar: string;
-  url: string;
-  isActive: boolean;
+export type {
+  LicensePayload,
+  LicenseSchemaVersionType,
+  LicenseType,
+  LicenseFunctions,
+  LicenseFunctionKey,
+  LicenseLimits
 };
+export {
+  licenseFunctionKeys,
+  licenseLimitsKeys,
+  LicensePayloadSchema,
+  StrictLicensePayloadSchema,
+  LicenseFunctionsSchema,
+  LicenseLimitsSchema,
+  LicenseSchemaVersionSchema,
+  LicenseTypeSchema
+} from '../license/schema';
 
-export type ExternalProviderWorkflowVarType = {
-  name: string;
-  key: string;
-  intro: string;
-  isOpen: boolean;
-  url?: string;
-};
+export const NavbarItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  avatar: z.string(),
+  url: z.string(),
+  isActive: z.boolean()
+});
+export type NavbarItemType = z.infer<typeof NavbarItemSchema>;
 
-export type FastGPTRegisterMethodType = 'email' | 'phone';
-export type FastGPTRegisterMethodCompatType = FastGPTRegisterMethodType | 'sync';
-export type FastGPTTeamModeType = 'multi' | 'single' | 'sync';
+export const ExternalProviderWorkflowVarSchema = z.object({
+  name: z.string(),
+  key: z.string(),
+  intro: z.string(),
+  isOpen: z.boolean(),
+  url: z.string().optional()
+});
+export type ExternalProviderWorkflowVarType = z.infer<typeof ExternalProviderWorkflowVarSchema>;
 
-/* fastgpt main */
-export type FastGPTConfigFileType = {
-  feConfigs: FastGPTFeConfigsType;
-  systemEnv: SystemEnvType;
-  subPlans?: SubPlanType;
-};
+export const FastGPTRegisterMethodSchema = z.enum(['email', 'phone']);
+export type FastGPTRegisterMethodType = z.infer<typeof FastGPTRegisterMethodSchema>;
 
-export type FastGPTFeConfigsType = {
-  show_workorder?: boolean;
-  show_emptyChat?: boolean;
-  isPlus?: boolean;
-  hideChatCopyrightSetting?: boolean;
+export const FastGPTRegisterMethodCompatSchema = z.enum(['email', 'phone', 'sync']);
+export type FastGPTRegisterMethodCompatType = z.infer<typeof FastGPTRegisterMethodCompatSchema>;
+
+export const FastGPTTeamModeSchema = z.enum(['multi', 'single', 'sync']);
+export type FastGPTTeamModeType = z.infer<typeof FastGPTTeamModeSchema>;
+
+export const FastGPTFeConfigsSchema = z.looseObject({
   /**
-   * 用户自助注册方式。兼容期允许读取旧配置中的 sync，但新配置不再写入 sync。
+   * 同义词能力的前端投影，不是第二个服务端开关。
+   * 当前服务端以 ENV `DATASET_SYNONYM_ENABLED` 为权威，默认关闭，不从实例配置读取；
+   * 本仓库在 `initSystemConfig()` 中将该 ENV 值投影到此字段。
+   * 引用模板中的 `{{synonymMappings}}` 是否存在，由模板内容决定。
+   * 必须声明：`getInitData` 用 `.strip()` 的客户端 Schema 收口，未声明字段会被丢弃。
    */
-  register_method?: FastGPTRegisterMethodCompatType[];
-  teamMode?: FastGPTTeamModeType;
-  login_method?: FastGPTRegisterMethodType[]; // Attention: login method is different with oauth
-  find_password_method?: FastGPTRegisterMethodType[];
-  bind_notification_method?: FastGPTRegisterMethodType[];
-  /**
-   * @deprecated MCP SSE 代理地址已迁移到环境变量 SSE_MCP_SERVER_PROXY_ENDPOINT。
-   * 运行时配置以环境变量为准，admin 不再支持写入该字段。
-   */
-  mcpServerProxyEndpoint?: string;
+  datasetSynonymEnabled: z
+    .boolean()
+    .optional()
+    .meta({ description: '检索服务是否启用同义词映射能力' }),
+  codeSandboxEnabled: z.boolean().optional().meta({ description: '代码沙箱已启用且连接配置完整' }),
+  show_workorder: z.boolean().optional().meta({ description: '是否展示工单入口' }),
+  isPlus: z
+    .boolean()
+    .optional()
+    .meta({ description: '商业版授权是否有效；未激活或已到期时为 false' }),
+  isProService: z.boolean().optional().meta({
+    description:
+      '是否部署了商业版（pro）服务（配置了 PRO_URL）。与 isPlus 区别：本字段表示服务是否接入（用于区分商业版部署与开源社区版部署），而 isPlus 表示授权是否有效。'
+  }),
+  hideChatCopyrightSetting: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否隐藏对话版权自定义设置' }),
+  register_method: z.array(FastGPTRegisterMethodCompatSchema).optional().meta({
+    description: '用户自助注册方式列表（支持邮箱、手机号，兼容历史 sync 配置）'
+  }),
+  enableSaasAdminConfig: z.boolean().optional().meta({
+    description: '是否在管理端展示 SaaS 专用配置项，默认为 false（私有化部署隐藏）'
+  }),
+  teamMode: FastGPTTeamModeSchema.optional().meta({
+    description: '团队模式（单团队/多团队/账号同步）'
+  }),
+  login_method: z
+    .array(FastGPTRegisterMethodSchema)
+    .optional()
+    .meta({ description: '支持的账号登录方式列表（邮箱、手机号）' }),
+  find_password_method: z
+    .array(FastGPTRegisterMethodSchema)
+    .optional()
+    .meta({ description: '找回密码验证方式列表' }),
+  bind_notification_method: z
+    .array(FastGPTRegisterMethodSchema)
+    .optional()
+    .meta({ description: '绑定通知联系方式列表' }),
+  mcpServerProxyEndpoint: z.string().optional().meta({
+    description: 'MCP SSE 代理地址，运行时以子服务配置 mcp.sseProxyUrl 为准'
+  }),
 
-  chineseRedirectUrl?: string;
-  botIframeUrl?: string;
+  chineseRedirectUrl: z.string().optional().meta({ description: '中国大陆地区访问重定向跳转地址' }),
+  botIframeUrl: z.string().optional().meta({ description: '嵌入式对话助手 iframe 页面地址' }),
 
-  show_appStore?: boolean;
-  show_git?: boolean;
-  show_pay?: boolean;
-  show_openai_account?: boolean;
-  show_compliance_copywriting?: boolean;
-  show_aiproxy?: boolean;
-  show_coupon?: boolean;
-  show_discount_coupon?: boolean;
-  show_enterprise_auth?: boolean;
-  showWecomConfig?: boolean;
-  wecomLoginAutoRedirect?: boolean;
-  accountCancellation?: {
-    enabled?: boolean;
-  };
+  show_git: z.boolean().optional().meta({ description: '是否展示 GitHub 仓库入口及 Star 信息' }),
+  show_pay: z.boolean().optional().meta({ description: '是否展示在线充值/支付相关入口' }),
+  show_openai_account: z
+    .boolean()
+    .optional()
+    .meta({ deprecated: true, description: '已弃用；兼容既有个人/团队自定义 OpenAI 账号配置入口' }),
+  show_compliance_copywriting: z
+    .boolean()
+    .optional()
+    .meta({ description: '前端是否展示合规提示文案' }),
+  show_coupon: z.boolean().optional().meta({ description: '是否展示兑换码入口' }),
+  show_discount_coupon: z.boolean().optional().meta({ description: '是否展示优惠券/折扣券入口' }),
+  show_enterprise_auth: z.boolean().optional().meta({ description: '是否展示企业实名认证入口' }),
+  showWecomConfig: z.boolean().optional().meta({ description: '是否展示企业微信集成配置' }),
+  login2faEnabled: z.boolean().optional().meta({
+    description:
+      '登录二次验证展示兼容字段；实际登录策略由主服务实时向 Pro 读取 LOGIN_2FA_ENABLED，不读取此值'
+  }),
+  wecomLoginAutoRedirect: z
+    .boolean()
+    .optional()
+    .meta({ description: '在企业微信内置浏览器中访问时是否自动重定向到企微 OAuth 登录' }),
+  accountCancellation: z
+    .object({
+      enabled: z.boolean().optional().meta({ description: '是否允许用户自助注销账号' })
+    })
+    .optional()
+    .meta({ description: '账号注销配置' }),
   /** 仅暴露注销验证的布尔能力，不包含任何 Provider 密钥。 */
-  accountVerification?: {
-    accountCancellation?: AccountCancellationVerificationCapabilities;
-  };
+  accountVerification: z
+    .object({
+      accountCancellation: z
+        .object({
+          emailCode: z.boolean().optional().meta({ description: '注销时是否支持邮箱验证码校验' }),
+          phoneCode: z
+            .boolean()
+            .optional()
+            .meta({ description: '注销时是否支持手机短信验证码校验' }),
+          accountCancellation: z
+            .boolean()
+            .optional()
+            .meta({ description: '是否开启注销二次确认验证' }),
+          wechat: z.boolean().optional().meta({ description: '注销时是否支持微信扫码验证' }),
+          oauth: z
+            .record(z.string(), z.boolean())
+            .optional()
+            .meta({ description: '注销时支持的第三方 OAuth 验证渠道' })
+        })
+        .optional()
+    })
+    .optional()
+    .meta({ description: '注销账号等敏感操作的可用验证方式能力（仅暴露开关，不含密钥）' }),
 
-  show_dataset_feishu?: boolean;
-  show_dataset_yuque?: boolean;
-  show_dataset_dingtalk?: boolean;
-  show_publish_feishu?: boolean;
-  show_publish_dingtalk?: boolean;
-  show_publish_wecom?: boolean;
-  show_publish_offiaccount?: boolean;
-  show_publish_wechat?: boolean;
-  show_agent_sandbox?: boolean;
-  pluginRemoteDebug?: boolean;
-  enable_team_plugin_upload?: boolean;
+  show_dataset_feishu: z
+    .boolean()
+    .optional()
+    .meta({ description: '创建知识库时是否展示飞书知识库导入选项' }),
+  show_dataset_yuque: z
+    .boolean()
+    .optional()
+    .meta({ description: '创建知识库时是否展示语雀知识库导入选项' }),
+  show_dataset_dingtalk: z
+    .boolean()
+    .optional()
+    .meta({ description: '创建知识库时是否展示钉钉知识库导入选项' }),
+  show_publish_feishu: z
+    .boolean()
+    .optional()
+    .meta({ description: '应用发布渠道中是否展示飞书机器人' }),
+  show_publish_dingtalk: z
+    .boolean()
+    .optional()
+    .meta({ description: '应用发布渠道中是否展示钉钉机器人' }),
+  show_publish_wecom: z
+    .boolean()
+    .optional()
+    .meta({ description: '应用发布渠道中是否展示企业微信应用' }),
+  show_publish_offiaccount: z
+    .boolean()
+    .optional()
+    .meta({ description: '应用发布渠道中是否展示微信公众号' }),
+  show_publish_wechat: z
+    .boolean()
+    .optional()
+    .meta({ description: '应用发布渠道中是否展示微信个人号客服' }),
+  show_outlink_brand: BoolSchema.optional().meta({
+    description: '是否展示免登录品牌标识，由服务端环境变量派生',
+    example: false
+  }),
+  show_agent_sandbox: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否开启 Agent 代码沙箱执行环境' }),
+  show_agent_sandbox_free_tip: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否展示虚拟机限时免费标签' }),
+  pluginRemoteDebug: z.boolean().optional().meta({ description: '是否允许团队远程调试自定义插件' }),
+  enable_team_plugin_upload: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否允许团队成员上传自定义插件' }),
+  enable_team_model: z.boolean().optional().meta({ description: '是否启用团队模型功能' }),
 
-  show_dataset_enhance?: boolean;
-  show_batch_eval?: boolean;
+  show_dataset_enhance: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否开启数据集增强处理能力（如文本清洗、改写）' }),
 
-  concatMd?: string;
-  docUrl?: string;
-  loginGuideDocUrl?: string;
-  openAPIDocUrl?: string;
-  appTemplateCourse?: string;
-  marketplaceUrl?: string;
-  customApiDomain?: string;
-  customSharePageDomain?: string;
+  concatMd: z
+    .string()
+    .optional()
+    .meta({ description: '自定义展示的 Markdown 文案（如开源地址、加入交流群说明）' }),
+  docUrl: z.string().optional().meta({ description: '官方使用文档地址' }),
+  loginGuideDocUrl: z.string().optional().meta({ description: '登录引导帮助文档地址' }),
+  appTemplateCourse: z.string().optional().meta({ description: '应用模板使用教程链接' }),
+  marketplaceUrl: z.string().optional().meta({ description: '插件市场与模板市场服务地址' }),
+  disableMarketplace: BoolSchema.optional().meta({ description: '是否隐藏插件市场安装入口' }),
+  customApiDomain: z.string().optional().meta({ description: '对外开放的自定义 API 域名' }),
+  customSharePageDomain: z
+    .string()
+    .optional()
+    .meta({ description: '分享免登对话页面的自定义独立域名' }),
 
-  systemTitle?: string;
-  scripts?: { [key: string]: string }[];
-  favicon?: string;
+  systemTitle: z.string().optional().meta({ description: '系统平台标题名称' }),
+  systemDescription: z.string().optional().meta({ description: '页面 Meta 描述' }),
+  scripts: z
+    .array(z.record(z.string(), z.string()))
+    .optional()
+    .meta({ description: '前端注入的外部第三方脚本列表' }),
+  favicon: z.string().optional().meta({ description: '站点浏览器 Favicon 图标地址' }),
 
-  sso?: {
-    icon?: string;
-    title?: string;
-    url?: string;
-    autoLogin?: boolean;
-  };
-  oauth?: {
-    github?: string;
-    google?: string;
-    wechat?: string;
-    microsoft?: {
-      clientId?: string;
-      tenantId?: string;
-      customButton?: string;
-    };
-    wecom?: boolean;
-  };
-  limit?: {
-    exportDatasetLimitMinutes?: number;
-    websiteSyncLimitMinuted?: number;
-    agentSandboxMaxEditDebug?: number;
-    agentSandboxMaxSessionRuntime?: number;
-    agentSandboxArchiveMaxBytes?: number;
-    skillSandboxMaxBytes?: number;
-    agentSandboxMaxFileBytes?: number;
-    workflowParallelRunMaxConcurrency?: number;
-    maxFolderDepth?: number;
-  };
-
-  uploadFileMaxAmount: number;
-  uploadFileMaxSize: number; // MB
-  evalFileMaxLines?: number;
+  sso: z
+    .object({
+      icon: z.string().optional().meta({ description: 'SSO 登录方式图标' }),
+      title: z.string().optional().meta({ description: 'SSO 登录按钮显示标题' }),
+      enabled: BoolSchema.optional().meta({
+        description: '是否接入 SSO，由 Pro 部署配置派生，不作为后端鉴权依据'
+      }),
+      autoLogin: z
+        .boolean()
+        .optional()
+        .meta({ description: '是否在首次进入页面时自动跳转 SSO 登录' }),
+      disablePasswordForSsoUsers: z.boolean().optional().meta({
+        description: '是否禁止 SSO 账号使用平台密码登录与改密；仅在 Pro 接入 SSO 时生效'
+      })
+    })
+    .optional()
+    .meta({ description: '企业单点登录（SSO）配置' }),
+  oauth: z
+    .object({
+      github: z.string().optional().meta({ description: 'GitHub OAuth Client ID' }),
+      google: z.string().optional().meta({ description: 'Google OAuth Client ID' }),
+      wechat: z.string().optional().meta({ description: '微信开放平台 AppID' }),
+      microsoft: z
+        .object({
+          clientId: z.string().optional().meta({ description: '微软 Azure AD Client ID' }),
+          tenantId: z.string().optional().meta({ description: '微软 Azure AD 租户 ID' })
+        })
+        .optional()
+        .meta({ description: '微软登录配置' }),
+      wecom: z.boolean().optional().meta({ description: '是否启用企业微信扫码/网页登录' })
+    })
+    .optional()
+    .meta({ description: '第三方 OAuth 快捷登录配置' }),
+  limit: z
+    .looseObject({
+      uploadFileMaxAmount: NumSchema.default(1000).meta({ description: '单次最多上传文件数量' }),
+      uploadFileMaxSize: NumSchema.default(1000).meta({ description: '单文件最大大小限制（MB）' }),
+      exportDatasetLimitMinutes: NumSchema.optional().meta({
+        description: '知识库数据集导出频次限制（分钟）'
+      }),
+      websiteSyncLimitMinuted: NumSchema.optional().meta({
+        description: '网页数据源自动同步时间间隔限制（分钟）'
+      }),
+      skillSandboxMaxBytes: NumSchema.optional().meta({
+        description: '技能沙箱最大体积限制（字节）'
+      }),
+      workflowParallelRunMaxConcurrency: NumSchema.optional().meta({
+        description: '工作流并行分支最大并发数'
+      }),
+      maxFolderDepth: NumSchema.optional().meta({
+        description: '应用与知识库目录支持的最大嵌套深度'
+      })
+    })
+    .default({ uploadFileMaxAmount: 1000, uploadFileMaxSize: 1000 })
+    .meta({ description: '系统各项资源上限与速率限制' }),
 
   // Compute by systemEnv.customPdfParse
-  showCustomPdfParse?: boolean;
-  customPdfParsePrice?: number;
+  showCustomPdfParse: z.boolean().optional().meta({ description: '是否启用高精自定义 PDF 解析器' }),
+  customPdfParsePrice: NumSchema.optional().meta({
+    description: '自定义高精 PDF 解析按页计费单价（积分/页）'
+  }),
 
-  navbarItems?: NavbarItemType[];
-  externalProviderWorkflowVariables?: ExternalProviderWorkflowVarType[];
+  // 是否预置了智能分块服务地址(SANGFOR_CHUNK_URL)。未配置时 UI 隐藏「智能分块」入口。
+  show_intelligent_chunking: z.boolean().optional().meta({
+    description: '是否预置了智能分块服务（SANGFOR_CHUNK_URL），未配置时前端隐藏智能分块选项'
+  }),
 
-  payConfig?: {
-    wx?: boolean;
-    alipay?: boolean;
-    bank?: boolean;
-  };
-  payFormUrl?: string;
-  fileUrlWhitelist?: string[];
-  customDomain?: {
-    enable?: boolean;
-    domain?: {
-      aliyun?: string;
-      tencent?: string;
-      volcengine?: string;
-    };
-  };
+  navbarItems: z.array(NavbarItemSchema).optional().meta({ description: '自定义系统导航栏链接项' }),
+  externalProviderWorkflowVariables: z.array(ExternalProviderWorkflowVarSchema).optional().meta({
+    deprecated: true,
+    description: '已弃用的外部提供商工作流全局变量定义，仅兼容已有配置'
+  }),
 
-  ip_whitelist?: string;
+  payConfig: z
+    .object({
+      wx: z.boolean().optional().meta({ description: '是否启用微信支付' }),
+      alipay: z.boolean().optional().meta({ description: '是否启用支付宝支付' }),
+      bank: z.boolean().optional().meta({ description: '是否启用公对公银行转账' })
+    })
+    .optional()
+    .meta({ description: '可用支付方式配置' }),
+  payFormUrl: z.string().optional().meta({ description: '第三方定制充值页面或工单表单跳转链接' }),
+  customDomain: z
+    .object({
+      enable: z.boolean().optional().meta({ description: '是否开启自定义独立域名功能' }),
+      domain: z
+        .object({
+          aliyun: z.string().optional().meta({ description: '阿里云 DNS 解析域名' }),
+          tencent: z.string().optional().meta({ description: '腾讯云 DNS 解析域名' }),
+          volcengine: z.string().optional().meta({ description: '火山引擎 DNS 解析域名' })
+        })
+        .optional()
+        .meta({ description: '不同云厂商 DNS 绑定域名配置' })
+    })
+    .optional()
+    .meta({ description: '自定义独立域名绑定与 SSL 证书配置' })
+});
+export type FastGPTFeConfigsType = z.infer<typeof FastGPTFeConfigsSchema>;
 
-  // tmp
-  agentSandboxFree?: boolean;
-  agentSandboxProxyUrl?: string;
-};
+export const CustomPdfParseSchema = z.looseObject({
+  url: z.string().optional(),
+  key: z.string().optional(),
+  somarkApiKey: z.string().optional(),
+  doc2xKey: z.string().optional(),
+  textinAppId: z.string().optional(),
+  textinSecretCode: z.string().optional(),
+  price: NumSchema.optional()
+});
+export type customPdfParseType = z.infer<typeof CustomPdfParseSchema>;
 
-export type SystemEnvType = {
-  openapiPrefix?: string;
+export const LangfuseConfigSchema = z.looseObject({
+  secretKey: z.string().optional(),
+  publicKey: z.string().optional(),
+  baseUrl: z.string().optional()
+});
+export type LangfuseConfigType = z.infer<typeof LangfuseConfigSchema>;
 
-  datasetParseMaxProcess: number;
-  vectorMaxProcess: number;
-  qaMaxProcess: number;
-  vlmMaxProcess: number;
+export const CustomDomainSchema = z.looseObject({
+  kc: z
+    .looseObject({
+      aliyun: z.string().optional(),
+      tencent: z.string().optional(),
+      volcengine: z.string().optional()
+    })
+    .optional(),
+  issuerServiceName: z
+    .looseObject({
+      aliyun: z.string().optional(),
+      tencent: z.string().optional(),
+      volcengine: z.string().optional()
+    })
+    .optional(),
+  nginxServiceName: z
+    .looseObject({
+      aliyun: z.string().optional(),
+      tencent: z.string().optional(),
+      volcengine: z.string().optional()
+    })
+    .optional()
+});
+export type customDomainType = z.infer<typeof CustomDomainSchema>;
 
-  hnswEfSearch: number;
-  hnswMaxScanTuples: number;
+export const SystemEnvSchema = z.looseObject({
+  // 0 表示禁止新实例激活；空字符串不能因数字强制转换变成 0 而意外禁用。
+  agentSandboxMax: optionalNullToUndefined(
+    z.preprocess(
+      (value) => (typeof value === 'string' && !value.trim() ? NaN : value),
+      IntSchema.min(0)
+    )
+  ).meta({
+    description:
+      'Agent 沙箱活跃实例系统总上限，须为非负整数；0 表示禁止新实例激活，已活跃实例可继续使用',
+    example: 100
+  }),
+  // null 是显式"不限量"，必须与"未配置"区分：未配置时回落环境变量，
+  // 显式 null 不能再被环境变量重新加回限制。
+  agentSandboxMaxPerTeam: z
+    .union([IntSchema.min(1), z.null()])
+    .optional()
+    .meta({
+      description:
+        '单团队 Agent 沙箱活跃实例配额，须为正整数；null 表示显式不限制，未配置时使用环境变量',
+      example: 10
+    }),
+  openapiPrefix: z.string().optional(),
 
-  oneapiUrl?: string;
-  chatApiKey?: string;
+  datasetParseMaxProcess: NumSchema.default(10).meta({
+    description: '知识库解析最大并发处理进程数'
+  }),
+  vectorMaxProcess: NumSchema.default(10).meta({ description: '向量化处理最大并发进程数' }),
+  qaMaxProcess: NumSchema.default(10).meta({ description: 'QA 问答对拆分最大并发进程数' }),
+  vlmMaxProcess: NumSchema.default(10).meta({ description: '视觉语言模型处理最大并发进程数' }),
 
-  customPdfParse?: customPdfParseType;
-  fileUrlWhitelist?: string[];
-  customDomain?: customDomainType;
-  workflowHttpNode?: {
-    /** 是否允许工作流 HTTP 节点忽略 HTTPS 证书校验。 */
-    ignoreHttpsCertificate?: boolean;
-  };
-};
+  hnswEfSearch: NumSchema.default(200).meta({ description: 'HNSW 向量检索 efSearch 参数' }),
+  vectorRecallConcurrency: IntSchema.min(0).max(1000).default(0).meta({
+    description: '商业版所有向量库召回共享的并发上限，0 表示不限制，仅通过 Admin 配置',
+    example: 0
+  }),
+  customPdfParse: CustomPdfParseSchema.optional(),
+  langfuse: LangfuseConfigSchema.optional(),
+  sso: z
+    .object({
+      url: z.string().optional().meta({
+        description: 'SSO 后端服务根地址，仅服务端请求授权、用户信息及同步时使用',
+        example: 'http://fastgpt-sso:3000'
+      })
+    })
+    .optional()
+    .meta({ description: 'SSO 服务端连接配置，不向普通客户端下发' }),
+  checkExternalFile: z
+    .boolean()
+    .optional()
+    .meta({ description: '是否对外部输入文件应用域名白名单，不向客户端下发' }),
+  fileUrlWhitelist: z
+    .array(z.string())
+    .optional()
+    .meta({ description: '后端外部文件 URL 域名白名单，不向客户端下发' }),
+  customDomain: CustomDomainSchema.optional(),
+  workflowHttpNode: z
+    .looseObject({
+      /** 是否允许工作流 HTTP 节点忽略 HTTPS 证书校验。 */
+      ignoreHttpsCertificate: z.boolean().optional()
+    })
+    .optional()
+});
+export type SystemEnvType = z.infer<typeof SystemEnvSchema>;
 
-export type customDomainType = {
-  kc?: {
-    aliyun?: string;
-    tencent?: string;
-    volcengine?: string;
-  };
-  domain?: {
-    aliyun?: string;
-    tencent?: string;
-    volcengine?: string;
-  };
-  issuerServiceName?: {
-    aliyun?: string;
-    tencent?: string;
-    volcengine?: string;
-  };
-  nginxServiceName?: {
-    aliyun?: string;
-    tencent?: string;
-    volcengine?: string;
-  };
-};
+/* fastgpt main */
+export const FastGPTConfigFileSchema = z.looseObject({
+  feConfigs: FastGPTFeConfigsSchema,
+  systemEnv: SystemEnvSchema,
+  subPlans: SubPlanSchema.optional()
+});
+export type FastGPTConfigFileType = z.infer<typeof FastGPTConfigFileSchema>;
 
-export type customPdfParseType = {
-  url?: string;
-  key?: string;
-  somarkApiKey?: string;
-  doc2xKey?: string;
-  textinAppId?: string;
-  textinSecretCode?: string;
-  price?: number;
-};
-
-export type LicenseDataType = {
-  startTime: string;
-  expiredTime: string;
-  company: string;
-  description?: string; // 描述
-  hosts?: string[]; // 管理端有效域名
-  maxUsers?: number; // 最大用户数，不填默认不上限
-  maxApps?: number; // 最大应用数，不填默认不上限
-  maxDatasets?: number; // 最大数据集数，不填默认不上限
-  functions: {
-    sso: boolean;
-    pay: boolean;
-    customTemplates: boolean;
-    datasetEnhance: boolean;
-    batchEval: boolean;
+/**
+ * 运行时 License 数据（global.systemInstanceConfig.license.data / 前端展示）=
+ * 决策版 payload（schema 单一来源派生）+ deprecated 兼容视图。
+ *
+ * deprecated 视图（旧 UI/消费方直接读顶层字段，避免回归；新代码一律用 limits/functions 决策版键）：
+ * - 顶层 maxUsers/maxApps/maxDatasets（旧结构，归一化回填自 limits）
+ * - hosts（仅兼容读取，不参与校验）
+ * - functions.batchEval / functions.customTemplates（旧 UI 展示兜底）
+ */
+export type LicenseDataType = LicensePayload & {
+  hosts?: string[];
+  maxUsers?: number;
+  maxApps?: number;
+  maxDatasets?: number;
+  functions: LicenseFunctions & {
+    batchEval?: boolean;
+    customTemplates?: boolean;
   };
 };

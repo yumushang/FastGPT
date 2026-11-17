@@ -1,0 +1,544 @@
+import json5 from 'json5';
+import safeRegex from 'safe-regex';
+import {
+  FROM_MIGRATION_CARRIER,
+  type DatasetTagCompareOp
+} from '@fastgpt/global/core/dataset/constants';
+import { formatCollectionFilterMatchParam } from '@fastgpt/global/core/dataset/search/tagFilter';
+import { MongoDatasetCollection } from '../../collection/schema';
+import { MongoDatasetCollectionTagsV2 } from '../../tag/schemaV2';
+import { isCollectionTagValue } from '@fastgpt/global/core/dataset/tagUtils';
+import { readFromSecondary } from '../../../../common/mongo/utils';
+import { applySharedCollectionMetadataFilters } from './shared';
+
+/* ========== Key-Value 标签过滤类型 ========== */
+
+/** 单条 Key-Value 标签条件：{ tagName: { $op: value } } */
+type TagCondition = Record<string, Record<string, unknown>>;
+
+/** 保持数字/时间标签对历史字符串值的转换约定，候选筛选与最终比对共用。 */
+const toNumericOrTimestamp = (val: unknown): number => {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (!trimmed) return NaN;
+    const num = Number(trimmed);
+    if (Number.isFinite(num)) return num;
+    const time = new Date(trimmed).getTime();
+    return Number.isNaN(time) ? NaN : time;
+  }
+  return NaN;
+};
+
+/* ========== checkValue: 纯值比对算法 ========== */
+
+// safe-regex 漏检带分支的量词组（如 (a|aa)+ 在 V8 下呈指数回溯），补充首字符重叠检测：
+const hasAmbiguousAlternation = (pattern: string): boolean => {
+  let s = pattern
+    .replace(/\\./g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\(\?:|\(\?=/g, '(');
+  const innerRe = /\(([^()]*)\)([+*?]|\{\d+(?:,\d*)?\})?/;
+  let m: RegExpExecArray | null;
+  while ((m = innerRe.exec(s))) {
+    if (m[2] && m[1].includes('|')) {
+      const firstChars = new Set<string>();
+      for (const alt of m[1].split('|')) {
+        const c = alt.replace(/^[\\^]/, '').charAt(0);
+        if (firstChars.has(c)) return true;
+        firstChars.add(c);
+      }
+    }
+    s = s.slice(0, m.index) + 'x' + s.slice(m.index + m[0].length);
+  }
+  return false;
+};
+
+/**
+ * 判定操作符是否为否定或允许未打标（absent）条件。
+ * 当集合未配置该标签时：
+ * - 否定/空值类操作符视为满足条件（未打标自然“为空”、“不是目标值”、“不包含目标项”等）；
+ * - 肯定类操作符视为不满足条件（“等于”、“包含”、“不为空”等）。
+ */
+export const isAbsentAllowedOp = (op: string): boolean => {
+  switch (op) {
+    case '$empty':
+    case '$ne':
+    case '$isNot':
+    case '$notContains':
+    case '$notIn':
+      return true;
+    default:
+      return false;
+  }
+};
+
+/**
+ * 比对标签目标值与集合存储值是否满足操作符要求。
+ * - number / datetime：统一按数值/时间戳进行大小与等值比对，支持标准时间字符串自动转时间戳。
+ * - array：支持包含、属于、等值等集合操作。
+ * - string：支持正则、包含、前缀、后缀、等值比对。
+ */
+export function checkValue(
+  op: DatasetTagCompareOp,
+  target: unknown,
+  storedVal: string | number | string[] | null | undefined,
+  tagType: string
+): boolean {
+  if (op === '$empty') {
+    return tagType === 'array'
+      ? !Array.isArray(storedVal) || storedVal.length === 0
+      : storedVal === null || storedVal === undefined || storedVal === '';
+  }
+  if (op === '$notEmpty') {
+    return tagType === 'array'
+      ? Array.isArray(storedVal) && storedVal.length > 0
+      : storedVal !== null && storedVal !== undefined && storedVal !== '';
+  }
+
+  if (target === null || target === undefined) return false;
+
+  switch (tagType) {
+    case 'number':
+    case 'datetime': {
+      const stored = toNumericOrTimestamp(storedVal);
+      const t = toNumericOrTimestamp(target);
+      if (isNaN(t)) return false;
+      if (isNaN(stored)) {
+        return op === '$ne';
+      }
+      switch (op) {
+        case '$eq':
+          return stored === t;
+        case '$ne':
+          return stored !== t;
+        case '$gt':
+          return stored > t;
+        case '$lt':
+          return stored < t;
+        case '$gte':
+          return stored >= t;
+        case '$lte':
+          return stored <= t;
+        default:
+          return false;
+      }
+    }
+    case 'array': {
+      if (!Array.isArray(storedVal)) {
+        return op === '$isNot' || op === '$notContains' || op === '$notIn';
+      }
+      const stored = storedVal;
+      const targetArray = Array.isArray(target)
+        ? target.filter((item): item is string => typeof item === 'string')
+        : [];
+      const equal = (left: string[], right: string[]) => {
+        const rightSet = new Set(right);
+        return new Set(left).size === rightSet.size && left.every((item) => rightSet.has(item));
+      };
+      const subset = (left: string[], right: string[]) =>
+        left.every((item) => right.includes(item));
+      const targets = typeof target === 'string' ? [target] : targetArray;
+      switch (op) {
+        case '$is':
+          return Array.isArray(target) && equal(stored, targetArray);
+        case '$isNot':
+          return Array.isArray(target) && !equal(stored, targetArray);
+        case '$contains':
+          return targets.length > 0 && targets.every((item) => stored.includes(item));
+        case '$notContains':
+          return targets.length > 0 && targets.every((item) => !stored.includes(item));
+        case '$in':
+          return Array.isArray(target) && subset(stored, targetArray);
+        case '$notIn':
+          return Array.isArray(target) && !subset(stored, targetArray);
+        default:
+          return false;
+      }
+    }
+
+    case 'string':
+    default: {
+      const stored = String(storedVal ?? '');
+      const t = String(target);
+      switch (op) {
+        case '$eq':
+          return stored === t;
+        case '$ne':
+          return stored !== t;
+        case '$contains':
+          return stored.toLowerCase().includes(t.toLowerCase());
+        case '$notContains':
+          return !stored.toLowerCase().includes(t.toLowerCase());
+        case '$startsWith':
+          return stored.toLowerCase().startsWith(t.toLowerCase());
+        case '$endsWith':
+          return stored.toLowerCase().endsWith(t.toLowerCase());
+        case '$regex':
+          try {
+            if (t.length > 64 || stored.length > 256) return false;
+            if (!safeRegex(t) || hasAmbiguousAlternation(t)) return false;
+            return new RegExp(t).test(stored);
+          } catch {
+            return false;
+          }
+        default:
+          return false;
+      }
+    }
+  }
+}
+
+/* ========== filterCollectionByKeyValueTags ========== */
+
+/**
+ * 按 Key-Value 标签条件筛选集合：AND 条件须全部满足，OR 条件至少满足一项。
+ *
+ * 知识库未定义标签或集合缺少该标签时，仅否定条件（$ne/$isNot/$notContains/$notIn）
+ * 和 $empty 视为满足；肯定条件不匹配。
+ * 旧版 $fromMigration 的 $empty 条件仍要求集合完全未打任何标签。
+ * 未提供标签条件时返回 undefined；没有匹配集合时返回空数组。
+ */
+export async function filterCollectionByKeyValueTags({
+  $and,
+  $or,
+  teamId,
+  datasetIds
+}: {
+  $and: TagCondition[];
+  $or: TagCondition[];
+  teamId: string;
+  datasetIds: string[];
+}): Promise<string[] | undefined> {
+  const allConditions = [...$and, ...$or];
+  const tagNames = new Set<string>();
+  for (const cond of allConditions) {
+    const tagName = Object.keys(cond)[0];
+    if (!tagName) continue;
+    tagNames.add(tagName);
+  }
+  if (tagNames.size === 0) return undefined;
+
+  const hasMigrationCondition = tagNames.has(FROM_MIGRATION_CARRIER);
+  const tagDocs = await MongoDatasetCollectionTagsV2.find(
+    {
+      teamId,
+      datasetId: { $in: datasetIds },
+      $or: [
+        { tag: { $in: [...tagNames] } },
+        ...(hasMigrationCondition ? [{ fromMigration: true }] : [])
+      ]
+    },
+    '_id datasetId tag tagType fromMigration',
+    { ...readFromSecondary }
+  ).lean();
+
+  const datasetTagMap = new Map<string, Map<string, { id: string; type: string }>>();
+  for (const dsId of datasetIds) {
+    datasetTagMap.set(dsId, new Map());
+  }
+
+  const addToMap = (dsId: string, tagName: string, id: string, type: string) => {
+    const tagMap = datasetTagMap.get(dsId);
+    if (tagMap) {
+      tagMap.set(tagName, { id, type });
+      return;
+    }
+    datasetTagMap.set(dsId, new Map([[tagName, { id, type }]]));
+  };
+  for (const doc of tagDocs) {
+    addToMap(String(doc.datasetId), doc.tag, String(doc._id), doc.tagType ?? 'string');
+    // 迁移承载记录的身份唯一由 fromMigration: true 标识，不依赖可修改的标签名称
+    if (doc.fromMigration) {
+      addToMap(
+        String(doc.datasetId),
+        FROM_MIGRATION_CARRIER,
+        String(doc._id),
+        doc.tagType ?? 'array'
+      );
+    }
+  }
+
+  const matchCondition = (
+    cond: TagCondition,
+    tagMap: Map<string, { id: string; type: string }>,
+    tagsArr: Array<{ tagId: string; value?: string | number | string[] }>
+  ): boolean => {
+    const tagName = Object.keys(cond)[0];
+    const opObj = cond[tagName] as Record<string, unknown>;
+    const op = Object.keys(opObj)[0];
+
+    // 来自旧版 null 的 $fromMigration $empty：严格只匹配完全未打任何标签的集合（tags 数组为空）
+    if (tagName === FROM_MIGRATION_CARRIER && op === '$empty') {
+      return tagsArr.length === 0;
+    }
+
+    const tagInfo = tagMap.get(tagName);
+    if (!tagInfo) {
+      // 标签未在该知识库定义，等同于所有集合都未打该标签：否定/空值型条件应视为满足，
+      // 与集合级「缺少该标签」保持一致，避免多知识库检索时静默丢掉整个知识库。
+      return isAbsentAllowedOp(op);
+    }
+
+    const entry = tagsArr.find((t) => t.tagId === tagInfo.id);
+    if (!entry) {
+      return isAbsentAllowedOp(op);
+    }
+    return checkValue(op as DatasetTagCompareOp, opObj[op], entry.value, tagInfo.type);
+  };
+
+  const allCollectionIds: string[] = [];
+
+  for (const [dsId, tagMap] of datasetTagMap) {
+    // 只有肯定型（必须打标）的条件才要求该标签在知识库中必须有定义；
+    // 纯否定/空值型条件（如 $fromMigration: { $empty: true }）在未定义该标签的知识库中也是满足的
+    const requiredPositiveAndCount = $and.filter((cond) => {
+      const tagName = Object.keys(cond)[0];
+      const opObj = cond[tagName] as Record<string, unknown> | undefined;
+      const op = opObj ? Object.keys(opObj)[0] : undefined;
+      return op ? !isAbsentAllowedOp(op) : true;
+    }).length;
+
+    const positiveAndTagIds = $and
+      .filter((cond) => {
+        const tagName = Object.keys(cond)[0];
+        const opObj = cond[tagName] as Record<string, unknown> | undefined;
+        const op = opObj ? Object.keys(opObj)[0] : undefined;
+        return op ? !isAbsentAllowedOp(op) : true;
+      })
+      .map((cond) => tagMap.get(Object.keys(cond)[0])?.id)
+      .filter((id): id is string => Boolean(id));
+
+    if (positiveAndTagIds.length < requiredPositiveAndCount) {
+      continue;
+    }
+
+    // 若无 AND 条件，且 OR 中引用的标签没有一个是已定义的肯定型标签，也没有任何允许缺失的条件，跳过该库
+    if ($and.length === 0) {
+      const hasExecutableOr = $or.some((cond) => {
+        const tagName = Object.keys(cond)[0];
+        const opObj = cond[tagName] as Record<string, unknown> | undefined;
+        const op = opObj ? Object.keys(opObj)[0] : undefined;
+        if (!op) return false;
+        if (isAbsentAllowedOp(op)) return true;
+        return Boolean(tagMap.get(tagName));
+      });
+      if (!hasExecutableOr && $or.length > 0) {
+        continue;
+      }
+    }
+
+    let tagIdQuery: Record<string, unknown> | undefined;
+    let useTagIndexHint = false;
+
+    if (positiveAndTagIds.length > 0) {
+      tagIdQuery = { 'tags.tagId': { $all: positiveAndTagIds } };
+      useTagIndexHint = true;
+    } else if ($and.length === 0 && $or.length > 0) {
+      const allOrPositive = $or.every((cond) => {
+        const tagName = Object.keys(cond)[0];
+        const opObj = cond[tagName] as Record<string, unknown> | undefined;
+        const op = opObj ? Object.keys(opObj)[0] : undefined;
+        return op ? !isAbsentAllowedOp(op) : true;
+      });
+
+      if (allOrPositive) {
+        const positiveOrTagIds = $or
+          .map((cond) => tagMap.get(Object.keys(cond)[0])?.id)
+          .filter((id): id is string => Boolean(id));
+        if (positiveOrTagIds.length > 0) {
+          tagIdQuery = { 'tags.tagId': { $in: positiveOrTagIds } };
+          useTagIndexHint = true;
+        }
+      }
+    }
+
+    /** 仅下推不会漏掉旧数据的必要条件，最终仍由 checkValue 保持原有精确语义。 */
+    const buildValueMatch = (condition: TagCondition): Record<string, unknown> | undefined => {
+      const tagName = Object.keys(condition)[0];
+      const tag = tagMap.get(tagName);
+      if (!tag) return;
+      const op = Object.keys(condition[tagName])[0];
+      const target = condition[tagName][op];
+      const matchValue = (value: unknown) => ({ tags: { $elemMatch: { tagId: tag.id, value } } });
+
+      if (tag.type === 'array' && (op === '$contains' || op === '$is')) {
+        const values = Array.isArray(target)
+          ? target.filter((item): item is string => typeof item === 'string')
+          : op === '$contains' && typeof target === 'string'
+            ? [target]
+            : [];
+        // 空数组的 $is/$in 允许命中空集合，不能用 $all:[] 预筛。
+        if (values.length > 0) return matchValue({ $all: values });
+      }
+
+      if (
+        (tag.type === 'number' || tag.type === 'datetime') &&
+        ['$eq', '$gt', '$gte', '$lt', '$lte'].includes(op)
+      ) {
+        const numeric = toNumericOrTimestamp(target);
+        if (!Number.isNaN(numeric)) {
+          // 历史字符串可能是数字或日期，全部保留给 checkValue 转换，避免 BSON 类型比较漏项。
+          return {
+            $or: [matchValue({ [op]: numeric }), matchValue({ $type: 'string' })]
+          };
+        }
+      }
+      // 字符串比较包含 String 转换；否定、空值等条件也保留原规则，避免预筛漏项。
+    };
+
+    const valueMatches = $and
+      .map(buildValueMatch)
+      .filter((match): match is Record<string, unknown> => match !== undefined);
+    if (
+      $or.length > 0 &&
+      $or.every((cond) => {
+        const opObj = Object.values(cond)[0];
+        const op = opObj ? Object.keys(opObj)[0] : undefined;
+        return op !== undefined && !isAbsentAllowedOp(op);
+      })
+    ) {
+      const orValueMatches = $or.map(buildValueMatch);
+      if (orValueMatches.some((match) => match !== undefined)) {
+        const orMatches = $or
+          .map((cond, index) => {
+            const tag = tagMap.get(Object.keys(cond)[0]);
+            return orValueMatches[index] ?? (tag ? { 'tags.tagId': tag.id } : undefined);
+          })
+          .filter((match): match is Record<string, unknown> => match !== undefined);
+        valueMatches.push({ $or: orMatches });
+      }
+    }
+
+    const findQuery = MongoDatasetCollection.find(
+      {
+        teamId,
+        datasetId: dsId,
+        ...(tagIdQuery ?? {}),
+        ...(valueMatches.length > 0 ? { $and: valueMatches } : {})
+      },
+      '_id tags',
+      { ...readFromSecondary }
+    );
+    if (useTagIndexHint && valueMatches.length === 0) {
+      findQuery.hint({ teamId: 1, datasetId: 1, 'tags.tagId': 1 });
+    }
+    const collections = await findQuery.lean();
+
+    for (const col of collections) {
+      const tagsArr = (col.tags ?? []).filter(isCollectionTagValue);
+
+      const andOk = $and.every((cond) => matchCondition(cond, tagMap, tagsArr));
+      if (!andOk) continue;
+
+      if ($or.length > 0) {
+        const orOk = $or.some((cond) => matchCondition(cond, tagMap, tagsArr));
+        if (!orOk) continue;
+      }
+
+      allCollectionIds.push(String(col._id));
+    }
+  }
+
+  return allCollectionIds.length > 0 ? allCollectionIds : [];
+}
+
+/** 读取禁用集合 ID，使用 forbid=true 部分覆盖索引，避免逐文档回表与实例化。 */
+export const getForbidCollectionIdList = async ({
+  teamId,
+  datasetIds
+}: {
+  teamId: string;
+  datasetIds: string[];
+}) => {
+  const collections = await MongoDatasetCollection.find(
+    {
+      teamId,
+      datasetId: { $in: datasetIds },
+      forbid: true
+    },
+    '_id'
+  ).lean();
+
+  return collections.map((item) => String(item._id));
+};
+
+/**
+ * 知识库检索元数据过滤核心（只兼容结构化数组）。
+ * 输入自动做防御性归一化，确保所有服务层入口安全执行。
+ */
+export const filterCollectionByMetadata = async ({
+  teamId,
+  datasetIds,
+  collectionFilterMatch,
+  metadataFilterEnabled
+}: {
+  teamId: string;
+  datasetIds: string[];
+  collectionFilterMatch?: string;
+  metadataFilterEnabled: boolean;
+}): Promise<string[] | undefined> => {
+  if (!collectionFilterMatch || !metadataFilterEnabled) return;
+
+  const normalizedMatchParam = formatCollectionFilterMatchParam({
+    value: collectionFilterMatch
+  });
+  if (!normalizedMatchParam) return;
+
+  let metadataMatch: {
+    tags?: { $and?: unknown[]; $or?: unknown[] };
+    createTime?: { $gte?: string; $lte?: string };
+    collectionIds?: string[];
+  };
+
+  try {
+    const parsed = json5.parse(normalizedMatchParam);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+    metadataMatch = parsed;
+  } catch {
+    return;
+  }
+
+  const isConditionObject = (item: unknown): item is TagCondition => {
+    if (typeof item !== 'object' || Array.isArray(item) || item === null) return false;
+    const tagNames = Object.keys(item);
+    if (tagNames.length !== 1 || !tagNames[0]) return false;
+    const operation = Reflect.get(item, tagNames[0]);
+    return (
+      typeof operation === 'object' &&
+      !Array.isArray(operation) &&
+      operation !== null &&
+      Object.keys(operation).length === 1
+    );
+  };
+
+  const parseConditions = (items?: unknown[]): TagCondition[] | undefined => {
+    if (!items) return [];
+    if (!Array.isArray(items)) return undefined;
+    if (!items.every(isConditionObject)) return undefined;
+    return items;
+  };
+
+  const andTags = parseConditions(metadataMatch.tags?.$and);
+  const orTags = parseConditions(metadataMatch.tags?.$or);
+  if (andTags === undefined || orTags === undefined) {
+    return undefined;
+  }
+
+  const tagCollectionIds =
+    andTags.length > 0 || orTags.length > 0
+      ? await filterCollectionByKeyValueTags({
+          $and: andTags,
+          $or: orTags,
+          teamId,
+          datasetIds
+        })
+      : undefined;
+
+  return applySharedCollectionMetadataFilters({
+    teamId,
+    datasetIds,
+    metadataMatch,
+    tagCollectionIds
+  });
+};

@@ -1,9 +1,6 @@
 import type { AppChatConfigType } from '@fastgpt/global/core/app/type';
 import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
-import type {
-  FlowNodeTemplateType,
-  StoreNodeItemType
-} from '@fastgpt/global/core/workflow/type/node';
+import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import {
   FlowNodeInputTypeEnum,
   FlowNodeTypeEnum
@@ -14,14 +11,11 @@ import {
   NodeOutputKeyEnum,
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
-
 import { getNanoid } from '@fastgpt/global/common/string/tools';
-import { type StoreEdgeItemType } from '@fastgpt/global/core/workflow/type/edge';
+import type { StoreEdgeItemType } from '@fastgpt/global/core/workflow/type/edge';
 import { ToolCallNode } from '@fastgpt/global/core/workflow/template/system/toolCall';
-import {
-  WorkflowStart,
-  userFilesInput
-} from '@fastgpt/global/core/workflow/template/system/workflowStart';
+import { WorkflowStart } from '@fastgpt/global/core/workflow/template/system/workflowStart';
+import { userFilesInput } from '@fastgpt/global/core/workflow/template/output';
 import {
   AiChatModule,
   AiChatQuotePrompt,
@@ -32,19 +26,20 @@ import { DatasetSearchModule } from '@fastgpt/global/core/workflow/template/syst
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import {
   Input_Template_File_Link,
+  Input_Template_Stream_MODE,
   Input_Template_UserChatInput
 } from '@fastgpt/global/core/workflow/template/input';
 import { workflowStartNodeId } from '@/web/core/app/constants';
-import { DatasetSearchModeEnum } from '@fastgpt/global/core/dataset/constants';
-import { getAppChatConfig } from '@fastgpt/global/core/workflow/utils';
+import {
+  DatasetSearchModeEnum,
+  DatasetTagFilterVersionEnum
+} from '@fastgpt/global/core/dataset/constants';
+import { getAppChatConfig } from '@fastgpt/global/common/app/chat';
 import { getDefaultAppForm } from '@fastgpt/global/core/app/utils';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
-import {
-  getToolConfigStatus,
-  stripToolInputDefaultMode
-} from '@fastgpt/global/core/app/formEdit/utils';
+import { stripToolInputDefaultMode } from '@fastgpt/global/core/app/formEdit/utils';
 
-/* format app nodes to edit form */
+/** 将简易应用的已存工作流还原为表单；标签过滤版本沿用默认的 structured。 */
 export const appWorkflow2Form = ({
   nodes,
   chatConfig
@@ -156,6 +151,10 @@ export const appWorkflow2Form = ({
         node.inputs,
         NodeInputKeyEnum.datasetSearchRerankWeight
       );
+      defaultAppForm.dataset.rerankCandidateNum = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.datasetSearchRerankCandidateNum
+      );
       // Query extension
       defaultAppForm.dataset.datasetSearchUsingExtensionQuery = findInputValueByKey(
         node.inputs,
@@ -177,6 +176,10 @@ export const appWorkflow2Form = ({
         node.inputs,
         NodeInputKeyEnum.authTmbId
       );
+      defaultAppForm.dataset.collectionFilterMatch = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.collectionFilterMatch
+      );
     } else if (
       node.flowNodeType === FlowNodeTypeEnum.pluginModule ||
       node.flowNodeType === FlowNodeTypeEnum.appModule ||
@@ -189,9 +192,10 @@ export const appWorkflow2Form = ({
         id: node.nodeId,
         pluginId: node.pluginId,
         source: node.source,
+        metadataLocale: node.metadataLocale,
         isFolder: node.isFolder,
-        name: node.name,
-        avatar: node.avatar,
+        name: node.pluginData?.name ?? node.name,
+        avatar: node.pluginData?.avatar ?? node.avatar,
         intro: node.intro || '',
         flowNodeType: node.flowNodeType,
         showStatus: node.showStatus,
@@ -205,8 +209,7 @@ export const appWorkflow2Form = ({
         userGuide: node.pluginData?.userGuide,
         toolConfig: node.toolConfig,
         hasSystemSecret: node.hasSystemSecret,
-        systemKeyCost: node.systemKeyCost,
-        configStatus: getToolConfigStatus({ tool: node as unknown as FlowNodeTemplateType }).status
+        systemKeyCost: node.systemKeyCost
       });
     }
   });
@@ -218,6 +221,8 @@ export type WorkflowType = {
   nodes: StoreNodeItemType[];
   edges: StoreEdgeItemType[];
 };
+
+/** 简易应用保存为工作流时固定写入 structured 标记，供工作流画布选择新版过滤编辑器。 */
 export function form2AppWorkflow(
   data: AppFormEditFormType,
   t: any // i18nT
@@ -228,10 +233,11 @@ export function form2AppWorkflow(
   const aiChatNodeId = '7BdojPlukIQw';
   const selectedDatasets = data.dataset.datasets;
   const modelMultimodal = {
-    vision: !!data.aiSettings.aiChatVision,
-    audio: !!data.aiSettings.aiChatAudio,
-    video: !!data.aiSettings.aiChatVideo,
-    extractFiles: !!data.aiSettings.aiChatExtractFiles
+    // 表单只控制文件上传；媒体传递和链接提取统一放行，实际能力由运行时模型配置判断。
+    vision: true,
+    audio: true,
+    video: true,
+    extractFiles: true
   };
 
   const getModelReferenceInputs = (formData: AppFormEditFormType): FlowNodeInputItemType[] => [
@@ -534,6 +540,13 @@ export function form2AppWorkflow(
           value: formData.dataset.rerankWeight
         },
         {
+          key: NodeInputKeyEnum.datasetSearchRerankCandidateNum,
+          renderTypeList: [FlowNodeInputTypeEnum.hidden],
+          label: '',
+          valueType: WorkflowIOValueTypeEnum.number,
+          value: formData.dataset.rerankCandidateNum
+        },
+        {
           key: NodeInputKeyEnum.datasetSearchUsingExtensionQuery,
           renderTypeList: [FlowNodeInputTypeEnum.hidden],
           label: '',
@@ -576,6 +589,22 @@ export function form2AppWorkflow(
           label: '',
           valueType: WorkflowIOValueTypeEnum.boolean,
           value: formData.dataset.authTmbId
+        },
+        {
+          key: NodeInputKeyEnum.collectionFilterVersion,
+          renderTypeList: [FlowNodeInputTypeEnum.hidden],
+          label: '',
+          valueType: WorkflowIOValueTypeEnum.string,
+          value: DatasetTagFilterVersionEnum.structured
+        },
+        {
+          key: NodeInputKeyEnum.collectionFilterMatch,
+          renderTypeList: [FlowNodeInputTypeEnum.datasetTagFilter, FlowNodeInputTypeEnum.reference],
+          label: i18nT('workflow:tag_filter'),
+          valueType: WorkflowIOValueTypeEnum.string,
+          isPro: true,
+          description: i18nT('workflow:tag_filter_description'),
+          value: formData.dataset.collectionFilterMatch
         },
         {
           ...Input_Template_UserChatInput,
@@ -660,9 +689,9 @@ export function form2AppWorkflow(
             nodeId,
             pluginId: tool.pluginId,
             source: tool.source,
+            metadataLocale: tool.metadataLocale,
             name: tool.name,
             intro: tool.intro,
-            toolDescription: tool.toolDescription,
             avatar: tool.avatar,
             flowNodeType: tool.flowNodeType,
             showStatus: tool.showStatus,
@@ -675,26 +704,35 @@ export function form2AppWorkflow(
             courseUrl: tool.courseUrl,
             readmeUrl: tool.readmeUrl,
             userGuide: tool.userGuide,
-            inputs: tool.inputs.map((input) => {
-              // Special key value
-              if (input.key === NodeInputKeyEnum.forbidStream) {
-                input.value = true;
-              }
-              // Special tool
-              if (
-                tool.flowNodeType === FlowNodeTypeEnum.appModule &&
-                input.key === NodeInputKeyEnum.history
-              ) {
-                return stripToolInputDefaultMode({
-                  ...input,
-                  value: formData.aiSettings.maxHistories
-                });
-              }
-              if (input.renderTypeList.includes(FlowNodeInputTypeEnum.fileSelect)) {
-                input.value = [[workflowStartNodeId, NodeOutputKeyEnum.userFiles]];
-              }
-              return stripToolInputDefaultMode(input);
-            }),
+            inputs: [
+              // 历史或系统工作流工具可能没有显式开关；表单生成时补齐禁流配置。
+              ...([FlowNodeTypeEnum.appModule, FlowNodeTypeEnum.pluginModule].includes(
+                tool.flowNodeType
+              ) && !tool.inputs.some((input) => input.key === NodeInputKeyEnum.forbidStream)
+                ? [{ ...Input_Template_Stream_MODE, value: true }]
+                : []),
+              ...tool.inputs.map((input) => {
+                // Special key value
+                if (input.key === NodeInputKeyEnum.forbidStream) {
+                  // 只改生成结果，避免污染共享工具模板及工作流编辑器的原始开关。
+                  return { ...input, value: true };
+                }
+                // Special tool
+                if (
+                  tool.flowNodeType === FlowNodeTypeEnum.appModule &&
+                  input.key === NodeInputKeyEnum.history
+                ) {
+                  return stripToolInputDefaultMode({
+                    ...input,
+                    value: formData.aiSettings.maxHistories
+                  });
+                }
+                if (input.renderTypeList.includes(FlowNodeInputTypeEnum.fileSelect)) {
+                  input.value = [[workflowStartNodeId, NodeOutputKeyEnum.userFiles]];
+                }
+                return stripToolInputDefaultMode(input);
+              })
+            ],
             outputs: tool.outputs
           }
         ],

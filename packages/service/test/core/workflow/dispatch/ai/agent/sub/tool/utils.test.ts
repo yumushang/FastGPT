@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { hashStr } from '@fastgpt/global/common/string/tools';
+import { AppErrEnum } from '@fastgpt/global/common/error/code/app';
 import {
   FlowNodeInputTypeEnum,
   FlowNodeTypeEnum
@@ -11,11 +12,14 @@ import {
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { getAgentRuntimeTools } from '@fastgpt/service/core/workflow/dispatch/ai/agent/sub/tool/utils';
+import { runWithContext } from '@fastgpt/service/core/workflow/utils/context';
 import type { NodeToolConfigType } from '@fastgpt/global/core/workflow/type/node';
 
 const {
   authAppByTmbIdMock,
   getAppVersionByIdMock,
+  getAppLatestVersionMock,
+  mongoAppFindOneMock,
   getMCPChildrenMock,
   getHTTPToolListMock,
   getSystemToolDetailMock,
@@ -23,10 +27,19 @@ const {
 } = vi.hoisted(() => ({
   authAppByTmbIdMock: vi.fn(),
   getAppVersionByIdMock: vi.fn(),
+  getAppLatestVersionMock: vi.fn(),
+  mongoAppFindOneMock: vi.fn(),
   getMCPChildrenMock: vi.fn(),
   getHTTPToolListMock: vi.fn(),
   getSystemToolDetailMock: vi.fn(),
   assertTeamPluginSourceAccessMock: vi.fn()
+}));
+
+vi.mock('@fastgpt/service/core/app/schema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/core/app/schema')>()),
+  MongoApp: {
+    findOne: mongoAppFindOneMock
+  }
 }));
 
 vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
@@ -34,7 +47,8 @@ vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
 }));
 
 vi.mock('@fastgpt/service/core/app/version/controller', () => ({
-  getAppVersionById: getAppVersionByIdMock
+  getAppVersionById: getAppVersionByIdMock,
+  getAppLatestVersion: getAppLatestVersionMock
 }));
 
 vi.mock('@fastgpt/service/core/app/mcp', () => ({
@@ -62,18 +76,21 @@ vi.mock('@fastgpt/service/core/app/tool/systemTool/systemTool.repo', () => ({
   }
 }));
 
-vi.mock('@fastgpt/service/common/logger', () => ({
-  LogCategories: {
-    MODULE: {
-      AI: {
-        AGENT: 'agent'
-      }
+vi.mock('@fastgpt/service/common/logger', () => {
+  const logCategory = new Proxy(
+    {},
+    {
+      get: () => logCategory
     }
-  },
-  getLogger: vi.fn(() => ({
-    warn: vi.fn()
-  }))
-}));
+  );
+
+  return {
+    LogCategories: logCategory,
+    getLogger: vi.fn(() => ({
+      warn: vi.fn()
+    }))
+  };
+});
 
 const mcpInputSchema = {
   type: 'object',
@@ -342,6 +359,18 @@ describe('getAgentRuntimeTools schema loading', () => {
         chatConfig: app.chatConfig
       })
     );
+
+    getAppLatestVersionMock.mockImplementation(async (appId: string, app?: any) => ({
+      versionId: '',
+      versionName: app?.name ?? '',
+      nodes: app?.modules ?? [],
+      edges: app?.edges ?? [],
+      chatConfig: app?.chatConfig ?? {}
+    }));
+
+    mongoAppFindOneMock.mockImplementation((query: { _id?: string }) => ({
+      lean: vi.fn().mockResolvedValue(query?._id ? (appMap[query._id] ?? null) : null)
+    }));
   });
 
   const appMap: Record<string, any> = {
@@ -352,10 +381,7 @@ describe('getAgentRuntimeTools schema loading', () => {
         mcpToolSet: {
           url: 'https://current.example.com',
           headerSecret: {
-            Authorization: {
-              value: 'current-secret',
-              secret: ''
-            }
+            Authorization: { value: 'current-secret' }
           },
           toolList: [mcpTool]
         }
@@ -545,6 +571,31 @@ describe('getAgentRuntimeTools schema loading', () => {
     }
   };
 
+  appMap.plugin_with_reference_only_input = {
+    ...createPersonalApp({ id: 'plugin_with_reference_only_input', type: AppTypeEnum.workflow }),
+    type: AppTypeEnum.workflowTool,
+    modules: [
+      {
+        nodeId: 'plugin-input',
+        flowNodeType: FlowNodeTypeEnum.pluginInput,
+        name: 'Input',
+        inputs: [
+          {
+            key: 'ref_param',
+            label: 'Reference Param',
+            description: 'Ref param description',
+            value: '',
+            valueType: WorkflowIOValueTypeEnum.string,
+            required: true,
+            renderTypeList: [FlowNodeInputTypeEnum.reference],
+            selectedType: FlowNodeInputTypeEnum.reference
+          }
+        ],
+        outputs: []
+      }
+    ]
+  };
+
   it.each(['simple_app', 'chat_agent_app', 'workflow_app'] as const)(
     'loads %s as a callable tool with agent-generated user input',
     async (appId) => {
@@ -571,6 +622,24 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toEqual([]);
+  });
+
+  it('keeps plugin tools whose start node has reference-only inputs without toolDescription', async () => {
+    const tools = await getAgentRuntimeTools({
+      tmbId: 'tmb_1',
+      tools: [{ id: 'plugin_with_reference_only_input', config: {} }]
+    });
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].agentGeneratedInputKeys).toContain('ref_param');
+    expect(tools[0].requestSchema.function.parameters).toMatchObject({
+      type: 'object',
+      properties: {
+        ref_param: expect.objectContaining({
+          description: 'Ref param description'
+        })
+      }
+    });
   });
 
   it('keeps external variables that project to supported manual inputs', async () => {
@@ -652,7 +721,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools[0].requestSchema.function.name).toBe('mcp_app0');
     expect(tools[0].requestSchema.function.description).toBe('mcp_app name/search: Search docs');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-mcp_app/search' });
     expect(tools[0].version).toBe('');
     expect(tools[0].toolConfig).not.toHaveProperty('mcpToolSet');
     expect(tools[0].promptReference).toEqual({
@@ -673,7 +742,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools[0].requestSchema.function.name).toBe('mcp_appsearch');
     expect(tools[0].requestSchema.function.description).toBe('search: Search docs');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-mcp_app/search' });
   });
 
   it('does not persist runtime MCP connection data in expanded Agent tools', async () => {
@@ -692,7 +761,7 @@ describe('getAgentRuntimeTools schema loading', () => {
       ]
     });
 
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-mcp_app/search' });
     expect(tools[0].toolConfig).not.toHaveProperty('mcpToolSet');
   });
 
@@ -705,7 +774,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools).toHaveLength(1);
     expect(getAppVersionByIdMock).not.toHaveBeenCalled();
     expect(tools[0].version).toBe('');
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-mcp_app/search' });
     expect(tools[0].toolConfig).not.toHaveProperty('mcpToolSet');
   });
 
@@ -748,7 +817,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools).toHaveLength(1);
     expect(tools[0].id).toBe('mcp_slash_apptest');
     expect(tools[0].name).toBe('/test');
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_slash_app//test');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-mcp_slash_app//test' });
   });
 
   it('prefixes tool function name only when the runtime tool id starts with a number', async () => {
@@ -834,7 +903,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools).toHaveLength(1);
     expect(tools[0].requestSchema.function.name).toBe('legacy_mcp_app0');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-legacy_mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-legacy_mcp_app/search' });
   });
 
   it('loads a selected legacy MCP tool with its input schema', async () => {
@@ -856,7 +925,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools[0].id).toBe('legacy_mcp_appsearch');
     expect(tools[0].name).toBe('search');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
-    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-legacy_mcp_app/search');
+    expect(tools[0].toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-legacy_mcp_app/search' });
   });
 
   it('loads an MCP tool without isToolParam as an agent tool', async () => {
@@ -893,6 +962,82 @@ describe('getAgentRuntimeTools schema loading', () => {
       id: 'http_app',
       name: 'http_app name'
     });
+  });
+
+  it.each([
+    { source: 'mcp', appId: 'mcp_app', toolName: 'search', authorization: 'snapshot' },
+    { source: 'http', appId: 'http_app', toolName: 'create', authorization: 'snapshot' },
+    { source: 'mcp', appId: 'mcp_app', toolName: 'search', authorization: 'member' },
+    { source: 'http', appId: 'http_app', toolName: 'create', authorization: 'member' },
+    { source: 'mcp', appId: 'mcp_app', toolName: 'search', authorization: 'denied' },
+    { source: 'http', appId: 'http_app', toolName: 'create', authorization: 'denied' }
+  ])(
+    'loads $source child tools using $authorization authorization',
+    async ({ source, appId, toolName, authorization }) => {
+      if (authorization === 'denied') {
+        authAppByTmbIdMock.mockRejectedValueOnce(AppErrEnum.unAuthApp);
+      }
+      const tools = await runWithContext(
+        {
+          mcpClientMemory: {},
+          resourceContext: {
+            isRoot: false,
+            resourceMap: new Map([
+              [
+                `tool:${appId}`,
+                {
+                  type: 'tool',
+                  id: appId,
+                  data: { toolNames: [authorization === 'snapshot' ? toolName : 'otherTool'] }
+                }
+              ]
+            ])
+          }
+        },
+        () =>
+          getAgentRuntimeTools({
+            tmbId: 'tmb_1',
+            tools: [{ id: `${source}-${appId}/${toolName}`, config: {} }]
+          })
+      );
+
+      expect(tools).toHaveLength(authorization === 'denied' ? 0 : 1);
+      if (authorization === 'snapshot') {
+        expect(authAppByTmbIdMock).not.toHaveBeenCalled();
+      } else {
+        expect(authAppByTmbIdMock).toHaveBeenCalledOnce();
+      }
+      if (authorization !== 'denied') expect(tools[0].name).toBe(toolName);
+    }
+  );
+
+  it.each([
+    { appId: 'mcp_app', tool: mcpTool },
+    { appId: 'http_app', tool: httpTool }
+  ])('keeps snapshot child selection when expanding $appId', async ({ appId, tool }) => {
+    const children = [tool, { ...tool, name: 'otherTool' }];
+    getMCPChildrenMock.mockResolvedValue(children);
+    getHTTPToolListMock.mockResolvedValue(children);
+
+    const tools = await runWithContext(
+      {
+        mcpClientMemory: {},
+        resourceContext: {
+          isRoot: false,
+          resourceMap: new Map([
+            [`tool:${appId}`, { type: 'tool', id: appId, data: { toolNames: [tool.name] } }]
+          ])
+        }
+      },
+      () => getAgentRuntimeTools({ tmbId: 'tmb_1', tools: [{ id: appId, config: {} }] })
+    );
+
+    expect(tools).toHaveLength(1);
+    const mcpTool = tools[0].toolConfig?.mcpTool;
+    const toolId =
+      mcpTool && 'toolId' in mcpTool ? mcpTool.toolId : tools[0].toolConfig?.httpTool?.toolId;
+    expect(toolId).toContain(`/${tool.name}`);
+    expect(authAppByTmbIdMock).not.toHaveBeenCalled();
   });
 
   it('loads a selected HTTP tool with its request schema', async () => {
@@ -962,6 +1107,53 @@ describe('getAgentRuntimeTools schema loading', () => {
     expect(tools[0].requestSchema.function.parameters.required).toEqual(['generated']);
   });
 
+  it('falls back to member permissions when an MCP tool is not in the resource snapshot', async () => {
+    const tools = await runWithContext(
+      {
+        mcpClientMemory: {},
+        resourceContext: {
+          teamId: 'team_1',
+          isRoot: false,
+          resourceMap: new Map()
+        }
+      },
+      () =>
+        getAgentRuntimeTools({
+          tmbId: 'tmb_1',
+          tools: [{ id: 'mcp-mcp_app/search', config: {} }]
+        })
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe('search');
+    expect(authAppByTmbIdMock).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: 'mcp_app', tmbId: 'tmb_1' })
+    );
+  });
+
+  it('loads a personal Agent tool from a tool resource snapshot', async () => {
+    const resource = { type: 'tool' as const, id: 'workflow_app' };
+    const tools = await runWithContext(
+      {
+        mcpClientMemory: {},
+        resourceContext: {
+          teamId: 'team_1',
+          isRoot: false,
+          resourceMap: new Map([['tool:workflow_app', resource]])
+        }
+      },
+      () =>
+        getAgentRuntimeTools({
+          tmbId: 'tmb_1',
+          tools: [{ id: 'workflow_app', config: {} }]
+        })
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].type).toBe('workflow');
+    expect(authAppByTmbIdMock).not.toHaveBeenCalled();
+  });
+
   it('loads a legacy HTTP tool without isToolParam as an agent tool', async () => {
     const tools = await getAgentRuntimeTools({
       tmbId: 'tmb_1',
@@ -995,7 +1187,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: '秘塔搜索',
       avatar: 'metaso.png',
       intro: '搜索工具集',
-      toolDescription: '搜索工具集',
       status: 'active',
       source: 'system',
       isToolSet: true,
@@ -1038,7 +1229,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: '热榜工具',
       avatar: 'hot-list.png',
       intro: '获取热榜信息，支持36氪、知乎、微博、掘金、头条等多个平台',
-      toolDescription: '获取热榜信息',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1066,13 +1256,80 @@ describe('getAgentRuntimeTools schema loading', () => {
     );
   });
 
+  it('uses plugin intro instead of legacy toolDescription for model descriptions', async () => {
+    getSystemToolDetailMock.mockResolvedValue({
+      id: 'systemTool-search',
+      name: { en: 'Document search', 'zh-CN': '文档搜索' },
+      intro: { en: 'Search summary', 'zh-CN': '搜索简介' },
+      toolDescription: { en: 'Legacy tool description', 'zh-CN': '旧工具级描述' },
+      avatar: 'search.png',
+      isToolSet: false,
+      hasSystemSecret: false,
+      systemSecretStatus: 'none',
+      currentCost: 0,
+      systemKeyCost: 0,
+      hasTokenFee: false,
+      tags: [],
+      author: '',
+      version: '1.0.0',
+      inputSchema: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: {
+            type: 'string',
+            isToolParam: true,
+            'x-i18n': { title: { en: 'Query', 'zh-CN': '查询' } }
+          }
+        }
+      }
+    });
+
+    const tools = await getAgentRuntimeTools({
+      tmbId: 'tmb_1',
+      lang: 'zh-CN',
+      tools: [{ id: 'systemTool-search', metadataLocale: 'en', config: {} }]
+    });
+
+    expect(tools[0].name).toBe('Document search');
+    expect(tools[0].inputs.find((input) => input.key === 'query')?.label).toBe('Query');
+    expect(tools[0].requestSchema.function.description).toBe('Document search: Search summary');
+    expect(tools[0].requestSchema.function.parameters?.properties?.query).toEqual({
+      type: 'string'
+    });
+
+    getSystemToolDetailMock.mockResolvedValue({
+      id: 'systemTool-empty-intro',
+      name: 'Search',
+      intro: '',
+      toolDescription: 'Legacy tool description',
+      avatar: 'search.png',
+      isToolSet: false,
+      hasSystemSecret: false,
+      systemSecretStatus: 'none',
+      currentCost: 0,
+      systemKeyCost: 0,
+      hasTokenFee: false,
+      tags: [],
+      author: '',
+      version: '1.0.0',
+      inputSchema: { type: 'object', properties: {} }
+    });
+
+    const emptyIntroTools = await getAgentRuntimeTools({
+      tmbId: 'tmb_1',
+      tools: [{ id: 'systemTool-empty-intro', config: {} }]
+    });
+
+    expect(emptyIntroTools[0].requestSchema.function.description).toBe('Search');
+  });
+
   it('uses saved modes before recommendations and recommends modes for new inputs', async () => {
     getSystemToolDetailMock.mockResolvedValue({
       id: 'systemTool-search',
       name: 'Search',
       avatar: 'search.png',
       intro: 'Search tool',
-      toolDescription: 'Search tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1147,7 +1404,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Legacy tool',
       avatar: 'legacy.png',
       intro: 'Legacy tool',
-      toolDescription: 'Legacy tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1188,7 +1444,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Workflow Tool',
       avatar: 'workflow.png',
       intro: 'Workflow tool',
-      toolDescription: 'Workflow tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1226,7 +1481,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Workflow Tool',
       avatar: 'workflow.png',
       intro: 'Workflow tool',
-      toolDescription: 'Workflow tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1289,7 +1543,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Workflow Tool',
       avatar: 'workflow.png',
       intro: 'Workflow tool',
-      toolDescription: 'Workflow tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1374,7 +1627,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Workflow Tool',
       avatar: 'workflow.png',
       intro: 'Workflow tool',
-      toolDescription: 'Workflow tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1420,7 +1672,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Workflow Tool',
       avatar: 'workflow.png',
       intro: 'Workflow tool',
-      toolDescription: 'Workflow tool',
       status: 'active',
       source: 'system',
       isToolSet: false,
@@ -1487,7 +1738,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: '热榜工具',
       avatar: 'hot-list.png',
       intro: '获取热榜信息',
-      toolDescription: '获取热榜信息',
       status: 'active',
       source: 'debug:tmbId:tmb-1',
       isToolSet: false,
@@ -1522,7 +1772,7 @@ describe('getAgentRuntimeTools schema loading', () => {
 
     expect(getSystemToolDetailMock).toHaveBeenCalledWith({
       pluginId: 'systemTool-gpjj5s',
-      lang: undefined,
+      lang: 'en',
       source: 'debug:tmbId:tmb-1'
     });
     expect(tools[0].toolConfig?.systemTool).toEqual({
@@ -1540,7 +1790,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Weather',
       avatar: 'weather.png',
       intro: 'Weather',
-      toolDescription: 'Weather',
       status: 'active',
       source,
       isToolSet: false,
@@ -1588,7 +1837,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: 'Weather',
       avatar: 'weather.png',
       intro: 'Weather',
-      toolDescription: 'Weather',
       status: 'active',
       source,
       isToolSet: false,
@@ -1625,7 +1873,6 @@ describe('getAgentRuntimeTools schema loading', () => {
       name: '热榜工具',
       avatar: 'hot-list.png',
       intro: '获取热榜信息，支持36氪、知乎、微博、掘金、头条等多个平台',
-      toolDescription: '获取热榜信息',
       status: 'active',
       source: 'system',
       isToolSet: false,

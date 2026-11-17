@@ -1,27 +1,32 @@
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import { Box, Button, Flex, useDisclosure, HStack } from '@chakra-ui/react';
-import React, { useCallback, useMemo } from 'react';
-import { useTranslation } from 'next-i18next';
-import { TTSTypeEnum } from '@/web/core/app/constants';
-import type { AppTTSConfigType } from '@fastgpt/global/core/app/type';
-import { useAudioPlay } from '@/web/common/utils/voice';
-import MyModal from '@fastgpt/web/components/v2/common/MyModal';
+import { sortModelSelectorModels } from '@/components/Select/AIModelSelector.utils';
+import { ModelStatusLabel } from '@/components/Select/ModelStatusLabel';
 import MySlider from '@/components/Slider';
-import { defaultTTSConfig } from '@fastgpt/global/core/app/constants';
-import ChatFunctionTip from './Tip';
-import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
-import MyImage from '@fastgpt/web/components/common/Image/MyImage';
-import { useContextSelector } from 'use-context-selector';
+import DeprecationTag from '@/components/core/ai/DeprecationTag';
 import { AppContext } from '@/pageComponents/app/detail/context';
-import Avatar from '@fastgpt/web/components/common/Avatar';
-import MultipleRowSelect from '@fastgpt/web/components/common/MySelect/MultipleRowSelect';
-import AppConfigItem, { AppConfigItemAction } from './AppConfigItem';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { useAudioPlay } from '@/web/common/utils/voice';
+import { useModelDetail } from '@/web/core/ai/model/useModelDetail';
+import { useModelList } from '@/web/core/ai/model/useModelList';
+import { useModelSummary } from '@/web/core/ai/model/useModelSummary';
 import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
+import { TTSTypeEnum } from '@/web/core/app/constants';
+import { Box, Button, Flex, HStack, useDisclosure } from '@chakra-ui/react';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { defaultTTSConfig } from '@fastgpt/global/core/app/constants';
+import type { AppTTSConfigType } from '@fastgpt/global/core/app/type';
+import Avatar from '@fastgpt/web/components/common/Avatar';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import MyImage from '@fastgpt/web/components/common/Image/MyImage';
+import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
+import MultipleRowSelect from '@fastgpt/web/components/common/MySelect/MultipleRowSelect';
+import MyModal from '@fastgpt/web/components/v2/common/MyModal';
+import { useTranslation } from 'next-i18next';
+import React, { useCallback, useMemo } from 'react';
+import { useContextSelector } from 'use-context-selector';
+import AppConfigItem, { AppConfigItemAction } from './AppConfigItem';
+import ChatFunctionTip from './Tip';
 
 type TTSSelectorItemType = {
-  alias: string;
   avatar?: string;
   label: string | React.ReactNode;
   value: string;
@@ -32,45 +37,53 @@ type TTSSelectorItemType = {
 };
 
 const TTSSelect = ({
-  value = defaultTTSConfig,
+  value: inputValue,
   onChange
 }: {
   value?: AppTTSConfigType;
   onChange: (e: AppTTSConfigType) => void;
 }) => {
   const { t, i18n } = useTranslation();
+  const value = inputValue ?? defaultTTSConfig;
   const { getModelProvider } = useUserModelStore();
   const { isOpen, onOpen, onClose } = useDisclosure();
-  const { ttsModelList: ttsModels } = useUserModelLists();
+  const { modelList: ttsModels } = useModelList({ enabled: isOpen, modelType: ModelTypeEnum.tts });
+  const isBuiltin = value.type === TTSTypeEnum.none || value.type === TTSTypeEnum.web;
+  const modelId = isBuiltin ? undefined : (value.modelId ?? value.model);
+  const detailState = useModelSummary({ modelId });
+  const { setFromCatalog } = detailState;
+  const { model: selectedTtsModel } = useModelDetail({ modelId, modelType: ModelTypeEnum.tts });
 
   const appId = useContextSelector(AppContext, (v) => v.appId);
 
   const selectorList = useMemo(
     (): TTSSelectorItemType[] => [
       {
-        alias: t('app:tts_close'),
         label: t('app:tts_close'),
         value: TTSTypeEnum.none,
         children: []
       },
       {
-        alias: t('app:tts_browser'),
         label: t('app:tts_browser'),
         value: TTSTypeEnum.web,
         children: []
       },
-      ...ttsModels.map((model) => {
+      ...sortModelSelectorModels(ttsModels).map((model) => {
         const providerData = getModelProvider(model.provider, i18n.language);
         const modelName = t(model.name as any);
         return {
-          alias: modelName,
           avatar: providerData.avatar,
           label: (
-            <HStack minW={0} maxW={'100%'}>
-              <Avatar borderRadius={'0'} w={'1.25rem'} flexShrink={0} src={providerData.avatar} />
-              <Box minW={0} className={'textEllipsis'}>
-                {modelName}
-              </Box>
+            <HStack minW={0} maxW={'100%'} justifyContent={'space-between'}>
+              <HStack minW={0} flex={'1 1 0'}>
+                <Avatar borderRadius={'0'} w={'1.25rem'} flexShrink={0} src={providerData.avatar} />
+                <MyTooltip label={modelName} showOnlyWhenOverflow shouldWrapChildren={false}>
+                  <Box minW={0} className={'textEllipsis'}>
+                    {modelName}
+                  </Box>
+                </MyTooltip>
+              </HStack>
+              {model.isUpcomingDeprecation === true && <DeprecationTag size={'sm'} />}
             </HStack>
           ),
           value: model.modelId,
@@ -86,51 +99,25 @@ const TTSSelect = ({
   );
 
   const formatValue = useMemo(() => {
-    if (!value || !value.type) {
-      return [TTSTypeEnum.none, undefined];
-    }
-    if (value.type === TTSTypeEnum.none || value.type === TTSTypeEnum.web) {
+    if (isBuiltin) {
       return [value.type, undefined];
     }
-
-    const selectedModel =
-      value.modelId !== undefined
-        ? value.modelId
-        : (ttsModels.find((model) => model.model === value.model)?.modelId ?? value.model);
-    return [selectedModel, value.voice];
-  }, [ttsModels, value]);
+    return [modelId, value.voice];
+  }, [isBuiltin, modelId, value.type, value.voice]);
   const formLabel = useMemo(() => {
     const provider = selectorList.find((item) => item.value === formatValue[0]);
-    const voice = provider?.children.find((item) => item.value === formatValue[1]);
-
-    if (!provider) {
-      const modelLabel =
-        value.modelId !== undefined
-          ? value.modelId || t('common:not_model_config')
-          : value.model || t('common:not_model_config');
-      return <Box color={'red.500'}>{t('common:model_disabled', { model: modelLabel })}</Box>;
-    }
-
+    const voice = selectedTtsModel?.config.voices.find((item) => item.value === formatValue[1]);
+    if (isBuiltin) return provider?.label;
     return (
-      <Box w={'100%'} minW={0}>
-        {voice ? (
-          <Flex maxW={['180px', '250px']} minW={0} overflow={'hidden'} alignItems={'center'}>
-            <Box minW={0} flex={'1 1 auto'} overflow={'hidden'}>
-              {provider.label}
-            </Box>
-            <Box px={1} flexShrink={0}>
-              /
-            </Box>
-            <Box minW={0} flex={'1 1 auto'} className={'textEllipsis'}>
-              {voice.label}
-            </Box>
-          </Flex>
-        ) : (
-          provider.label
-        )}
-      </Box>
+      <ModelStatusLabel
+        modelId={modelId}
+        {...detailState}
+        nameSuffix={voice ? ` / ${voice.label}` : undefined}
+        showUpcomingDeprecationTag
+        hideUpcomingDeprecationTagWhenDisabled
+      />
     );
-  }, [formatValue, selectorList, t, value.model, value.modelId]);
+  }, [detailState, formatValue, isBuiltin, modelId, selectorList, selectedTtsModel]);
 
   const { playAudioByText, cancelAudio, audioLoading, audioPlaying } = useAudioPlay({
     appId,
@@ -139,18 +126,22 @@ const TTSSelect = ({
 
   const onclickChange = useCallback(
     (e: string[]) => {
+      if (!e[0]) return;
       if (e[0] === TTSTypeEnum.none || e[0] === TTSTypeEnum.web) {
         onChange({ type: e[0] });
       } else {
+        const model = ttsModels.find((model) => model.modelId === e[0]);
+        if (model) setFromCatalog(model);
         onChange({
           ...value,
           type: TTSTypeEnum.model,
           modelId: e[0],
+          model: undefined,
           voice: e[1]
         });
       }
     },
-    [onChange, value]
+    [onChange, setFromCatalog, ttsModels, value]
   );
 
   const onCloseTTSModal = useCallback(() => {
@@ -201,6 +192,7 @@ const TTSSelect = ({
               ) : (
                 <Button
                   variant={'whiteBase'}
+                  isDisabled={!isBuiltin && detailState.detail?.status !== 'active'}
                   isLoading={audioLoading}
                   leftIcon={<MyIcon name={'core/app/headphones'} w={'16px'} />}
                   onClick={() => {
@@ -216,11 +208,12 @@ const TTSSelect = ({
           </>
         }
       >
-        <Flex justifyContent={'space-between'} alignItems={'center'}>
-          <FormLabel>{t('common:core.app.tts.Speech model')}</FormLabel>
+        <Flex justifyContent={'space-between'} alignItems={'center'} gap={3} minW={0}>
+          <FormLabel flexShrink={0}>{t('common:core.app.tts.Speech model')}</FormLabel>
           <MultipleRowSelect
             rowMinWidth="160px"
-            label={<Box minW={'150px'}>{formLabel}</Box>}
+            ButtonProps={{ w: '220px', maxW: '100%', minW: 0 }}
+            label={formLabel}
             value={formatValue}
             list={selectorList}
             onSelect={onclickChange}

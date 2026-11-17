@@ -4,9 +4,11 @@
 
 本期只建设知识库同义词能力：管理员为单个知识库维护标准词与同义词映射，搜索和新写入数据立即使用最新规则，已有数据复用模型切换已有的 `dataset_trainings` 编排逐步重建。
 
-本期接受重建期间新旧 embedding 混合和召回短暂不一致，只要求最终一致。不新增同义词任务类型、队列、job、operation saga、mutation lock、自动回退、专用重试或进度协议。
+本期接受重建期间新旧 embedding 混合和召回短暂不一致，只要求最终一致。索引重建和同义词重建使用独立 training mode 和 Worker，沿用现有队列租约、重试与错误处理，不新增 MQ job、operation saga 或自动回退。
 
 能力由服务端环境变量 `DATASET_SYNONYM_ENABLED` 控制，默认关闭。关闭时管理 API 直接拒绝请求，搜索和数据写入链路不读取同义词配置、不构建 matcher，也不执行同义词转换；已存在的同义词 training 暂停领取，重新启用后继续处理。
+
+本期只考虑默认关闭的兼容行为，以及从关闭到开启的能力接入。不考虑开启后再关闭时的逻辑差异，不提供已保存提示词、映射数据或派生索引的反向清理与回退；关闭态的链路隔离不代表支持完整回退到启用前的状态。
 
 ## 2. 核心语义
 
@@ -23,9 +25,10 @@
 1. 写入完整的新 mapping 版本；
 2. CAS 切换配置的当前版本；
 3. 删除非当前版本 mapping；
-4. 按目标版本原子领取有限数量 data 并创建种子 training。
+4. 将版本不同且已完成索引或重建失败的数据标成 `rebuildSynonymPending`，清除旧错误和领取标记；
+5. 原子领取有限数量 data，改成 `rebuildSynonymRunning` 并创建 `rebuildSynonym` 种子 training。
 
-事务提交后新 matcher 立即用于搜索和新写入。普通 worker 根据 `data.synonymVersion != config.version` 持续领取和完成 rebuild，最终让全部历史向量使用当前 matcher。该版本差异是持久化恢复条件，不依赖一次性全库标记，因此进程在配置提交后退出也不会丢失待重建数据。
+事务提交后新 matcher 立即用于搜索和新写入。同义词 Worker 根据 `indexStatus=rebuildSynonymPending` 持续领取任务，执行前补充下一条。待处理状态与种子任务和词表在同一事务提交；进程退出后现有 training 和租约继续续接。整个重建期间禁止再次修改词表。
 
 数据写入使用短 TTL、支持空结果的请求合并缓存生成转换快照，避免批量导入的每个 chunk 重复读取相同配置。缓存不参与最终一致性判断：向量和全文派生数据写入完成后，仍直查 MongoDB 校验当前配置版本；不一致时回滚 Mongo 事务并清理新向量。因此其他进程切换配置不会被本地缓存掩盖。
 
@@ -68,28 +71,32 @@ mapping 使用 `teamId + datasetId + fileVersion` 归属配置版本，保存标
 
 ### 3.3 dataset_datas 与 dataset_trainings
 
-`dataset_datas.synonymVersion` 记录当前派生索引使用的配置版本，`synonymRebuildingVersion` 是领取标记；`dataset_trainings.synonymVersion` 记录任务目标版本。不增加同义词专用 mode。
+`dataset_datas.synonymVersion` 记录当前派生索引使用的配置版本，`synonymRebuildingVersion` 是领取标记；training 不保存 `synonymVersion`，以 `mode=rebuildSynonym` 表达同义词重建。`rebuildIndex` 由索引重建 Worker 消费，`rebuildSynonym` 由同义词 Worker 消费。
 
-规则变化后，种子任务和后续链式任务持续领取版本不一致且未被领取的 data。同义词任务复用模型切换的完整 rebuild，根据数据内容和模型能力进入 `imageParse`、`image`、`auto` 或 `chunk`，重新生成图片描述、自动索引和全部向量。成功写入时更新 `synonymVersion` 并释放领取标记；失败任务保留在现有 training 重试和错误处理流程中。同义词 rebuild training 不参与普通 training 的七天 TTL，避免 MongoDB 后台删除绕过应用层 claim 清理；用户手动删除任务时继续在事务中释放 claim。
+规则变化后，种子任务和后续链式任务持续领取 `rebuildSynonymPending` data。同义词重建和模型切换分别创建 `rebuildSynonym` / `rebuildIndex` 阶段，共用底层索引写入能力，以 `data.indexes` 的已存类型和原文重新生成向量，不读取 q/a、不重新分块，也不进入 `imageParse`、`image` 或 `auto`。图片向量只使用已存 `imageEmbedding` 索引，目标模型不支持时跳过；全文派生文本来自文本索引，图片源不进入全文检索。成功写入时更新 `synonymVersion` 并释放领取标记；失败任务保留在现有 training 重试和错误处理流程中。同义词 rebuild training 不参与普通 training 的七天 TTL，避免 MongoDB 后台删除绕过应用层 claim 清理；用户手动删除重建任务时，经额外确认后删除关联 data 及其索引。
 
 ## 4. 更新流程
 
 上传、替换和删除共用 mutation 服务：
 
 1. 校验知识库写权限和页面读取到的配置 ID/version。
-2. 检查现有 `dataset_trainings` 和 `data.rebuilding`，队列忙时禁止再次修改。
+2. 检查现有 `dataset_trainings` 和 `data.indexStatus` 的待重建/重建中状态，队列忙时禁止再次修改。
 3. 创建现有训练账单。
 4. 在事务中写入新 mapping、CAS 切换配置、清理旧 mapping，并按目标版本领取 data、创建受 vector worker 并发上限约束的普通种子任务。
 5. 事务提交后清理当前进程 matcher cache。
-6. 后续任务由原 worker 在处理 `dataId` rebuild 时携带相同 `synonymVersion` 链式补充。
+6. 后续任务由同义词 Worker 按待重建状态链式补充，任务只携带 dataId 和计费归属，不携带词表版本。
 
-删除规则使用空 mapping，并立即设置 `enabled=false`。普通 rebuild 在没有 matcher 时以原文重新生成向量和全文派生数据。
+删除规则使用空 mapping，并立即设置 `enabled=false`。同义词 Worker 在没有 matcher 时以原文重新生成向量和全文派生数据。
 
 mapping 写入、配置 CAS、首批 data 领取或种子任务创建失败会回滚整个事务，不产生半套 matcher、孤立 mapping 或只有领取标记没有任务的状态。事务提交后的 worker 故障沿用现有 training 重试；删除失败任务时释放领取标记，使同版本后续领取可以重新创建任务。
 
 ## 5. Worker 与状态
 
-worker 不识别任务来源。所有带 `dataId` 的 training 都走已有 rebuild 路径，并在执行前补充下一条普通任务。
+两个 Worker 只领取各自 mode。`rebuildIndex` 按索引待重建状态续接；`rebuildSynonym` 按同义词待重建状态续接，并从配置读取当前版本。二者共享 embedding 并发上限和底层 indexes 重建；首次训练 `index` 单独处理正文和增强产物。重建错误只支持重试或删除，正文编辑通过 data 更新接口执行。
+
+集合列表、详情和训练弹窗在同一次 data 聚合中，分别统计 `rebuildIndexPending/Running/Failed` 和 `rebuildSynonymPending/Running/Failed`。两类 training 均排除出普通训练聚合，避免重复计数。集合列表和详情合计 Pending + Running；训练弹窗将 Pending 计入 queuedCounts、Running 计入 trainingCounts，展示时合计 queuedCounts + trainingCounts，分别显示“索引重建 → 已就绪”和“同义词重建 → 已就绪”，统一以“N 条处理中”展示数量。新导入沿用原有配置阶段，混合模式分别展示链路，错误展示在所属模式的阶段，异常列表继续提供重试和删除。集合列表和数据页的已就绪标签不再打开弹窗；已经打开的弹窗保留本轮链路，完成后各阶段显示打勾。
+
+旧 `mode=rebuild` 通过迁移转为 `rebuildIndex`，携带词表版本的旧重建转为 `rebuildSynonym` 并恢复关联 data 状态，清除 training 的旧版本字段。旧轮次尚未入队的数据由同义词 Worker 按版本差异逐条领取，避免迁移事务全库更新；新轮次在入口统一标记 Pending，进度包括全部未入队数据。旧节点停止后执行迁移，v1 断点升级到 v2 时重扫，重复执行不会回退新状态。
 
 管理页的处理中状态通过现有 `dataset_trainings` 查询，不在同义词配置中维护第二份状态。重建失败继续显示在已有训练错误入口。
 
@@ -103,25 +110,83 @@ JSON 和 multipart 输入统一经过 Zod 业务 schema。API 使用 `parseApiIn
 
 知识库删除时按既有生命周期清理配置和 mapping。同义词不注册专用 change stream 或 worker。
 
-## 8. 验收与测试
+## 8. 检索结果映射、提示词注入与能力开关（2026-10 补充）
+
+本节补充 §1-§7 之后新增的三块能力：检索结果携带 `synonymMappings`、引用提示词模板注入、以及前后端之间的能力开关契约。阅读本节即可理解 `packages/service/core/dataset/synonym/` 与 `packages/global/core/ai/prompt/synonymQuote.ts` 的用途，不依赖外部仓库文档。
+
+### 8.1 运行开关与能力投影是两件事
+
+| 层 | 载体 | 作用 | 读取方 |
+| --- | --- | --- | --- |
+| 运行开关 | `serviceEnv.DATASET_SYNONYM_ENABLED`（默认 false） | 决定索引、检索、重排、Prompt 代入是否走同义词链路 | 服务端，直接读取 `serviceEnv.DATASET_SYNONYM_ENABLED` |
+| 能力投影 | `feConfigs.datasetSynonymEnabled` | 决定编辑器是否提供带 `{{synonymMappings}}` 的引用模板 | 前端 |
+
+服务端逻辑**不得**读取 `feConfigs.datasetSynonymEnabled`，否则会出现 env 与配置不一致的双开关。
+
+`FastGPTFeConfigsSchema` 必须声明该字段：`getInitData` 最终用 `ClientFeConfigsSchema`（`partial().strip()`）解析响应，未声明字段会被静默丢弃。独立 FastGPT 由 `initSystemConfig()` 从同一 env 派生；agent-builder 由自己的 backend 在转发后按自身 env 覆盖。
+
+### 8.2 `synonymMappings` 语义
+
+- 每个分块可带 `synonymMappings`：key 是该分块正文/标题里**实际命中**的原词（保留原文大小写），value 是标准词。
+- 字段缺失表示没有得到可靠映射（功能关闭、快照不可用、跨租户），空对象 `{}` 表示确认未命中。
+- 单分块最多保留 100 条映射，超出按整条映射截断。
+- 装饰在 `defaultRecall` 中、`formatDatasetDataValues` **之前**完成，避免图片短链改写 q/a 后与库内原文比对失败。
+- AI 对话运行时只在已保存模板包含 `{{synonymMappings}}` 时代入；分块未提供可靠映射时省略标准内容模板的映射字段。默认关闭时不注入同义词数据，不要求对曾经启用后保存的模板及静态说明做反向清理。
+
+### 8.3 装饰的幂等与可信边界
+
+- 引擎召回结果携带内部 Symbol 快照（teamId / datasetId / synonymVersion / q / a），不进入序列化输出。
+- 外部来源无法携带 Symbol，按 id 回查 Mongo，并比对 q/a/updateTime 后才采信。
+- `attachSynonymMappingsToSearchResults` 幂等：已携带 `synonymMappings` 且 `datasetId` 在本次授权范围内的条目直接透传（剥离 Symbol），避免二次查库和签名正文导致的映射丢失；越界条目丢弃上游映射；功能关闭时统一剥离全部同义词字段。
+
+### 8.4 引用模板注入（`withSynonymQuoteTemplates`）
+
+纯函数，只装饰"编辑器可新选"的模板，不改运行时默认模板和已保存节点：
+
+- `content` 模板（`<Quote>` 形态）：注入 `{{synonymMappings}}` 占位符；
+- 自然语言模板：追加静态“词汇映射说明 / Vocabulary Mapping”，约束模型只在本条引用内做术语对齐，不得为映射生成引用标记。
+
+引擎内没有调用方是设计结果：消费方是宿主 UI。FastGPT app 直接 import 引擎源码；agent-builder 的 UI 使用本地副本，并由测试读取本文件逐字比对，防止两份逻辑漂移。
+
+### 8.5 独立部署启用步骤
+
+1. 设置 `DATASET_SYNONYM_ENABLED=true`，开启全部服务端行为；`projects/app/src/service/common/system/index.ts` 的 `initSystemConfig()` 会自动派生 `feConfigs.datasetSynonymEnabled: serviceEnv.DATASET_SYNONYM_ENABLED`。
+2. 前端在引用模板设置与新节点默认模板处用 `withSynonymQuoteTemplates` 装饰模板，`enabled` 取 `feConfigs.datasetSynonymEnabled === true`。
+3. 校验默认关闭时沿用原有链路；开启后 `getInitData` 返回 true、检索结果带映射、编辑器提供占位符。开启后再关闭的差异不纳入本期验收。
+
+### 8.6 与重排的关系
+
+重排采用原始 query 与临时标准化 query 双路打分，逐条取最大值并以原始分数为下限（`synonym/rerank.ts`）。query 命中同义词时转换后的问题与原文不同，全部候选都要在新 query 下重新打分，请求数与 token 约为单路两倍，这是已确认接受的固有成本，理由记录在 `rerank.ts` 第二路入口注释中。
+
+### 8.7 管理面边界：API 在引擎，页面在宿主
+
+`projects/app/src/pages/api/core/dataset/synonym/*` 已覆盖管理页需要的全部动作：`upload` / `uploadFile`（上传或替换词表）、`update` / `updateFile`（按版本 CAS 更新）、`delete`、`detail`（当前配置与重建进度）、`mappings`（分页检索）、`download`（导出 CSV）。路由层只做 `parseApiInput`、`authDataset` 和 response schema 校验；事务、队列忙校验、重建任务种子、matcher 缓存失效都在 `createDatasetSynonymMutation`。
+
+管理页面不在本仓库实现是分层结果，不是能力缺口：
+
+- FastGPT 的职责是引擎与 API 契约，管理页属于宿主产品的业务界面。agent-builder 的 UI（`projects/ui/src/features/dataset/components/detail/Synonym/index.tsx`）直接消费这套 API；若在本仓库再实现一份，会形成两套权限与交互策略并长期分叉。
+- 页面所需状态全部由现有查询派生：`detail` 同时返回配置、是否存在重建中的 data、关联 training，管理页不需要第二套状态存储。因此 API 契约稳定，后续接入页面不需要改引擎。
+- 独立部署需要页面时，消费同一组 API 即可；接口均经过 OpenAPI schema 校验并有定向测试。
+
+## 9. 验收与测试
 
 必须覆盖：
 
 - JSON 和文件输入的空白、冲突、大小写与限制校验；
 - mapping、配置切换和首批 training 创建的事务原子性；
 - 并发上传只有一个版本成功激活；
-- 所有历史 data 都进入普通全量 rebuild，而非同义词差异任务；
+- 所有符合重建条件的历史 data 都进入同义词全量重建；
 - 同义词与模型切换生成相同的 training mode 和字段；
 - 上传、替换和删除后 matcher 立即生效；
 - 搜索始终保留原词并追加标准词；
 - 多知识库搜索、mapping 分页和静态 i18n key。
 
-## 9. TODO
+## 10. TODO
 
 - [x] mapping、配置与首批 training 创建使用同一 MongoDB 事务。
 - [x] 使用物化版本差异保证待重建 data 可恢复领取。
 - [x] 复用普通 training mode，通过目标版本字段驱动同义词重建。
-- [x] 同义词与模型切换共用 rebuild 种子和链式任务创建。
+- [x] 同义词与模型切换使用独立 mode、Worker 和领取逻辑，共用底层索引写入。
 - [x] 管理状态复用 data/training 查询。
 - [x] 合并批量写入的配置快照读取，并只保留一次权威版本校验。
 - [x] 增加默认关闭的服务端功能开关，关闭时跳过同义词查询和转换链路。

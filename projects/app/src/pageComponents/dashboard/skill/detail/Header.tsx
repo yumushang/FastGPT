@@ -24,6 +24,7 @@ import {
   getSkillCollaboratorList,
   postUpdateSkillCollaborators
 } from '@/web/core/skill/collaborator';
+import { isSkillExportDisabled } from '@fastgpt/global/core/ai/skill/exportAvailability';
 import { SkillRoleList } from '@fastgpt/global/support/permission/skill/constant';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
 import dynamic from 'next/dynamic';
@@ -163,14 +164,19 @@ export const LeftHeader = () => {
   const { t } = useTranslation();
   const router = useRouter();
 
-  const { skillDetail, isSkillReady, restartChat } = useContextSelector(
+  const { skillDetail, isSkillReady, sandboxState, restartChat } = useContextSelector(
     SkillDetailContext,
     (v) => ({
       skillDetail: v.skillDetail,
       isSkillReady: v.isSkillReady,
+      sandboxState: v.sandboxState,
       restartChat: v.restartChat
     })
   );
+  const exportDisabled = isSkillExportDisabled({
+    hasWritePer: skillDetail?.permission?.hasWritePer,
+    sandboxState
+  });
 
   const { setEditedSkill, setShowPermModal, onExportSkill, openConfirmDelete, onClickDeleteSkill } =
     useHeader();
@@ -196,7 +202,7 @@ export const LeftHeader = () => {
           {
             icon: 'key' as const,
             type: 'grayBg' as const,
-            label: t('skill:permission_settings'),
+            label: t('common:permission.Permission'),
             onClick: () => setShowPermModal(true)
           }
         ]
@@ -207,43 +213,50 @@ export const LeftHeader = () => {
             icon: 'export' as const,
             type: 'grayBg' as const,
             label: t('skill:export_config'),
+            disabled: exportDisabled,
+            disabledTip: exportDisabled ? t('skill:export_sandbox_wait') : undefined,
             onClick: () => {
-              if (!skillDetail) return;
+              if (!skillDetail || exportDisabled) return;
               onExportSkill(skillDetail._id, skillDetail.name);
             }
           }
         ]
       },
-      {
-        children: [
-          {
-            type: 'danger' as const,
-            icon: 'delete' as const,
-            label: t('common:Delete'),
-            onClick: () => {
-              if (!skillDetail) return;
-              openConfirmDelete({
-                customContent:
-                  (skillDetail.appCount ?? 0) > 0 ? (
-                    <Trans
-                      i18nKey={i18nT('skill:confirm_delete_with_refs')}
-                      values={{ count: skillDetail.appCount }}
-                      components={{ bold: <Box as={'span'} fontWeight={'600'} /> }}
-                    />
-                  ) : null,
-                onConfirm: () => onClickDeleteSkill(skillDetail._id),
-                confirmText: t('skill:confirm_delete_action'),
-                confirmButtonVariant: 'dangerFill',
-                inputConfirmText: skillDetail.name
-              })();
+      ...(skillDetail?.permission?.isOwner
+        ? [
+            {
+              children: [
+                {
+                  type: 'danger' as const,
+                  icon: 'delete' as const,
+                  label: t('common:Delete'),
+                  onClick: () => {
+                    if (!skillDetail) return;
+                    openConfirmDelete({
+                      customContent:
+                        skillDetail.appCount !== undefined && skillDetail.appCount > 0 ? (
+                          <Trans
+                            i18nKey={i18nT('skill:confirm_delete_with_refs')}
+                            values={{ count: skillDetail.appCount }}
+                            components={{ bold: <Box as={'span'} fontWeight={'600'} /> }}
+                          />
+                        ) : null,
+                      onConfirm: () => onClickDeleteSkill(skillDetail._id),
+                      confirmText: t('skill:confirm_delete_action'),
+                      confirmButtonVariant: 'dangerFill',
+                      inputConfirmText: skillDetail.name
+                    })();
+                  }
+                }
+              ]
             }
-          }
-        ]
-      }
+          ]
+        : [])
     ],
     [
       t,
       skillDetail,
+      exportDisabled,
       onExportSkill,
       setEditedSkill,
       setShowPermModal,
@@ -341,7 +354,6 @@ export const RightHeader = () => {
       publishButton={
         <Button
           size={'sm'}
-          h={'34px'}
           px={'14px'}
           variant={'primary'}
           isLoading={isSaving}

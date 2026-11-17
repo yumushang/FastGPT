@@ -1,17 +1,6 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import React, { useMemo, useRef } from 'react';
-import {
-  Box,
-  TableContainer,
-  Table,
-  Thead,
-  Tr,
-  Th,
-  Td,
-  Tbody,
-  Flex,
-  Button,
-  IconButton
-} from '@chakra-ui/react';
+import { Box, Table, Thead, Tr, Th, Td, Tbody, Flex, Button, IconButton } from '@chakra-ui/react';
 import { ImportDataSourceEnum } from '@fastgpt/global/core/dataset/constants';
 import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import MyIcon from '@fastgpt/web/components/common/Icon';
@@ -91,7 +80,7 @@ const Upload = () => {
           .filter((item) => item.apiFile)
           .map((item) => item.apiFile!);
 
-        await postCreateDatasetApiDatasetCollection({
+        const { failedCount } = await postCreateDatasetApiDatasetCollection({
           ...data,
           parentId,
           datasetId: datasetDetail._id,
@@ -99,6 +88,14 @@ const Upload = () => {
           customPdfParse,
           apiFiles
         });
+
+        // 服务端对「部分节点没进去」仍返回 200（已建成的目录/文件不回滚，重试幂等），
+        // 不在这里拦截就会走到 onSuccess 弹「导入成功」并关掉导入页，用户以为全进去了
+        if (failedCount > 0) {
+          throw new Error(
+            t('common:core.dataset.import.api_dataset_partial_failed', { failedCount })
+          );
+        }
       } else {
         // Batch create collection and upload chunks
         for await (const item of filterWaitingSources) {
@@ -216,8 +213,25 @@ const Upload = () => {
   );
 
   return (
-    <Box h={'100%'} overflow={'auto'}>
-      <TableContainer>
+    <Box h={'100%'} overflow={'hidden'}>
+      <FixedTableContainer
+        h="100%"
+        maxH="none"
+        footer={
+          <Flex justifyContent={'flex-end'} mt={4}>
+            <Button
+              isLoading={isLoading}
+              onClick={processParamsForm.handleSubmit((data) => startUpload(data))}
+            >
+              {totalFilesCount > 0 &&
+                `${t('dataset:total_num_files', {
+                  total: totalFilesCount
+                })} | `}
+              {buttonText}
+            </Button>
+          </Flex>
+        }
+      >
         <Table variant={'simple'} fontSize={'sm'} draggable={false}>
           <Thead draggable={false}>
             <Tr bg={'myGray.100'} mb={2}>
@@ -282,20 +296,7 @@ const Upload = () => {
             ))}
           </Tbody>
         </Table>
-      </TableContainer>
-
-      <Flex justifyContent={'flex-end'} mt={4}>
-        <Button
-          isLoading={isLoading}
-          onClick={processParamsForm.handleSubmit((data) => startUpload(data))}
-        >
-          {totalFilesCount > 0 &&
-            `${t('dataset:total_num_files', {
-              total: totalFilesCount
-            })} | `}
-          {buttonText}
-        </Button>
-      </Flex>
+      </FixedTableContainer>
     </Box>
   );
 };

@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import type {
   RerankModelConfigType,
-  RerankSystemModelDataType
-} from '@fastgpt/global/core/ai/model.schema';
+  RerankModelDataType
+} from '@fastgpt/global/core/ai/model/schema';
 import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
 
 // hoisted：让 mock 实例可在 beforeEach 中重设
@@ -17,12 +17,20 @@ vi.mock('@fastgpt/service/common/string/tiktoken', () => ({
   countPromptTokens: mockCountPromptTokens
 }));
 
-// rerank 走 axiosWithoutSSRF(管理员配置的 url 允许内网),mock 它的 .post 返回 axios 风格的 { data, ... }
-vi.mock('@fastgpt/service/common/api/axios', () => ({
-  axiosWithoutSSRF: {
+// 自定义端点与 AI Proxy 的客户端选择由 config.test 覆盖；这里直接固定返回 mock 客户端。
+vi.mock('@fastgpt/service/core/ai/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/core/ai/config')>()),
+  getModelRequestClient: () => ({
     post: (...args: any[]) => Promise.resolve(mockAxiosPost(...args)).then((data) => ({ data }))
-  }
+  })
 }));
+
+vi.mock('@fastgpt/service/common/api/axios', () => {
+  const createClient = () => ({
+    post: (...args: any[]) => Promise.resolve(mockAxiosPost(...args)).then((data) => ({ data }))
+  });
+  return { axios: createClient(), axiosWithoutSSRF: createClient() };
+});
 
 // Mock text2Chunks：按 chunkSize 字符切分，保证测试确定性
 vi.mock('@fastgpt/service/worker/function', () => ({
@@ -39,9 +47,8 @@ vi.mock('@fastgpt/service/worker/function', () => ({
 const { reRankRecall } = await import('@fastgpt/service/core/ai/rerank/index');
 
 const buildModel = (
-  overrides: Partial<RerankModelConfigType> &
-    Partial<Omit<RerankSystemModelDataType, 'config'>> = {}
-): RerankSystemModelDataType => {
+  overrides: Partial<RerankModelConfigType> & Partial<Omit<RerankModelDataType, 'config'>> = {}
+): RerankModelDataType => {
   const { maxToken = 8000, defaultConfig, ...commonOverrides } = overrides;
 
   return {
@@ -52,7 +59,6 @@ const buildModel = (
     type: ModelTypeEnum.rerank,
     scope: 'system' as const,
     isActive: true,
-    isCustom: false,
     ...commonOverrides,
     config: { maxToken, defaultConfig }
   };
@@ -366,7 +372,7 @@ describe('reRankRecall', () => {
         query: 'q',
         documents: [{ id: 'doc1', text: 'hello' }]
       })
-    ).rejects.toThrow(ModelErrEnum.unExist);
+    ).rejects.toThrow(ModelErrEnum.unConfigured);
   });
 
   it('query 超过 maxToken 时 reject', async () => {

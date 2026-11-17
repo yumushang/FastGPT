@@ -1,11 +1,8 @@
+import { chatPublishSourceMongoSchema } from './publishSource/schema';
 import { connectionMongo, defineIndex, getMongoModel } from '../../common/mongo';
 const { Schema } = connectionMongo;
 import { type ChatSchemaType } from '@fastgpt/global/core/chat/type';
-import {
-  ChatGenerateStatusEnum,
-  ChatSourceEnum,
-  ChatSourceTypeEnum
-} from '@fastgpt/global/core/chat/constants';
+import { ChatSourceEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import {
   TeamCollectionName,
   TeamMemberCollectionName
@@ -57,22 +54,21 @@ const ChatSchema = new Schema({
     default: ''
   },
   customTitle: {
-    type: String,
-    default: ''
+    type: String
   },
   top: {
     type: Boolean,
     default: false
   },
+  publishSource: { type: chatPublishSourceMongoSchema },
   source: {
     type: String,
     required: true,
     enum: Object.values(ChatSourceEnum)
   },
   sourceName: String,
-  shareId: {
-    type: String
-  },
+  /** @deprecated 仅保留历史值，当前业务不再读写。 */
+  shareId: String,
   outLinkUid: {
     type: String
   },
@@ -107,6 +103,23 @@ const ChatSchema = new Schema({
     type: Number,
     default: 0
   },
+  summary: {
+    type: {
+      llmInputTokens: {
+        type: Number,
+        default: 0
+      },
+      llmOutputTokens: {
+        type: Number,
+        default: 0
+      },
+      hasAgentSandbox: {
+        type: Boolean
+      }
+    },
+    _id: false,
+    default: () => ({ llmInputTokens: 0, llmOutputTokens: 0 })
+  },
 
   searchKey: String,
   deleteTime: {
@@ -115,15 +128,6 @@ const ChatSchema = new Schema({
     select: false
   },
 
-  chatGenerateStatus: {
-    type: Number,
-    enum: [
-      ChatGenerateStatusEnum.generating,
-      ChatGenerateStatusEnum.done,
-      ChatGenerateStatusEnum.error
-    ],
-    default: ChatGenerateStatusEnum.done
-  },
   hasBeenRead: {
     type: Boolean,
     default: false
@@ -160,7 +164,7 @@ defineIndex(ChatSchema, {
   }
 });
 
-// get share chat history
+// 当前分享历史改用 publishSource；保留旧索引供旧版本读取，不登记自动清理。
 defineIndex(ChatSchema, {
   key: { shareId: 1, outLinkUid: 1, updateTime: -1 },
   options: {
@@ -168,6 +172,12 @@ defineIndex(ChatSchema, {
       shareId: { $exists: true }
     }
   }
+});
+
+// 分享历史按发布渠道记录 ID 和访客身份查询。
+defineIndex(ChatSchema, {
+  key: { 'publishSource.type': 1, 'publishSource.id': 1, outLinkUid: 1, updateTime: -1 },
+  options: { partialFilterExpression: { 'publishSource.id': { $exists: true } } }
 });
 
 /* get chat logs */
@@ -179,14 +189,15 @@ defineIndex(ChatSchema, { key: { appId: 1, tmbId: 1, updateTime: -1 } });
 defineIndex(ChatSchema, {
   key: { appId: 1, source: 1, tmbId: 1, updateTime: -1 }
 });
-// Periodic cleanup for chats stuck in generating state.
+// 旧版 generating 清理索引已由 Redis lease 取代；仅登记本项目创建过的索引供自动清理。
 defineIndex(ChatSchema, {
   key: { chatGenerateStatus: 1, updateTime: 1 },
   options: {
     partialFilterExpression: {
-      chatGenerateStatus: ChatGenerateStatusEnum.generating
+      chatGenerateStatus: 0
     }
-  }
+  },
+  deprecated: true
 });
 
 /* 反馈过滤的索引 */

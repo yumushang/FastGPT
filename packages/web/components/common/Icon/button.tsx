@@ -13,25 +13,31 @@ type Props = FlexProps & {
   isLoading?: boolean;
 };
 
-const MyIconButton = ({
-  icon,
-  onClick,
-  hoverColor = 'primary.600',
-  hoverBg = 'myGray.05',
-  hoverBorderColor = '',
-  size = '1rem',
-  tip,
-  isLoading = false,
-  ...props
-}: Props) => {
+/** Forward the DOM anchor so popovers and other trigger consumers can position correctly. */
+const MyIconButton = React.forwardRef<HTMLDivElement, Props>(function MyIconButton(
+  {
+    icon,
+    onClick,
+    hoverColor = 'primary.600',
+    hoverBg = 'myGray.05',
+    hoverBorderColor = '',
+    size = '1rem',
+    tip,
+    isLoading = false,
+    ...props
+  },
+  ref
+) {
   return (
     <MyTooltip label={tip} shouldWrapChildren={false}>
       <Flex
+        ref={ref}
         position={'relative'}
         p={1}
         color={'myGray.500'}
         rounded={'sm'}
         alignItems={'center'}
+        justifyContent={'center'}
         bg={'transparent'}
         transition={'background 0.1s'}
         cursor={'pointer'}
@@ -47,11 +53,11 @@ const MyIconButton = ({
         sx={{ userSelect: 'none' }}
         {...props}
       >
-        <MyIcon name={isLoading ? 'common/loading' : (icon as any)} w={size} />
+        <MyIcon name={isLoading ? 'common/loading' : (icon as any)} w={size} h={size} />
       </Flex>
     </MyTooltip>
   );
-};
+});
 
 export default MyIconButton;
 

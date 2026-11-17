@@ -1,4 +1,4 @@
-import { sliceStrStartEnd } from '@fastgpt/global/common/string/tools';
+import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/utils';
 import type { AgentLoopCoreEventStream, CreateAgentLoopCoreEventStreamParams } from './type';
@@ -9,19 +9,39 @@ const AGENT_PLAN_STREAM_RESPONSE_ID = 'agent-plan-stream';
  * 创建 agent-loop 到 workflow SSE 的共享流式适配器。
  *
  * 这里只负责前端实时事件，不维护 assistantResponses 或 nodeResponses。
- * ToolCall 通过 streamAnswer 开关控制是否把模型内容作为聊天回答输出；
- * Workflow Agent 通常始终开启 answer，只用 streamReasoning 控制思考过程展示。
+ * 工具响应透传模型实际消费的完整结果，与聊天记录一致，不再按展示长度裁剪。
+ * ToolCall 与 Workflow Agent 都通过 streamAnswer 控制正文、工具和计划的可见流；
+ * streamReasoning 独立控制思考过程，交互与节点运行状态仍由上层驱动。
  */
 export const createAgentLoopCoreEventStream = ({
   workflowStreamResponse,
   streamAnswer = true,
   streamReasoning = true,
-  sliceToolResponse = false,
   getToolInfo
 }: CreateAgentLoopCoreEventStreamParams): AgentLoopCoreEventStream => {
+  // response id 只用于流式 UI 识别 value 边界，不写入最终聊天记录。
+  const responseIdPrefix = `answer-${getNanoid(8)}`;
+  let responseIdIndex = 0;
+  let pendingResponseId: string | undefined;
+  let activeResponseId: string | undefined;
+
+  const startNewAnswerBlock = () => {
+    pendingResponseId = `${responseIdPrefix}-${++responseIdIndex}`;
+  };
+
+  const getAnswerResponseId = () => {
+    if (pendingResponseId) {
+      activeResponseId = pendingResponseId;
+      pendingResponseId = undefined;
+    }
+    return activeResponseId;
+  };
+
   const streamReasoningText = (text: string) => {
     if (!streamReasoning) return;
+    const responseId = getAnswerResponseId();
     workflowStreamResponse?.({
+      ...(responseId ? { id: responseId } : {}),
       event: SseResponseEventEnum.answer,
       data: textAdaptGptResponse({
         reasoning_content: text
@@ -31,7 +51,9 @@ export const createAgentLoopCoreEventStream = ({
 
   const streamAnswerText = (text: string) => {
     if (!streamAnswer) return;
+    const responseId = getAnswerResponseId();
     workflowStreamResponse?.({
+      ...(responseId ? { id: responseId } : {}),
       event: SseResponseEventEnum.answer,
       data: textAdaptGptResponse({
         text
@@ -39,7 +61,7 @@ export const createAgentLoopCoreEventStream = ({
     });
   };
 
-  const streamToolCall: AgentLoopCoreEventStream['streamToolCall'] = (call) => {
+  const streamToolCall: AgentLoopCoreEventStream['streamToolCall'] = (call, options) => {
     if (!streamAnswer) return;
 
     const toolInfo = getToolInfo(call.function.name);
@@ -54,7 +76,8 @@ export const createAgentLoopCoreEventStream = ({
           toolName: toolInfo.name,
           toolAvatar: toolInfo.avatar || '',
           functionName: call.function.name,
-          params: call.function.arguments ?? ''
+          params: options?.hideDetails ? '' : (call.function.arguments ?? ''),
+          ...(options?.hideDetails ? { hideDetails: true } : {})
         }
       }
     });
@@ -95,15 +118,15 @@ export const createAgentLoopCoreEventStream = ({
           toolName: '',
           toolAvatar: '',
           params: '',
-          response: sliceToolResponse
-            ? sliceStrStartEnd(response || '', 5000, 5000)
-            : response || ''
+          response: response ?? ''
         }
       }
     });
   };
 
   const streamPlanStatus: AgentLoopCoreEventStream['streamPlanStatus'] = (status) => {
+    if (!streamAnswer) return;
+
     workflowStreamResponse?.({
       id: AGENT_PLAN_STREAM_RESPONSE_ID,
       event: SseResponseEventEnum.planStatus,
@@ -116,6 +139,8 @@ export const createAgentLoopCoreEventStream = ({
   };
 
   const streamPlan: AgentLoopCoreEventStream['streamPlan'] = (plan) => {
+    if (!streamAnswer) return;
+
     workflowStreamResponse?.({
       id: AGENT_PLAN_STREAM_RESPONSE_ID,
       event: SseResponseEventEnum.plan,
@@ -139,6 +164,7 @@ export const createAgentLoopCoreEventStream = ({
   };
 
   return {
+    startNewAnswerBlock,
     streamReasoning: streamReasoningText,
     streamAnswer: streamAnswerText,
     streamToolCall,

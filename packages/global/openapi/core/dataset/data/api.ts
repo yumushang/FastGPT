@@ -1,3 +1,4 @@
+import { ChatIdSchema } from '../../../../core/chat/schema';
 import z from 'zod';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import {
@@ -7,8 +8,8 @@ import {
   UpdateDatasetDataPropsSchema
 } from '../../../../core/dataset/type';
 import { DatasetCollectionDataProcessModeEnum } from '../../../../core/dataset/constants';
-import { OutLinkChatAuthSchema } from '../../../../support/permission/chat';
-import { PaginationSchema, PaginationResponseSchema } from '../../../api';
+import { DatasetDataIndexStatusEnum } from '../../../../core/dataset/data/constants';
+import { createPaginationSchema, PaginationResponseSchema } from '../../../api';
 import {
   createOptionalOutLinkChatTargetInputSchema,
   transformOptionalChatAuthTargetInput
@@ -152,32 +153,31 @@ export type DeleteDatasetDataIndexResponse = z.infer<typeof DeleteDatasetDataInd
  * API: 获取引用数据
  * Route: POST /api/core/dataset/data/getQuoteData
  * ============================================================================ */
-export const GetQuoteDataBodyRawSchema = createOptionalOutLinkChatTargetInputSchema({
-  id: ObjectIdSchema.meta({
-    example: '68ad85a7463006c963799a05',
-    description: '数据 ID'
-  }),
-  chatId: z.string().optional().meta({
-    example: '68ad85a7463006c963799a11',
-    description: '对话 ID（对话模式必填）'
-  }),
-  chatItemDataId: z.string().optional().meta({
-    example: '68ad85a7463006c963799a12',
-    description: '对话条目数据 ID（对话模式必填）'
-  })
-}).refine(
+export const GetQuoteDataBodyRawSchema = createOptionalOutLinkChatTargetInputSchema(
+  {
+    id: ObjectIdSchema.meta({
+      example: '68ad85a7463006c963799a05',
+      description: '数据 ID'
+    }),
+    chatId: ChatIdSchema.min(1).optional().meta({
+      example: '68ad85a7463006c963799a11',
+      description: '对话 ID（对话模式必填）'
+    }),
+    chatItemDataId: z.string().min(1).optional().meta({
+      example: '68ad85a7463006c963799a12',
+      description: '对话条目数据 ID（对话模式必填）'
+    })
+  },
+  { requiredIdentityFields: ['chatId', 'chatItemDataId'] }
+).refine(
   (d) =>
-    (!!d.chatId &&
-      (!!d.appId ||
-        !!d.skillId ||
-        !!(d.outLinkAuthData?.shareId && d.outLinkAuthData?.outLinkUid)) &&
-      !!d.chatItemDataId) ||
+    (!!d.chatId && !!d.chatItemDataId) ||
     (!d.chatId &&
       !d.appId &&
       !d.skillId &&
       !(d.outLinkAuthData?.shareId || d.outLinkAuthData?.outLinkUid) &&
       !d.chatItemDataId),
-  { message: '对话模式下 chat target / chatId / chatItemDataId 必须同时提供' }
+  { message: '对话模式下 chatId / chatItemDataId 必须同时提供；个人密钥和登录态还需 appId' }
 );
 export const GetQuoteDataBodySchema = GetQuoteDataBodyRawSchema.transform(
   transformOptionalChatAuthTargetInput
@@ -216,9 +216,11 @@ export const InsertDataBodySchema = PushDataChunkSchema.omit({ q: true }).extend
 });
 export type InsertDataBody = z.infer<typeof InsertDataBodySchema>;
 
-export const InsertDataResponseSchema = ObjectIdSchema.meta({
-  example: '68ad85a7463006c963799a07',
-  description: '新插入的数据 ID'
+export const InsertDataResponseSchema = z.object({
+  dataIds: z.array(ObjectIdSchema).meta({
+    example: ['68ad85a7463006c963799a07'],
+    description: '实际插入的数据 ID 列表'
+  })
 });
 export type InsertDataResponse = z.infer<typeof InsertDataResponseSchema>;
 
@@ -286,6 +288,9 @@ export const PushDataResponseSchema = z.object({
   insertLen: z.number().meta({
     example: 10,
     description: '成功插入的数据条数'
+  }),
+  dataIds: z.array(ObjectIdSchema).meta({
+    description: '实际插入的数据 ID 列表'
   })
 });
 export type PushDataResponseType = z.infer<typeof PushDataResponseSchema>;
@@ -304,10 +309,15 @@ export const GetDataListItemSchema = z.object({
   imageSize: z.number().optional().meta({ description: '图片大小（字节）' }),
   imagePreviewUrl: z.string().optional().meta({ description: '图片预览 URL' }),
   chunkIndex: z.number().optional().meta({ description: '块索引' }),
+  indexStatus: z
+    .enum(DatasetDataIndexStatusEnum)
+    .optional()
+    .meta({ description: '索引状态，字段缺失表示已索引的历史数据' }),
+  indexErrorMsg: z.string().optional().meta({ description: '索引错误信息' }),
   updated: z.boolean().optional().meta({ description: '是否已更新' })
 });
 
-export const GetDatasetDataListBodySchema = PaginationSchema.extend({
+export const GetDatasetDataListBodySchema = createPaginationSchema({
   collectionId: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a06',
     description: '集合 ID'
@@ -327,7 +337,7 @@ export type GetDatasetDataListResponse = z.infer<typeof GetDatasetDataListRespon
  * Route: POST /api/core/dataset/data/list
  * @deprecated
  * ============================================================================ */
-export const GetDatasetDataListLegacyBodySchema = PaginationSchema.extend({
+export const GetDatasetDataListLegacyBodySchema = createPaginationSchema({
   collectionId: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a06',
     description: '集合 ID'

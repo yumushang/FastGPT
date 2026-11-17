@@ -1,18 +1,24 @@
-import { StoreNodeItemTypeSchema } from '../workflow/type/node';
 import { AppTypeEnum } from './constants';
 import { NodeInputKeyEnum } from '../workflow/constants';
 import { DatasetSearchModeEnum } from '../dataset/constants';
+import { DatasetTagFilterValueSchema } from '../dataset/search/tagFilter';
+import { rerankCandidateNumRange } from '../dataset/search/utils';
 import type { ReasoningEffort } from '../ai/llm/type';
-import { StoreEdgeItemTypeSchema } from '../workflow/type/edge';
 import type { AppPermission } from '../../support/permission/app/controller';
-import { ParentIdSchema, type ParentIdType } from '../../common/parentFolder/type';
+import {
+  ParentIdSchema,
+  type FolderAccessMode,
+  type ParentIdType
+} from '../../common/parentFolder/type';
 import type { WorkflowTemplateBasicType } from '../workflow/type';
-import { UserTagsSchema, type SourceMemberType } from '../../support/user/type';
+import { SourceMemberSchema, UserTagsSchema, type SourceMemberType } from '../../support/user/type';
 import z from 'zod';
+import { LOGO_ICON } from '../../common/system/constants';
 import { ObjectIdSchema } from '../../common/type/mongo';
 import { AppFileSelectConfigTypeSchema } from './type/config.schema';
-import { BoolSchema, NumSchema } from '../../common/zod';
+import { BoolSchema, IntSchema, NumSchema, optionalNullToUndefined } from '../../common/zod';
 import { VariableItemTypeSchema } from './variable/type';
+import type { AppVersionSchemaType } from './version/type';
 
 // tts
 export const AppTTSConfigTypeSchema = z.object({
@@ -86,7 +92,7 @@ export const AppScheduledTriggerConfigTypeSchema = z.object({
   timezone: z.string().meta({
     description: '定时触发使用的时区'
   }),
-  defaultPrompt: z.string().meta({
+  defaultPrompt: z.string().default('').meta({
     description: '定时触发时注入的默认用户问题'
   })
 });
@@ -113,54 +119,104 @@ export const AppWelcomeConfigTypeSchema = z.object({
 });
 export type AppWelcomeConfigType = z.infer<typeof AppWelcomeConfigTypeSchema>;
 
+export const EntryPointItemTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  icon: z.string().optional()
+});
+export type EntryPointItemType = z.infer<typeof EntryPointItemTypeSchema>;
+
+export const EntryPointItemsTypeSchema = z
+  .array(EntryPointItemTypeSchema)
+  .superRefine((items, ctx) => {
+    const seenNames = new Map<string, number>();
+    items.forEach((item, index) => {
+      const normalizedName = item.name.trim();
+      const previousIndex = seenNames.get(normalizedName);
+      if (previousIndex !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, 'name'],
+          message: 'Entry point names must be unique'
+        });
+        return;
+      }
+      seenNames.set(normalizedName, index);
+    });
+  });
+
 export const AppChatConfigTypeSchema = z.object({
-  welcomeText: z.string().optional().meta({
+  welcomeText: optionalNullToUndefined(z.string()).meta({
     description: '新会话开始时展示给用户的欢迎语'
   }),
-  welcomeConfig: AppWelcomeConfigTypeSchema.optional().meta({
+  welcomeConfig: optionalNullToUndefined(AppWelcomeConfigTypeSchema).meta({
     description: '开场白配置'
   }),
-  variables: z.array(VariableItemTypeSchema).optional().meta({
+  variables: optionalNullToUndefined(z.array(VariableItemTypeSchema)).meta({
     description: '应用启动对话前需要用户填写的变量列表'
   }),
-  autoExecute: AppAutoExecuteConfigTypeSchema.optional().meta({
+  autoExecute: optionalNullToUndefined(AppAutoExecuteConfigTypeSchema).meta({
     description: '自动执行配置'
   }),
-  questionGuide: AppQGConfigTypeSchema.optional().meta({
+  questionGuide: optionalNullToUndefined(AppQGConfigTypeSchema).meta({
     description: '问题引导配置'
   }),
-  ttsConfig: AppTTSConfigTypeSchema.optional().meta({
+  ttsConfig: optionalNullToUndefined(AppTTSConfigTypeSchema).meta({
     description: '语音播报配置'
   }),
-  whisperConfig: AppWhisperConfigTypeSchema.optional().meta({
+  whisperConfig: optionalNullToUndefined(AppWhisperConfigTypeSchema).meta({
     description: '语音输入配置'
   }),
-  scheduledTriggerConfig: AppScheduledTriggerConfigTypeSchema.optional().meta({
+  scheduledTriggerConfig: optionalNullToUndefined(AppScheduledTriggerConfigTypeSchema).meta({
     description: '定时触发配置'
   }),
-  chatInputGuide: ChatInputGuideConfigTypeSchema.optional().meta({
+  chatInputGuide: optionalNullToUndefined(ChatInputGuideConfigTypeSchema).meta({
     description: '对话输入引导配置'
   }),
-  fileSelectConfig: AppFileSelectConfigTypeSchema.optional().meta({
+  fileSelectConfig: optionalNullToUndefined(AppFileSelectConfigTypeSchema).meta({
     description: '对话文件选择配置'
   }),
-  instruction: z.string().optional().meta({
+  entryPoints: optionalNullToUndefined(EntryPointItemsTypeSchema).meta({
+    description: '应用对话页的功能入口列表'
+  }),
+  instruction: optionalNullToUndefined(z.string()).meta({
     description: '应用对话页展示给用户的使用说明'
   })
 });
 export type AppChatConfigType = z.infer<typeof AppChatConfigTypeSchema>;
 
-export const AppResourceRefsSchema = z.object({
-  skillIds: z.array(z.string()).default([]).meta({
-    description: '应用发布版本引用的技能 ID 列表'
+const AppResourceToolDataSchema = z.object({
+  toolNames: z.array(z.string()).optional().meta({
+    description: 'MCP/HTTP 工具集允许执行的子工具名；为空表示整个工具集'
   })
 });
-export type AppResourceRefsType = z.infer<typeof AppResourceRefsSchema>;
+
+export const AppResourceSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('tool'),
+    id: z.string(),
+    data: AppResourceToolDataSchema.optional()
+  }),
+  z.object({
+    type: z.enum(['model', 'agent', 'dataset', 'skill']),
+    id: z.string()
+  })
+]);
+export type AppResource = z.infer<typeof AppResourceSchema>;
+export const AppResourceTypeSchema = z.enum(['tool', 'model', 'agent', 'dataset', 'skill']);
+export type AppResourceType = z.infer<typeof AppResourceTypeSchema>;
+
+export const AppResourcesSchema = z.array(AppResourceSchema);
+export type AppResourcesType = z.infer<typeof AppResourcesSchema>;
 
 // Mongo Collection
 export const AppStorageSchemaTypeSchema = z.object({
   _id: ObjectIdSchema,
   parentId: ParentIdSchema.optional(),
+  /** 仅文件夹存储的根到父级路径，不包含当前文档自身 ID。 */
+  ancestorIds: z.array(ObjectIdSchema).optional().meta({
+    description: '仅文件夹持久化的祖先目录 ID 数组，按根到父级排序，不包含自身'
+  }),
   teamId: z.string(),
   tmbId: z.string(),
   type: z.enum(AppTypeEnum),
@@ -174,8 +230,6 @@ export const AppStorageSchemaTypeSchema = z.object({
   updateTime: z.coerce.date(),
   createTime: z.coerce.date().optional(),
 
-  modules: z.array(StoreNodeItemTypeSchema),
-  edges: z.array(StoreEdgeItemTypeSchema),
   pluginData: z
     .object({
       nodeVersion: z.string().optional().meta({
@@ -196,16 +250,24 @@ export const AppStorageSchemaTypeSchema = z.object({
       description: '应用扩展配置，主要用于工具集和旧版插件应用'
     }),
 
-  // App system config
-  chatConfig: AppChatConfigTypeSchema,
   scheduledTriggerConfig: AppScheduledTriggerConfigTypeSchema.optional(),
   scheduledTriggerNextTime: z.coerce.date().optional(),
-  resourceRefs: AppResourceRefsSchema.optional(),
+  publishedVersionId: ObjectIdSchema.optional().meta({
+    description: '当前最新正式发布 Version ID'
+  }),
   inheritPermission: BoolSchema.optional(),
 
   // if access the app by favourite or quick
   favourite: BoolSchema.optional(),
   quick: BoolSchema.optional(),
+
+  // 置顶。状态保存在资源文档上，按团队共享，随资源移动、删除
+  isPinned: BoolSchema.optional().meta({
+    description: '是否置顶。置顶状态按团队共享，团队间隔离'
+  }),
+  pinnedAt: z.coerce.date().optional().meta({
+    description: '置顶时间。未置顶时为空，用于置顶项之间的排序'
+  }),
 
   // 软删除字段
   deleteTime: z.coerce.date().nullish(),
@@ -224,11 +286,13 @@ export type AppStorageSchemaType = z.infer<typeof AppStorageSchemaTypeSchema>;
  *
  * 历史存量数据可能缺少 avatar/intro，但客户端始终接收字符串，避免可空类型向 UI 扩散。
  */
-export const AppSchemaTypeSchema = AppStorageSchemaTypeSchema.extend({
-  avatar: z.string(),
+export const AppSchemaTypeSchema = AppStorageSchemaTypeSchema.omit({ ancestorIds: true }).extend({
+  avatar: z.preprocess((value) => value ?? undefined, z.string().default(LOGO_ICON)),
   intro: z.string()
 });
 export type AppSchemaType = z.infer<typeof AppSchemaTypeSchema>;
+/** Mongo storage also carries the folder-only path omitted from client-facing App schemas. */
+export type AppMongoSchemaType = AppSchemaType & Pick<AppStorageSchemaType, 'ancestorIds'>;
 
 export type AppListItemType = {
   _id: string;
@@ -246,11 +310,93 @@ export type AppListItemType = {
   private?: boolean;
   sourceMember: SourceMemberType;
   hasInteractiveNode?: boolean;
+  /** 被正式应用引用的 App 或工具数量（仅非文件夹资源返回） */
+  relatedAppCount?: number;
+  /** 仅在列表请求显式要求置顶排序时返回 */
+  isPinned?: boolean;
+  /** 仅在 folder 列表项返回；navigate 不授予详情或管理权限。 */
+  folderAccessMode?: FolderAccessMode;
 };
 
-export type AppDetailType = AppSchemaType & {
+const referencedAppExample = {
+  _id: '68ad85a7463006c963799a05',
+  name: '客服应用',
+  avatar: 'https://example.com/avatar.png',
+  intro: '为用户提供客服支持',
+  tmbId: '68ad85a7463006c963799a06',
+  type: AppTypeEnum.workflow,
+  updateTime: '2026-09-29T00:00:00.000Z',
+  sourceMember: {
+    name: '张三',
+    avatar: 'https://example.com/avatar.png',
+    status: 'active'
+  }
+};
+
+/** 引用某个资源的正式应用概要。 */
+export const ReferencedAppSchema = z
+  .object({
+    _id: ObjectIdSchema.meta({ example: referencedAppExample._id, description: '应用 ID' }),
+    name: z.string().meta({ example: referencedAppExample.name, description: '应用名称' }),
+    avatar: z.string().meta({ example: referencedAppExample.avatar, description: '应用头像' }),
+    intro: z.string().meta({ example: referencedAppExample.intro, description: '应用简介' }),
+    tmbId: ObjectIdSchema.meta({
+      example: referencedAppExample.tmbId,
+      description: '应用所属团队成员 ID'
+    }),
+    type: z.enum(AppTypeEnum).meta({ description: '应用类型', example: AppTypeEnum.workflow }),
+    updateTime: z.coerce.date().meta({
+      example: referencedAppExample.updateTime,
+      description: '应用更新时间'
+    }),
+    sourceMember: SourceMemberSchema.optional().meta({
+      example: referencedAppExample.sourceMember,
+      description: '创建者信息'
+    })
+  })
+  .meta({ description: '引用某个资源的正式应用概要', example: referencedAppExample });
+export type ReferencedApp = z.infer<typeof ReferencedAppSchema>;
+
+export const ReferencedAppsResponseSchema = z
+  .object({
+    list: z.array(ReferencedAppSchema).meta({ description: '当前用户有权限读取的引用应用' }),
+    hiddenApps: z
+      .array(
+        z.object({
+          sourceMember: SourceMemberSchema.optional().meta({ description: '应用创建者信息' })
+        })
+      )
+      .meta({ description: '当前用户无权查看的引用应用创建者' }),
+    hiddenCount: IntSchema.meta({
+      description: '当前用户无权限查看的引用应用数量',
+      example: 0
+    })
+  })
+  .meta({
+    description: '正式应用引用列表及当前用户无权限查看的数量',
+    example: { list: [referencedAppExample], hiddenApps: [], hiddenCount: 0 }
+  });
+export type ReferencedAppsResponse = z.infer<typeof ReferencedAppsResponseSchema>;
+
+/** 鉴权得到的 App 行：Mongo 元数据 + 权限。工作流图在 Version 上。 */
+export type AppWithPermissionType = AppSchemaType & {
   permission: AppPermission;
 };
+
+/** 应用详情：元数据 + 当前草稿 Version 的 nodes/edges/chatConfig。 */
+export type AppDetailType = AppSchemaType & {
+  nodes: AppVersionSchemaType['nodes'];
+  edges: AppVersionSchemaType['edges'];
+  chatConfig: AppVersionSchemaType['chatConfig'];
+  permission: AppPermission;
+};
+
+// 可选模型兼容 null 输入，解析后仍保持 string/undefined；外层 optional 保留字段可省略语义。
+const OptionalDatasetModelSchema = z
+  .string()
+  .nullish()
+  .transform((value) => value ?? undefined)
+  .optional();
 
 export const AppDatasetSearchParamsTypeSchema = z.object({
   searchMode: z.enum(DatasetSearchModeEnum),
@@ -259,19 +405,24 @@ export const AppDatasetSearchParamsTypeSchema = z.object({
   embeddingWeight: NumSchema.optional(), // embedding weight, fullText weight = 1 - embeddingWeight
 
   usingReRank: BoolSchema.optional(),
-  rerankModelId: z.string().optional(),
+  rerankModelId: OptionalDatasetModelSchema,
   /** @deprecated */
-  rerankModel: z.string().optional(),
+  rerankModel: OptionalDatasetModelSchema,
   rerankWeight: NumSchema.optional(),
+  // 非法候选数回退默认值，关闭重排或读取旧配置时也不能因此中断检索。
+  rerankCandidateNum: IntSchema.min(rerankCandidateNumRange.min)
+    .max(rerankCandidateNumRange.max)
+    .catch(rerankCandidateNumRange.default)
+    .optional(),
 
   datasetSearchUsingExtensionQuery: BoolSchema.optional(),
-  datasetSearchExtensionModelId: z.string().optional(),
+  datasetSearchExtensionModelId: OptionalDatasetModelSchema,
   /** @deprecated */
-  datasetSearchExtensionModel: z.string().optional(),
+  datasetSearchExtensionModel: OptionalDatasetModelSchema,
   datasetSearchExtensionBg: z.string().optional(),
   [NodeInputKeyEnum.authTmbId]: BoolSchema.optional(),
 
-  collectionFilterMatch: z.string().optional()
+  collectionFilterMatch: z.union([z.string(), DatasetTagFilterValueSchema]).optional()
 });
 export type AppDatasetSearchParamsType = z.infer<typeof AppDatasetSearchParamsTypeSchema>;
 
@@ -332,6 +483,9 @@ export const AppTemplateStorageSchema = z.object({
   }),
   recommendText: z.string().optional().meta({
     description: '推荐文案'
+  }),
+  experienceUrl: z.string().optional().meta({
+    description: '体验地址；用户可在复制模板前打开该链接预览'
   }),
   userGuide: z
     .object({

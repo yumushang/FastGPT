@@ -1,22 +1,42 @@
-# 系统升级任务目录
+# 系统升级任务
 
-每个生产升级任务使用一个以任务 ID 命名的独立目录，由 `index.ts` 暴露任务入口，相关 service、数据转换和私有工具都放在该目录内，并由上级 `registry.ts` 按发布顺序显式导入。迁移专属实现不得放入正常业务目录；确实被运行期业务复用的能力仍归业务模块所有。首个任务是阻塞型旧系统模型迁移；后续只有真实业务升级需要时才新增任务。
+任务按首次发布版本与稳定任务 ID 组织。4.18 配置相关任务尚未发布，已统一为 `4180/20261116_migrate_system_configs`（系统配置迁移），注册表中仅保留一个配置任务。
 
-任务发布后必须遵守以下约束：
+| 任务 | 调度 | 职责 |
+| --- | --- | --- |
+| `20261022_initialize_dataset_vector_indexes` | 普通自动 | 初始化知识库向量索引 |
+| `20261104_backfill_chat_publish_source` | 独立执行 | 回填聊天发布来源 |
+| `20261104_backfill_openapi_key_type` | 独立执行 | 回填 OpenAPI Key 类型 |
+| `20261112_backfill_stt_pricing_type` | 普通自动 | 回填 STT 计价类型 |
+| `20261116_migrate_system_configs` | 启动阻塞 | 统一导入、清理、补齐并校验系统配置 |
 
-- 只能在注册表末尾追加，不得修改已有任务的 ID、顺序、`blockStartup`、`onFailure` 或执行语义；
-- 业务写入必须幂等，优先使用唯一键、`$setOnInsert`、确定性目标值或 compare-and-set；
-- 每个任务必须明确选择一种恢复策略：数据量较大或无法原子完成时使用“分批断点续跑”；数据量确定较小且整次写入可以保持原子、确定、幂等时允许使用“全量重跑”；
-- 分批任务统一从 `@/migration/constants` 导入 `systemMigrationBatchSize`，由环境变量 `SYSTEM_MIGRATION_BATCH_SIZE` 控制；允许范围为 50～1000，默认 100，任务内不得另行硬编码读取批大小；
-- 分批任务在每批开始前调用 `context.assertActive()`；业务提交后若错误快照发生变化，先通过 `context.reportFailedRecords()` 替换当前完整未解决错误快照，再保存 checkpoint。重试时先通过 `context.getFailedRecords()` 处理上次已跳过的坏数据，再从 checkpoint 继续；
-- 全量任务不保存伪 checkpoint，每次管理员重试或 lease 接管都重新读取、校验并处理完整数据集；如果需要清空目标数据，目标必须是完全由权威源重建的派生数据，且清空与重建必须位于同一事务；
-- 任务默认只追加或回填数据，不删除旧字段、旧集合或不可恢复的数据；
-- 注册项使用 `i18nT(...)` 声明 `nameKey`、`descriptionKey`、`resultKey` 以及全部 `progressSteps: [{ key, labelKey }]`；阶段 `key` 是永久稳定的机器标识，所有展示文案位于 client-only `system_migration` namespace；
-- i18n key 只存在于静态注册表和列表接口的展示 DTO，不写入 Mongo。任务状态只保存进度数值和成功结果参数；错误状态与错误明细只保存原始 `message`；
-- 任务进入阶段时通过 `reportProgress` 上报 `running`，完成后上报 `succeeded`；框架按 key 更新对应阶段并要求全部阶段完成后才能成功，脚本不得主动上报 `failed`；
-- 任务成功时可以返回有限标量的业务参数对象；Runner 校验后与 `succeeded` 原子写入。列表接口再使用注册表 `resultKey` 组装客户端展示结果。不要从任务返回 i18n key，也不要把最终结果伪装成最后一条 progress；
-- 阻塞任务发生明确错误时直接抛出异常，并在抛出前按需通过 `context.logger` 输出诊断信息。Runner 只在状态表保存多节点协调所需的最小 `failed + lastError`；Context 会拒绝阻塞任务读取或写入错误明细。阻塞期间管理页面不可用，排障以终端日志为准；
-- 非阻塞任务可跳过的坏数据应按批维护“完整未解决错误快照”，每批业务提交后立即通过 `context.reportFailedRecords()` 覆盖持久化，再推进 checkpoint；扫描结束仍有错误时通过 `context.fail({ failedRecords })` 写入相同最终快照并结束。每条记录必须包含所属的 `stageKey`，且只保存定位字段及对应原因，不保存正文、凭证或完整错误栈；
-- 已上报错误快照后又发生普通异常时，Runner 保留该快照；只有脚本通过 `context.fail` 显式携带 `failedRecords`（包括空数组）时才替换或清空。
-- `blockStartup` 只控制节点 ready，`onFailure` 只控制失败后是否暂停后续任务；阻塞任务必须使用 `stop`，相互独立的非阻塞任务才可使用 `continue`；
-- 阻塞任务普通异常会暂停队列并永久等待，修复后必须重启 App 节点；非阻塞任务保持 `failed`，修复后由管理员在页面重试；`continue` 只跳过失败项，不会自动重试它；节点异常退出仍由 lease 过期后自动接管。
+## 系统配置迁移
+
+本任务追加在 v4.18.0 注册表末尾，由启动计划按 `blockStartup` 提取并优先执行，不依赖注册项排在首位。所有 App 节点等待迁移成功后重新加载配置与模型，再启动业务和其他后台迁移。迁移失败时不放行业务启动，修复原因并重启迁移 owner 后接管重试。
+
+同一个任务、同一个 lease/runId，依次执行以下阶段，任一阶段失败均不得标记任务成功：
+
+1. `inspect`：检查旧 Mongo 配置与历史 ENV；仅当实例集合为空时读取 App 工作目录下可选的 `defaultConfig.json`。异常配置只记录字段路径，保留脱敏跳过项统计。
+2. `migrate`：按域创建缺失文档或补充缺失叶子，保留管理员已有值和显式默认意图。文件使用当前实例配置域格式，仅参与首次初始化。
+3. `cleanup`：清理当前 Schema 明确废弃的字段及相应默认值标记。现行字段不得登记为废弃项。
+4. `backfill`：先将旧套餐合入 `commercial.subPlans`，公告及两类广告合入 `operations`，迁入其他辅助 scope；再补齐外链检查、模型下架短信、Code Sandbox/MCP SSE、Agent Sandbox 代理及超卖系数、文件域名、HTTP/Cookie 策略、自定义域名部署参数。先校验再按 revision CAS 写入，保留已有值与显式清空。
+   最后按 secret 注册表将已有非空明文加密为 `{ secret: 密文 }`，所有回填读写统一通过解密/加密边界；revision CAS 保留并发修改，已有密文复用，重复执行不改变 revision。
+5. `validate`：重新检查全部域、旧值缺口、废弃字段及各补齐目标的持久化依据。Schema 默认值本身不等于迁移完成。
+
+旧配置中的数值字段先通过 `NumSchema` 兼容数字字符串（如 `"4"` → `4`），再执行目标域的整数、范围等校验；空值、非数字类型与非有限值不强制转成 `0`。已有实例值和显式默认意图仍优先。
+
+Pro 启动及轮询始终按已有 scope 与 Schema 默认值合成完整快照，不以迁移状态阻塞读取；本任务写入后由版本变化驱动刷新。Pro ENV 独立按差异发布，实例 ID 首建及授权变更等写入保留必要迁移检查。刷新失败保留上一有效快照并重试。旧 Mongo 配置统一按类型筛选、`_id` 倒序选取，不以 `createTime` 决定迁移来源。
+
+旧 `EVAL_CONCURRENCY` 不导入，评估并发的新配置默认 `3`；Cookie Secure、共享 HTTP 响应上限和 Sandbox 两个超卖系数只从 App 进程 ENV 导入，Pro 同名 ENV 不参与。已有实例值和显式默认意图仍优先。
+
+采用幂等全量重跑，不保存 checkpoint。失败后由框架使用新 runId 从检查阶段重试；成功步骤可安全重复执行，已写入配置不被重放覆盖。开发期已有成功记录不会自动重跑新增的加密步骤，需在备份后重跑本任务。成功后 Runner 跳过整个任务，不在后续启动重新导入旧 ENV，也不保留开发期拆分任务的注册或状态兼容层。未来已发布后的变更应追加新任务。
+
+实现均归属同一目录：`index.ts` 编排五阶段，`service.ts` 处理旧值转换与域迁移，`cleanup.ts` 清理废弃字段，`subservices.ts` / `backfill.ts` 处理域内补缺，`env.ts` 读取历史环境变量，`defaultConfig.ts` 负责首次文件初始化。对应测试在 `projects/app/test/migration/tasks/4180/20261116_migrate_system_configs/`。
+
+配置权威边界与字段说明见 [Admin 实例配置与环境变量边界](../../../../../.agents/design/common/admin-instance-config-env-boundary.md)。状态、进度和错误数据由 Runner/Context 管理，开发约定见[系统升级脚本技能](../../../../../.agents/skills/system/system-migration-development/SKILL.md)。
+
+`proEnv` 是同集合中的特殊 scope，仅由 Pro 启动根据 ENV 发布；不属于 11 个可配置业务域，defaultConfig.json 和管理 API 不允许写入。Pro 先发布不会影响 App 业务域的首次初始化或迁移完成判断。
+
+`system_instance_configs` 共 17 个 scope：上述 11 个业务域，以及 proEnv、license、instanceId、modelStatusProbe、moderationPolicy、operations 六个辅助 scope。套餐保存为 `commercial.subPlans`，与商业配置共用 revision；`operations` 包含 systemMsgModal、operationalAd、activityAd 三个子对象，局部保存不会覆盖其他子项。license 保持独立，proEnv 仍只由 ENV 发布。
+
+合并迁移优先保留新目标，其次读取开发期旧 `system_instance_configs` scope，最后读取旧 `systemconfigs`；完整校验后，在同一事务中迁入并删除四个开发期旧 scope，保留原始 `systemconfigs` 作为迁移来源。配置更新只轮询 `domain/_id/revision`，不保留配置 Change Stream 监听。

@@ -11,7 +11,18 @@ export enum CommonErrEnum {
   missingParams = 'missingParams',
   inheritPermissionError = 'inheritPermissionError',
   folderDepthLimit = 'folderDepthLimit',
-  folderMoveDepthLimit = 'folderMoveDepthLimit'
+  folderMoveDepthLimit = 'folderMoveDepthLimit',
+  pdfParseFailed = 'pdfParseFailed',
+  pdfEncrypted = 'pdfEncrypted',
+  pdfCorrupted = 'pdfCorrupted',
+  unsupportedParseFileType = 'unsupportedParseFileType',
+  invalidParseFile = 'invalidParseFile',
+  officeConversionFailed = 'officeConversionFailed',
+  // 本地管线不抛这两个码：仅作为 sangfor 外部解析服务的返回契约保留，
+  // 服务解析 docx 失败时可能返回，勿因本地无引用而清理。
+  docxParseInvalid = 'docxParseInvalid',
+  docxConversionFailed = 'docxConversionFailed',
+  unAuthFileKey = 'unAuthFileKey'
 }
 const datasetErr = [
   {
@@ -46,6 +57,42 @@ const datasetErr = [
   {
     statusText: CommonErrEnum.folderMoveDepthLimit,
     message: i18nT('common:error.folderMoveDepthLimit')
+  },
+  {
+    statusText: CommonErrEnum.pdfParseFailed,
+    message: i18nT('file:pdf_parse_failed')
+  },
+  {
+    statusText: CommonErrEnum.pdfEncrypted,
+    message: i18nT('file:pdf_encrypted_error')
+  },
+  {
+    statusText: CommonErrEnum.pdfCorrupted,
+    message: i18nT('file:pdf_corrupted_error')
+  },
+  {
+    statusText: CommonErrEnum.unsupportedParseFileType,
+    message: i18nT('file:unsupported_parse_file_type')
+  },
+  {
+    statusText: CommonErrEnum.invalidParseFile,
+    message: i18nT('file:invalid_parse_file')
+  },
+  {
+    statusText: CommonErrEnum.officeConversionFailed,
+    message: i18nT('file:office_conversion_failed')
+  },
+  {
+    statusText: CommonErrEnum.docxParseInvalid,
+    message: i18nT('file:docx_parse_invalid')
+  },
+  {
+    statusText: CommonErrEnum.docxConversionFailed,
+    message: i18nT('file:docx_conversion_failed')
+  },
+  {
+    statusText: CommonErrEnum.unAuthFileKey,
+    message: i18nT('common:error.unAuthFileKey')
   }
 ];
 export default datasetErr.reduce((acc, cur, index) => {

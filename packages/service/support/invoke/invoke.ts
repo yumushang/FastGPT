@@ -1,6 +1,5 @@
 import jwt from 'jsonwebtoken';
-import path from 'node:path';
-import { audioFileType, imageFileType, videoFileType } from '@fastgpt/global/common/file/constants';
+import { getChatFileTypeByFilename } from '@fastgpt/global/core/chat/file/utils';
 import { ERROR_ENUM } from '@fastgpt/global/common/error/errorCode';
 import {
   PluginPermissionEnum,
@@ -14,6 +13,7 @@ import type {
 } from '@fastgpt/global/openapi/plugin/invoke';
 import { getS3ChatSource } from '../../common/s3/sources/chat';
 import { removeS3TTL } from '../../common/s3/utils';
+import { getStorageFileUrlExpiredTime } from '../../common/s3/config/constants';
 import { serviceEnv } from '../../env';
 import { getGroupsByTmbId } from '../permission/memberGroup/controllers';
 import { getOrgsByTmbId } from '../permission/org/controllers';
@@ -22,7 +22,6 @@ import { getUserDetail } from '../user/controller';
 import { MongoTeam } from '../user/team/teamSchema';
 import { InvokeFileUploadSchema, InvokeSessionSchema, type InvokeFileUploadType } from './type';
 import type { InvokeSessionType } from './type';
-import { addHours } from 'date-fns';
 
 const INVOKE_TOKEN_EXPIRES_IN = 60 * 60;
 
@@ -32,7 +31,7 @@ export class InvokeProcessor {
   static jwtSecret = serviceEnv.INVOKE_TOKEN_SECRET;
 
   public get session(): InvokeSessionType {
-    return this.session;
+    return this._session;
   }
 
   constructor(options: InvokeSessionType) {
@@ -88,7 +87,7 @@ export class InvokeProcessor {
       filename,
       body,
       contentType,
-      expiredTime: addHours(new Date(), 365)
+      expiredTime: getStorageFileUrlExpiredTime()
     });
 
     await removeS3TTL({ key: result.key, bucketName: 'private' });
@@ -98,12 +97,7 @@ export class InvokeProcessor {
       if (contentType?.startsWith('audio/')) return ChatFileTypeEnum.audio;
       if (contentType?.startsWith('video/')) return ChatFileTypeEnum.video;
 
-      const extname = path.extname(filename).toLowerCase();
-      if (extname && imageFileType.includes(extname)) return ChatFileTypeEnum.image;
-      if (extname && audioFileType.includes(extname)) return ChatFileTypeEnum.audio;
-      if (extname && videoFileType.includes(extname)) return ChatFileTypeEnum.video;
-
-      return ChatFileTypeEnum.file;
+      return getChatFileTypeByFilename(filename);
     })();
 
     return {

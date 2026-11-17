@@ -2,7 +2,7 @@ import z from 'zod';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import { IntSchema, NumSchema } from '../../../../common/zod';
 import { EvaluationStatusEnum } from '../../../../core/app/evaluation/constants';
-import { PaginationResponseSchema, PaginationSchema } from '../../../api';
+import { PaginationResponseSchema, createPaginationSchema } from '../../../api';
 
 const EvaluationIdSchema = ObjectIdSchema.meta({
   example: '68ad85a7463006c963799a05',
@@ -51,7 +51,7 @@ export const CreateEvaluationBodySchema = z
 export type CreateEvaluationBodyType = z.infer<typeof CreateEvaluationBodySchema>;
 
 export const CreateEvaluationFormSchema = z.object({
-  file: z.any().meta({
+  file: z.string().meta({
     format: 'binary',
     description: 'CSV 评测文件，包含 *q 问题列和 *a 期望答案列'
   }),
@@ -131,7 +131,7 @@ export type ExportEvaluationItemsResponseType = z.infer<typeof ExportEvaluationI
  * Tags: ['应用评测']
  * ========================================================================== */
 
-export const ListEvaluationsBodySchema = PaginationSchema.extend({
+export const ListEvaluationsBodySchema = createPaginationSchema({
   searchKey: z.string().optional().meta({
     example: '客服',
     description: '评测任务名称搜索关键词'
@@ -176,7 +176,7 @@ export type ListEvaluationsResponseType = z.infer<typeof ListEvaluationsResponse
  * Tags: ['应用评测']
  * ========================================================================== */
 
-export const ListEvaluationItemsBodySchema = PaginationSchema.extend({
+export const ListEvaluationItemsBodySchema = createPaginationSchema({
   evalId: EvaluationIdSchema
 });
 export type ListEvaluationItemsBodyType = z.infer<typeof ListEvaluationItemsBodySchema>;

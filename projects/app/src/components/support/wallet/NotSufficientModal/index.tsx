@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import MyModal from '@fastgpt/web/components/v2/common/MyModal';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { Box, Button, Flex, useDisclosure } from '@chakra-ui/react';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import ExtraPlan from '@/pageComponents/price/ExtraPlan';
@@ -15,7 +15,7 @@ import { useRouter } from 'next/router';
 import { subRoute } from '@fastgpt/web/common/system/utils';
 
 const NotSufficientModal = () => {
-  const { t } = useClientTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { notSufficientModalType: type, setNotSufficientModalType } = useSystemStore();
   const { isTeamAdmin, userInfo } = useUserStore();
@@ -89,13 +89,15 @@ export default NotSufficientModal;
 export const RechargeModal = ({
   onClose,
   onPaySuccess,
+  highlightShareBrand = false,
   title
 }: {
   onClose: () => void;
   onPaySuccess: () => void;
+  highlightShareBrand?: boolean;
   title?: string;
 }) => {
-  const { t } = useClientTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { userInfo, teamPlanStatus, initTeamPlanStatus } = useUserStore();
   const { subPlans } = useSystemStore();
@@ -114,6 +116,7 @@ export const RechargeModal = ({
   }, [currentSubLevel, subPlans?.standard, t]);
 
   const [tab, setTab] = useState<'standard' | 'extra'>('standard');
+  const [shareBrandHighlightActive, setShareBrandHighlightActive] = useState(true);
   const [userSubMode, setUserSubMode] = useState<`${SubModeEnum}`>(SubModeEnum.month);
   const selectSubMode = subPlans?.activityExpirationTime ? SubModeEnum.year : userSubMode;
   const isWecomTeam = !!userInfo?.team?.isWecomTeam;
@@ -126,6 +129,7 @@ export const RechargeModal = ({
       isCentered
       minW={'90%'}
       maxH={'90%'}
+      onClickCapture={() => setShareBrandHighlightActive(false)}
     >
       <Flex alignItems={'center'} mb={6}>
         <Flex>
@@ -259,6 +263,9 @@ export const RechargeModal = ({
             <StandardPlan
               standardPlan={teamPlanStatus?.standard}
               onPaySuccess={onPaySuccess}
+              highlightShareBrand={highlightShareBrand}
+              shareBrandHighlightActive={shareBrandHighlightActive}
+              shareBrandPlacement="first"
               selectSubMode={selectSubMode}
               onSelectSubModeChange={setUserSubMode}
               hideBillingToggle

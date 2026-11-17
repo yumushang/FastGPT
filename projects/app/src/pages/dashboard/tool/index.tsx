@@ -1,8 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { Box, Button, Flex, useDisclosure } from '@chakra-ui/react';
-import { serviceSideProps } from '@/web/common/i18n/utils';
-import { useTranslation } from 'next-i18next';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import dynamic from 'next/dynamic';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { postCreateAppFolder } from '@/web/core/app/api/app';
@@ -28,32 +27,46 @@ import { useUserStore } from '@/web/support/user/useUserStore';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { ReadRoleVal } from '@fastgpt/global/support/permission/constant';
 import AppListFilters from '@/pageComponents/dashboard/agent/filters/AppListFilters';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import {
+  canCreateSubFolder,
+  DEFAULT_MAX_FOLDER_DEPTH
+} from '@fastgpt/global/common/parentFolder/depth';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 
 const EditFolderModal = dynamic(
   () => import('@fastgpt/web/components/common/MyModal/EditFolderModal')
 );
 
 const MyTools = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const router = useRouter();
   const { isPc } = useSystem();
   const {
     paths,
     parentId,
-    myApps,
     loadMyApps,
     onUpdateApp,
     setMoveAppId,
-    isFetchingApps,
     folderDetail,
     refetchFolderDetail,
     searchKey,
     setSearchKey,
     listFilters,
-    setListFilters
+    setListFilters,
+    isBatchMode,
+    setIsBatchMode
   } = useContextSelector(AppListContext, (v) => v);
   const [editFolder, setEditFolder] = useState<EditFolderFormType>();
   const { userInfo } = useUserStore();
+  const { feConfigs } = useSystemStore();
+  const maxFolderDepth = feConfigs?.limit?.maxFolderDepth ?? DEFAULT_MAX_FOLDER_DEPTH;
+  const canCreateFolder = canCreateSubFolder(parentId, paths, maxFolderDepth);
+  const folderDepthLimitTip = t('common:folder_depth_limit_tip');
+  // 与 Agent 列表一致：目录内只看该目录的写权限，避免详情未返回时退回团队创建权限。
+  const hasCreatePer = parentId
+    ? Boolean(folderDetail?.permission.hasWritePer && folderDetail.type !== AppTypeEnum.httpPlugin)
+    : Boolean(userInfo?.team.permission.hasAppCreatePer);
 
   const {
     isOpen: isOpenJsonImportModal,
@@ -96,15 +109,14 @@ const MyTools = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
           flexDirection={'column'}
           h={'100%'}
           pr={folderDetail ? [3, 2] : [3, 6]}
-          pl={6}
+          pl={[3, 6]}
           pt={6}
-          overflowY={'auto'}
+          overflowY={'hidden'}
           overflowX={'hidden'}
         >
-          <Flex alignItems={'center'} gap={3} minW={0}>
-            {!isPc ? (
-              MenuIcon
-            ) : paths.length > 0 ? (
+          <Flex alignItems={'center'} gap={3} minW={0} flexWrap={'wrap'} flexShrink={0}>
+            {!isPc && MenuIcon}
+            {isPc && paths.length > 0 ? (
               <Box flexShrink={0}>
                 <FolderPath
                   paths={paths}
@@ -141,47 +153,80 @@ const MyTools = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
               </>
             )}
             <Flex flex={1} />
-            {isPc &&
-              (folderDetail
-                ? folderDetail.permission.hasWritePer &&
-                  folderDetail?.type !== AppTypeEnum.httpPlugin
-                : userInfo?.team.permission.hasAppCreatePer) && (
-                <Flex alignItems={'center'} gap={3}>
+            {(isPc || hasCreatePer) && (
+              <Flex alignItems={'center'} gap={[2, '12px']}>
+                {isPc && (
                   <Button
                     variant={'grayBase'}
-                    leftIcon={<MyIcon name={'common/addLight'} w={'18px'} mr={-1} />}
-                    onClick={() => setEditFolder({})}
-                    px={5}
+                    px={'14px'}
+                    iconSpacing={'6px'}
+                    {...(isBatchMode && {
+                      color: 'primary.600',
+                      bg: 'primary.50',
+                      _hover: {
+                        color: 'primary.600',
+                        bg: 'primary.100'
+                      }
+                    })}
+                    leftIcon={<MyIcon name={'common/checkSquareBroken'} w={'18px'} h={'18px'} />}
+                    onClick={() => setIsBatchMode((prev) => !prev)}
                   >
-                    {t('common:Folder')}
+                    {t('common:batch_manage')}
                   </Button>
-                  <Button
-                    variant={'grayBase'}
-                    leftIcon={<MyIcon name={'common/importLight'} w={'14px'} />}
-                    onClick={onOpenJsonImportModal}
-                    px={5}
-                  >
-                    {t('common:Import')}
-                  </Button>
-                </Flex>
-              )}
+                )}
+                {hasCreatePer && (
+                  <>
+                    <MyTooltip label={canCreateFolder ? '' : folderDepthLimitTip}>
+                      <Button
+                        variant={'grayBase'}
+                        px={['12px', '14px']}
+                        iconSpacing={'6px'}
+                        leftIcon={<MyIcon name={'common/add2'} w={'18px'} h={'18px'} />}
+                        onClick={() => setEditFolder({})}
+                        isDisabled={!canCreateFolder}
+                      >
+                        {t('common:Folder')}
+                      </Button>
+                    </MyTooltip>
+                    <Button
+                      variant={'grayBase'}
+                      px={['12px', '14px']}
+                      iconSpacing={'6px'}
+                      leftIcon={<MyIcon name={'common/importLight'} w={'18px'} h={'18px'} />}
+                      onClick={onOpenJsonImportModal}
+                    >
+                      {t('common:Import')}
+                    </Button>
+                  </>
+                )}
+              </Flex>
+            )}
           </Flex>
 
           {!isPc && (
-            <Box mt={2}>
-              {
-                <SearchInput
-                  maxW={['auto', '250px']}
-                  value={searchKey}
-                  onChange={(e) => setSearchKey(e.target.value)}
-                  placeholder={t('app:search_tool')}
-                  maxLength={30}
-                />
-              }
-            </Box>
+            <Flex mt={3} direction={'column'} gap={3}>
+              {paths.length > 0 && (
+                <Box overflowX={'auto'}>
+                  <FolderPath
+                    paths={paths}
+                    forbidLastClick
+                    onClick={(parentId) => {
+                      router.push({ query: { ...router.query, parentId } });
+                    }}
+                  />
+                </Box>
+              )}
+              <SearchInput
+                value={searchKey}
+                onChange={(e) => setSearchKey(e.target.value)}
+                placeholder={t('app:search_tool')}
+                maxLength={30}
+              />
+              <AppListFilters scene={'tool'} value={listFilters} onChange={setListFilters} />
+            </Flex>
           )}
 
-          <MyBox flex={'1 0 0'} isLoading={myApps.length === 0 && isFetchingApps}>
+          <MyBox flex={'1 0 0'} minH={0}>
             <List />
           </MyBox>
         </Flex>
@@ -227,6 +272,7 @@ const MyTools = ({ MenuIcon }: { MenuIcon: JSX.Element }) => {
       {!!editFolder && (
         <EditFolderModal
           {...editFolder}
+          showInheritPermission={!!parentId}
           onClose={() => setEditFolder(undefined)}
           onCreate={(data) => onCreateFolder({ ...data, parentId, type: AppTypeEnum.toolFolder })}
           onEdit={({ id, ...data }) => onUpdateApp(id, data)}
@@ -241,7 +287,7 @@ function ContextRender() {
   return (
     <DashboardContainer>
       {({ MenuIcon }) => (
-        <AppListContextProvider>
+        <AppListContextProvider showPaginationTip={false}>
           <MyTools MenuIcon={MenuIcon} />
         </AppListContextProvider>
       )}
@@ -250,11 +296,3 @@ function ContextRender() {
 }
 
 export default ContextRender;
-
-export async function getServerSideProps(content: any) {
-  return {
-    props: {
-      ...(await serviceSideProps(content, ['app', 'user']))
-    }
-  };
-}

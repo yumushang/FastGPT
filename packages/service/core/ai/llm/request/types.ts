@@ -11,16 +11,17 @@ import type {
   StreamResponseType,
   UnStreamResponseType
 } from '@fastgpt/global/core/ai/llm/type';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
 import type { AIApiRequestMeta } from '../../config';
 import type { ToolCallEventType } from '../toolCall/type';
+import type { FileClassificationContext } from '../../../../common/file/classification';
 
 export type ResponseEvents = ToolCallEventType & {
   // 普通回答文本增量。非 stream 响应也会在解析完成后触发一次，保持上层处理一致。
   onStreaming?: (e: { text: string }) => void;
   // reasoning 增量，来源可能是 reasoning_content，也可能是 <think> 标签解析结果。
-  onReasoning?: (e: { text: string }) => void;
+  onReasoning?: (e: { text: string }) => void | Promise<any>;
 };
 
 // 根据 stream 字段把请求体收窄到 SDK 对应类型，避免调用 create 时丢失 stream 类型信息。
@@ -36,7 +37,7 @@ export type LLMRequestBodyType<T> = Omit<
   T,
   'model' | 'stop' | 'response_format' | 'messages' | 'tools'
 > & {
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   stop?: string;
   response_format?: {
     type?: string;
@@ -61,11 +62,19 @@ export type CreateLLMResponseProps<
   throwError?: boolean;
   userKey?: OpenaiAccountType;
   body: LLMRequestBodyType<T>;
+  /** 仅在服务端复用媒体分类结果，不进入模型请求体。 */
+  fileContext?: FileClassificationContext;
   // 上层中断时返回 true。底层会 abort stream 并用 finish_reason=close 表达正常关闭。
   isAborted?: () => boolean | undefined | null;
   custonHeaders?: Record<string, string>;
   // 单次底层模型请求超时时间。辅助类 LLM 请求可传较短值，避免阻塞主链路。
   timeout?: number;
+  /** 可取消底层 HTTP 请求，并在流式响应读取期间继续生效。 */
+  signal?: AbortSignal;
+  /** 覆盖 SDK 自动重试次数；探测调用由上层统一重试，避免隐藏的额外请求。 */
+  maxRetries?: number;
+  /** 即将发出底层模型请求时调用，用于记录真实请求起始时间。 */
+  onRequestStart?: () => void;
   // finish_reason=length 时最多连续请求的次数，避免模型一直返回 length 造成死循环。
   maxContinuations?: number;
   // 是否保存 LLM 请求响应详情。内部辅助调用可关闭，避免污染用户可见的请求记录。
@@ -81,6 +90,7 @@ export type LLMResponse = {
   answerText: string;
   reasoningText: string;
   toolCalls?: ChatCompletionMessageToolCall[];
+  moderatedToolCallIds?: string[];
   finish_reason: CompletionFinishReason;
   responseEmptyTip?: string;
   usage: {
@@ -119,10 +129,12 @@ export type LLMAccumulatedUsage = {
 };
 
 export type CreateChatCompletionProps = {
-  modelData: LLMSystemModelDataType;
+  modelData: LLMModelDataType;
   body: ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming;
   userKey?: OpenaiAccountType;
   timeout?: number;
+  /** 即将发出底层模型请求时调用，用于记录真实请求起始时间。 */
+  onRequestStart?: () => void;
   // 仅透传给 OpenAI SDK 的请求配置，业务字段不要放这里。
   options?: OpenAI.RequestOptions;
 };

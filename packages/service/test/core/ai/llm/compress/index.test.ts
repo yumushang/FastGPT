@@ -6,7 +6,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool
 } from '@fastgpt/global/core/ai/llm/type';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import type { AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -64,6 +64,7 @@ import {
   compressToolResponse as rawCompressToolResponse
 } from '@fastgpt/service/core/ai/llm/compress';
 import { extractExactAnchors } from '@fastgpt/service/core/ai/llm/compress/prompt';
+import { countGptMessagesTokensInWorker } from '@fastgpt/service/worker/countGptMessagesTokens/count';
 
 const testTeamId = 'team_1';
 const compressLargeContent: typeof rawCompressLargeContent = ((args: any) =>
@@ -82,7 +83,7 @@ const compressToolResponse: typeof rawCompressToolResponse = ((args: any) =>
     ...args
   })) as typeof rawCompressToolResponse;
 
-const model: LLMSystemModelDataType = {
+const model: LLMModelDataType = {
   modelId: '507f1f77bcf86cd799439016',
   type: ModelTypeEnum.llm,
   provider: 'openai',
@@ -90,7 +91,6 @@ const model: LLMSystemModelDataType = {
   name: 'GPT-4',
   scope: 'system' as const,
   isActive: true,
-  isCustom: false,
   config: {
     maxContext: 4000,
     maxResponse: 1024,
@@ -101,12 +101,12 @@ const model: LLMSystemModelDataType = {
   }
 };
 
-const largeContextModel: LLMSystemModelDataType = {
+const largeContextModel: LLMModelDataType = {
   ...model,
   config: { ...model.config, maxContext: 32000 }
 };
 
-const toolCompressionModel: LLMSystemModelDataType = {
+const toolCompressionModel: LLMModelDataType = {
   ...model,
   config: { ...model.config, maxContext: 12000 }
 };
@@ -191,6 +191,116 @@ describe('compressRequestMessages', () => {
     countGptMessagesTokensMock.mockImplementation(
       async ({ messages }: { messages: ChatCompletionMessageParam[] }) => messages.length * 1000
     );
+  });
+
+  it('persists a deterministic recovery snapshot in the actual checkpoint message', async () => {
+    const getCheckpointContext = vi.fn(
+      async () => '<task_index>task-a: task-memory/tasks/a</task_index>'
+    );
+    createLLMResponseMock.mockResolvedValue({
+      answerText: '<context_checkpoint>继续任务</context_checkpoint>',
+      usage: { inputTokens: 100, outputTokens: 20 },
+      requestId: 'checkpoint',
+      finish_reason: 'stop'
+    });
+    const messages = createMessages();
+    const result = await compressRequestMessages({
+      teamId: testTeamId,
+      messages,
+      model,
+      getCheckpointContext
+    });
+    expect(getCheckpointContext).toHaveBeenCalledTimes(1);
+    expect(result.contextCheckpoint).toContain(
+      '<task_index>task-a: task-memory/tasks/a</task_index>'
+    );
+    expect(result.messages[0]).toEqual(messages[0]);
+    expect(result.messages.at(-1)?.content).toBe(result.contextCheckpoint);
+    getCheckpointContext.mockResolvedValue('task-b');
+    expect(result.contextCheckpoint).not.toContain('task-b');
+  });
+
+  it('does not read live business state when compression is not required', async () => {
+    const getCheckpointContext = vi.fn(async () => 'task-a');
+    const messages = createMessages();
+    const result = await compressRequestMessages({
+      teamId: testTeamId,
+      messages,
+      model,
+      messageTokens: 100,
+      getCheckpointContext
+    });
+    expect(result.messages).toBe(messages);
+    expect(getCheckpointContext).not.toHaveBeenCalled();
+  });
+
+  it('keeps original messages when recovery files cannot be read', async () => {
+    const messages = createMessages();
+    const result = await compressRequestMessages({
+      teamId: testTeamId,
+      messages,
+      model,
+      getCheckpointContext: async () => {
+        throw new Error('Task storage unavailable');
+      }
+    });
+    expect(result.messages).toBe(messages);
+    expect(result.contextCheckpoint).toBeUndefined();
+    expect(createLLMResponseMock).not.toHaveBeenCalled();
+  });
+
+  it('should trigger checkpoint compression for restored history containing long reasoning', async () => {
+    countGptMessagesTokensMock.mockImplementation(async (params) =>
+      countGptMessagesTokensInWorker(params)
+    );
+    const reasoningModel: LLMModelDataType = {
+      ...model,
+      config: { ...model.config, maxContext: 8000, reasoning: true }
+    };
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'Inspect the documentation.' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning_content: 'Need to preserve tool reasoning. '.repeat(1200),
+        tool_calls: [
+          {
+            id: 'call_search',
+            type: 'function',
+            function: { name: 'search', arguments: '{"q":"FastGPT"}' }
+          }
+        ]
+      },
+      { role: 'tool', tool_call_id: 'call_search', content: 'Documentation found.' },
+      { role: 'user', content: 'Continue.' }
+    ];
+    const originalMessages = structuredClone(messages);
+    const withoutReasoning = messages.map(({ reasoning_content, ...message }) => message);
+    expect(
+      countGptMessagesTokensInWorker({ messages: withoutReasoning, tools: [searchTool] })
+    ).toBeLessThan(reasoningModel.config.maxContext * 0.8);
+    createLLMResponseMock.mockResolvedValue({
+      answerText:
+        '<context_checkpoint>Documentation found; continue the task.</context_checkpoint>',
+      usage: { inputTokens: 100, outputTokens: 20 },
+      requestId: 'req_restored_reasoning',
+      finish_reason: 'stop'
+    });
+
+    const result = await compressRequestMessages({
+      teamId: testTeamId,
+      messages,
+      model: reasoningModel,
+      tools: [searchTool]
+    });
+
+    expect(createLLMResponseMock).toHaveBeenCalledTimes(1);
+    expect(result.contextCheckpoint).toContain('Documentation found; continue the task.');
+    expect(result.messageTokens).toBe(
+      countGptMessagesTokensInWorker({ messages: result.messages, tools: [searchTool] })
+    );
+    expect(result.messageTokens).toBeLessThan(reasoningModel.config.maxContext * 0.8);
+    expect(messages).toEqual(originalMessages);
   });
 
   it('should compress all non-system messages into one hidden context checkpoint', async () => {

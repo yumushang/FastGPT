@@ -1,5 +1,9 @@
 import { NextAPI } from '@/service/middleware/entry';
-import { authChatTargetCrud, authCollectionInChat } from '@/service/support/permission/auth/chat';
+import {
+  authChatTargetCrud,
+  resolveOptionalAppApiKeyChatTarget
+} from '@fastgpt/service/core/chat/auth';
+import { authCollectionInChat } from '@/service/support/permission/auth/chat';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import { authDatasetData } from '@fastgpt/service/support/permission/dataset/auth';
@@ -17,14 +21,31 @@ import {
 } from '@fastgpt/global/openapi/core/dataset/data/api';
 
 async function handler(req: ApiRequestProps): Promise<GetQuoteDataResponse> {
-  const body = parseApiInput({ req, bodySchema: GetQuoteDataBodySchema }).body;
+  const input = parseApiInput({ req, bodySchema: GetQuoteDataBodySchema }).body;
+  const body = {
+    ...input,
+    ...(await resolveOptionalAppApiKeyChatTarget({
+      req,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId
+    }))
+  };
   const { id: dataId } = body;
+
+  if (
+    (body.customUid !== undefined || body.authProxy !== undefined) &&
+    (!body.chatId || !body.chatItemDataId)
+  )
+    throw ChatErrEnum.unAuthChat;
+  if (body.chatId && !body.sourceType) throw ChatErrEnum.unAuthChat;
 
   // Auth
   const { collection, q, a } = await (async () => {
     if (body.chatId && body.sourceType && body.chatItemDataId) {
-      const { sourceType, sourceId, chatId, outLinkAuthData } = body;
+      const { customUid, authProxy, sourceType, sourceId, chatId, outLinkAuthData } = body;
       const authRes = await authChatTargetCrud({
+        customUid,
+        authProxy,
         req,
         authToken: true,
         sourceType,
@@ -57,11 +78,16 @@ async function handler(req: ApiRequestProps): Promise<GetQuoteDataResponse> {
 
       return {
         collection,
-        ...(await formatDatasetDataValue({
-          q: datasetData.q,
-          a: datasetData.a,
-          imageId: datasetData.imageId
-        }))
+        ...(await formatDatasetDataValue(
+          {
+            q: datasetData.q,
+            a: datasetData.a,
+            imageId: datasetData.imageId
+          },
+          // 引用文本里的图片 key 必须绑定到已鉴权 collection 所属 dataset，
+          // 否则可借该接口为外库 key 签发短链。
+          { datasetIds: [String(collection.datasetId)] }
+        ))
       };
     } else {
       const { datasetData, collection } = await authDatasetData({
@@ -73,11 +99,14 @@ async function handler(req: ApiRequestProps): Promise<GetQuoteDataResponse> {
       });
       return {
         collection,
-        ...(await formatDatasetDataValue({
-          q: datasetData.q,
-          a: datasetData.a,
-          imageId: datasetData.imageId
-        }))
+        ...(await formatDatasetDataValue(
+          {
+            q: datasetData.q,
+            a: datasetData.a,
+            imageId: datasetData.imageId
+          },
+          { datasetIds: [String(collection.datasetId)] }
+        ))
       };
     }
   })();

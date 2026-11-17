@@ -28,21 +28,10 @@ vi.mock('@fastgpt/dal/redis/bullmq', () => ({
     removePollJob: (jobId: string) => mocks.getQueue('wechatPoll')?.remove?.(jobId)
   },
   WECHAT_POLL_JOB_NAME: 'wechatPublishPoll',
+  defaultWorkerOptions: { removeOnFail: { count: 10000 } },
   QueueNames: {
     wechatPoll: 'wechatPoll',
     wechatReply: 'wechatReply'
-  }
-}));
-
-vi.mock('@fastgpt/service/env', () => ({
-  serviceEnv: {
-    WECHAT_CHANNEL_CONCURRENCY: 1
-  }
-}));
-
-vi.mock('../../../env', () => ({
-  serviceEnv: {
-    WECHAT_CHANNEL_CONCURRENCY: 1
   }
 }));
 
@@ -159,6 +148,18 @@ describe('Wechat polling failure counter integration', () => {
     await initWechatPollWorker();
     return workers[0]?.processor;
   };
+
+  it('initializes both poll and reply workers with fixed concurrency 1000', async () => {
+    await initWechatPollWorker();
+    expect(mocks.getWorker).toHaveBeenCalledTimes(2);
+    for (const queueName of ['wechatPoll', 'wechatReply']) {
+      expect(mocks.getWorker).toHaveBeenCalledWith(
+        queueName,
+        expect.any(Function),
+        expect.objectContaining({ concurrency: 1000 })
+      );
+    }
+  });
 
   it('uses the atomic cache increment for API failures', async () => {
     mocks.getUpdates.mockResolvedValue({ ret: 500, errmsg: 'upstream failed' });

@@ -28,6 +28,7 @@ type UseVirtualListProps<TParams extends PaginationType> = {
   showErrorToast?: boolean;
   disabled?: boolean;
   showNoMoreTip?: boolean;
+  throttleWait?: number;
 };
 
 type VirtualListProps = {
@@ -39,7 +40,7 @@ const loadMoreThreshold = 100;
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 type VirtualScrollWindowOptions = {
-  containerRef: RefObject<HTMLElement>;
+  containerRef: RefObject<HTMLElement | null>;
   syncWindow: (options?: { usePreload?: boolean }) => void;
   listenToWindow?: boolean;
 };
@@ -129,6 +130,7 @@ const useVirtualWindow = <T,>({
   overscan: number;
 }) => {
   const size = useSize(containerRef);
+  const previousContainerRef = useRef<HTMLDivElement | null>(null);
   const [range, setRange] = useState({ start: 0, end: 0 });
   const rowHeight = Math.max(itemHeight, 1);
 
@@ -158,6 +160,14 @@ const useVirtualWindow = <T,>({
   useBrowserLayoutEffect(() => {
     syncWindow();
   }, [data.length, itemHeight, overscan, size?.height, size?.width, syncWindow]);
+
+  useBrowserLayoutEffect(() => {
+    // 模式切换可能重建同尺寸的滚动容器，需在绘制前按新容器的位置重算窗口。
+    if (previousContainerRef.current !== containerRef.current) {
+      previousContainerRef.current = containerRef.current;
+      syncWindow();
+    }
+  });
 
   const list = useMemo<VirtualListItem<T>[]>(
     () =>
@@ -219,36 +229,36 @@ export function useVirtualList<
   TParams extends PaginationType,
   TData extends PaginationResponseType
 >(
-  api: (data: TParams) => Promise<TData>,
+  api: (data: TParams, cancelToken?: AbortController) => Promise<TData>,
   {
     refreshDeps,
     itemHeight,
     overscan = defaultOverscan,
-    pageSize = 10,
+    pageSize = 20,
     params,
     EmptyTip,
     showErrorToast = true,
     disabled = false,
-    showNoMoreTip = true
+    showNoMoreTip = true,
+    throttleWait
   }: UseVirtualListProps<TParams>
 ) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { data, total, setData, setTotal, isLoading, fetchData, refreshList } = useScrollPagination(
-    api,
-    {
+  const { data, total, setData, setTotal, isLoading, error, fetchData, refreshList } =
+    useScrollPagination(api, {
       refreshDeps,
       pageSize,
       params,
       EmptyTip,
       showErrorToast,
       disabled,
-      showNoMoreTip
-    }
-  );
+      showNoMoreTip,
+      throttleWait
+    });
 
   const noMore = data.length >= total;
-  const isEmpty = total === 0 && !isLoading;
+  const isEmpty = total === 0 && !isLoading && !error;
   const loadText = isLoading
     ? t('common:is_requesting')
     : noMore
@@ -267,14 +277,14 @@ export function useVirtualList<
   useThrottleEffect(
     () => {
       const container = containerRef.current;
-      if (!container || noMore || isLoading || data.length === 0) return;
+      if (!container || noMore || isLoading || error || data.length === 0) return;
 
       const { scrollTop, scrollHeight, clientHeight } = container;
       if (scrollTop + clientHeight >= scrollHeight - loadMoreThreshold) {
         fetchData({ init: false, ScrollContainerRef: containerRef });
       }
     },
-    [data.length, fetchData, isLoading, noMore, scroll],
+    [data, error, fetchData, noMore, scroll],
     { wait: 50 }
   );
 
@@ -286,13 +296,14 @@ export function useVirtualList<
       data.length === 0 ||
       data.length >= total ||
       isLoading ||
+      error ||
       container.scrollHeight > container.clientHeight + loadMoreThreshold
     ) {
       return;
     }
 
     fetchData({ init: false, ScrollContainerRef: containerRef });
-  }, [data.length, fetchData, isLoading, total]);
+  }, [data, error, fetchData, isLoading, total]);
 
   const scroll2Top = useMemoizedFn(() => {
     if (containerRef.current) {

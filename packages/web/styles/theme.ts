@@ -66,8 +66,8 @@ const Button = defineStyleConfig({
       px: '3',
       py: 0,
       fontWeight: 'medium',
-      h: '30px',
-      minH: '30px',
+      h: '32px',
+      minH: '32px',
       borderRadius: 'sm'
     },
     smSquare: {
@@ -75,17 +75,17 @@ const Button = defineStyleConfig({
       px: '0',
       py: 0,
       fontWeight: 'medium',
-      h: '30px',
-      minH: '30px',
-      w: '30px',
+      h: '32px',
+      minH: '32px',
+      w: '32px',
       borderRadius: 'sm'
     },
     base: {
       fontSize: 'sm',
       px: '4',
       py: 0,
-      h: '34px',
-      minH: '34px',
+      h: '36px',
+      minH: '36px',
       fontWeight: 'medium',
       borderRadius: 'sm'
     },
@@ -93,8 +93,9 @@ const Button = defineStyleConfig({
       fontSize: 'sm',
       px: '0',
       py: 0,
-      h: '34px',
-      w: '34px',
+      h: '36px',
+      minH: '36px',
+      w: '36px',
       fontWeight: 'medium',
       borderRadius: 'sm'
     },
@@ -102,8 +103,8 @@ const Button = defineStyleConfig({
       fontSize: 'sm',
       px: '4',
       py: 0,
-      h: '34px',
-      minH: '34px',
+      h: '36px',
+      minH: '36px',
       fontWeight: 'medium',
       borderRadius: 'sm'
     },
@@ -111,9 +112,9 @@ const Button = defineStyleConfig({
       fontSize: 'sm',
       px: '0',
       py: 0,
-      h: '34px',
-      minH: '34px',
-      w: '34px',
+      h: '36px',
+      minH: '36px',
+      w: '36px',
       fontWeight: 'medium',
       borderRadius: 'sm'
     },
@@ -427,6 +428,13 @@ const NumberInput = numInputMultiStyle({
         fontSize: 'sm'
       }
     }),
+    md: defineStyle({
+      field: {
+        h: '36px',
+        borderRadius: 'sm',
+        fontSize: 'sm'
+      }
+    }),
     lg: defineStyle({
       field: {
         h: '40px',
@@ -532,6 +540,7 @@ const NumberInput = numInputMultiStyle({
     })
   },
   defaultProps: {
+    size: 'md',
     variant: 'outline'
   }
 });
@@ -634,6 +643,9 @@ const Checkbox = checkBoxMultiStyle({
     control: {
       borderRadius: 'xs',
       bg: 'none',
+      '&:not([data-checked]):not([data-indeterminate]) svg': {
+        opacity: 0
+      },
       _checked: {
         bg: 'primary.50',
         borderColor: 'primary.600',
@@ -654,11 +666,24 @@ const Checkbox = checkBoxMultiStyle({
           }
         }
       },
+      _indeterminate: {
+        bg: 'primary.50',
+        borderColor: 'primary.600',
+        borderWidth: '1px',
+        color: 'primary.600',
+        boxShadow: `${shadowLight} !important`,
+        _hover: {
+          bg: 'primary.50'
+        }
+      },
       _hover: {
         borderColor: 'primary.400'
       },
       _disabled: {
+        bg: 'none',
+        borderColor: 'inherit',
         _hover: {
+          bg: 'none',
           borderColor: 'inherit'
         }
       }
@@ -727,7 +752,51 @@ const Modal = modalMultiStyle({
   }
 });
 
+const flatTableVariant = defineStyle({
+  table: {
+    bg: 'white'
+  },
+  thead: {
+    tr: {
+      th: {
+        p: '0',
+        px: 8,
+        bg: 'myGray.50',
+        borderRadius: 'none !important',
+        borderBottom: 'none',
+        height: '32px',
+        fontSize: 'mini',
+        fontWeight: 'medium'
+      }
+    }
+  },
+  tbody: {
+    tr: {
+      td: {
+        p: '0',
+        px: 8,
+        fontSize: 'xs',
+        borderBottom: 'base',
+        height: '32px',
+        borderRadius: 'none !important'
+      },
+      '&:last-child': {
+        td: {
+          borderBottom: 'none'
+        }
+      }
+    }
+  }
+});
+
 const Table = tableMultiStyle({
+  baseStyle: {
+    table: {
+      'thead, thead tr, thead th, thead td': {
+        borderBottom: 'none'
+      }
+    }
+  },
   sizes: {
     md: defineStyle({
       table: {
@@ -737,7 +806,7 @@ const Table = tableMultiStyle({
         tr: {
           bg: 'myGray.100',
           fontSize: 'sm',
-          borderBottom: 'base',
+          borderBottom: 'none',
           th: {
             borderBottom: 'none',
             overflow: 'hidden',
@@ -766,41 +835,8 @@ const Table = tableMultiStyle({
     })
   },
   variants: {
-    workflow: {
-      table: {
-        bg: 'white'
-      },
-      thead: {
-        tr: {
-          th: {
-            p: '0',
-            px: 8,
-            bg: 'myGray.50',
-            borderRadius: 'none !important',
-            borderBottom: 'none',
-            height: '32px',
-            fontSize: 'mini',
-            fontWeight: 'medium'
-          }
-        }
-      },
-      tbody: {
-        tr: {
-          td: {
-            p: '0',
-            px: 8,
-            fontSize: 'xs',
-            borderBottom: 'base',
-            height: '32px'
-          },
-          '&:last-child': {
-            td: {
-              borderBottom: 'none'
-            }
-          }
-        }
-      }
-    },
+    flat: flatTableVariant,
+    workflow: flatTableVariant,
     bordered: {
       table: {
         bg: 'white'
@@ -819,7 +855,7 @@ const Table = tableMultiStyle({
             letterSpacing: '0.5px',
             textTransform: 'none',
             borderRadius: 'none !important',
-            borderBottom: '1px solid',
+            borderBottom: 'none',
             borderColor: 'myGray.200',
             '&:not(:first-of-type)': {
               borderLeft: '1px solid',
@@ -1014,7 +1050,7 @@ export const theme = extendTheme({
     }
   },
   fonts: {
-    body: 'PingFang,Noto Sans,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol"'
+    body: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"'
   },
   fontSizes: {
     mini: '0.75rem',

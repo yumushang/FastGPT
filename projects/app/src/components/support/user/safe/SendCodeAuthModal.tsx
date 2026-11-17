@@ -1,4 +1,7 @@
-import { getCaptchaPic, type UserVerificationPurpose } from '@/web/support/user/api';
+import {
+  getCaptchaPic as getDefaultCaptchaPic,
+  type UserVerificationPurpose
+} from '@/web/support/user/api';
 import { Button, FormControl, Input, ModalBody, ModalFooter, Skeleton } from '@chakra-ui/react';
 import MyImage from '@fastgpt/web/components/common/Image/MyImage';
 import MyModal from '@fastgpt/web/components/common/MyModal';
@@ -8,21 +11,49 @@ import { useForm } from 'react-hook-form';
 import { useMemoizedFn } from 'ahooks';
 import { useEffect } from 'react';
 import { VerificationTtlSeconds } from '@fastgpt/global/support/user/account/verification/type';
+import type { LoginVerificationCaptchaResponseType } from '@fastgpt/global/openapi/support/user/account/login/api';
+import PuzzleCaptchaModal from './PuzzleCaptchaModal';
 
-const SendCodeAuthModal = ({
-  username,
-  purpose,
-  onClose,
-  onSending,
-  onSendCode
-}: {
+/** 登录二次验证保留 Challenge 作用域的字符验证码协议，供 Web 与 CLI 继续共用。 */
+export type GetCaptchaPic = () => Promise<LoginVerificationCaptchaResponseType>;
+
+type SendCodeAuthModalProps = {
   username: string;
   purpose: UserVerificationPurpose;
   onClose: () => void;
-
   onSending: boolean;
-  onSendCode: (e: { username: string; captcha: string }) => Promise<void>;
-}) => {
+  onSendCode: (params: { username: string; captcha: string }) => Promise<void>;
+  getCaptchaPic?: GetCaptchaPic;
+};
+
+/** 仅普通表单切换旋转交互；注入 Challenge 适配器的登录二次验证保持原有行为。 */
+const SendCodeAuthModal = (props: SendCodeAuthModalProps) => {
+  const { username, purpose, onClose, onSendCode, getCaptchaPic } = props;
+  if (getCaptchaPic) {
+    return <LoginCaptchaModal {...props} getCaptchaPic={getCaptchaPic} />;
+  }
+
+  return (
+    <PuzzleCaptchaModal
+      purpose={purpose}
+      getCaptcha={() => getDefaultCaptchaPic(username, purpose)}
+      onClose={onClose}
+      onVerified={async (captcha) => {
+        await onSendCode({ username, captcha });
+        onClose();
+      }}
+    />
+  );
+};
+
+/** 保留登录二次验证的输入、刷新和发送失败后重试行为。 */
+const LoginCaptchaModal = ({
+  username,
+  onClose,
+  onSending,
+  onSendCode,
+  getCaptchaPic
+}: SendCodeAuthModalProps & { getCaptchaPic: GetCaptchaPic }) => {
   const { t } = useTranslation();
 
   const { register, handleSubmit } = useForm({
@@ -35,7 +66,7 @@ const SendCodeAuthModal = ({
     data,
     loading,
     run: getCaptcha
-  } = useRequest(() => getCaptchaPic(username, purpose), { manual: false });
+  } = useRequest(useMemoizedFn(getCaptchaPic), { manual: false });
 
   const refreshCaptcha = useMemoizedFn(() => {
     getCaptcha();
@@ -50,8 +81,12 @@ const SendCodeAuthModal = ({
   }, [data?.captchaImage, refreshCaptcha]);
 
   const onSubmit = async ({ code }: { code: string }) => {
-    await onSendCode({ username, captcha: code });
-    onClose();
+    try {
+      await onSendCode({ username, captcha: code });
+      onClose();
+    } catch {
+      // 发送方负责展示具体错误；保留弹窗和验证码，允许用户直接重试。
+    }
   };
 
   const handleEnterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

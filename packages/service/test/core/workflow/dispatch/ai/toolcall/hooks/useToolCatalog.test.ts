@@ -1,3 +1,7 @@
+import {
+  createDefaultInstanceConfig,
+  getTestInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/constants';
 import { SANDBOX_SYSTEM_PROMPT } from '@fastgpt/global/core/ai/sandbox/constants';
@@ -19,14 +23,11 @@ const { getSandboxToolInfoMock } = vi.hoisted(() => ({
   getSandboxToolInfoMock: vi.fn()
 }));
 
-vi.mock('@fastgpt/service/core/ai/sandbox/interface/toolCall', async (importOriginal) => {
+vi.mock('@fastgpt/service/core/ai/sandbox/application/toolCall', async (importOriginal) => {
   const original =
-    await importOriginal<typeof import('@fastgpt/service/core/ai/sandbox/interface/toolCall')>();
+    await importOriginal<typeof import('@fastgpt/service/core/ai/sandbox/application/toolCall')>();
 
-  return {
-    ...original,
-    getSandboxToolInfo: getSandboxToolInfoMock
-  };
+  return { ...original, getSandboxToolInfo: getSandboxToolInfoMock };
 });
 
 const createToolNode = (overrides: Record<string, any> = {}) =>
@@ -35,7 +36,6 @@ const createToolNode = (overrides: Record<string, any> = {}) =>
     name: 'Search',
     avatar: 'tool-avatar',
     intro: 'Search intro',
-    toolDescription: 'Search data',
     inputs: [],
     ...overrides
   }) as any;
@@ -44,11 +44,11 @@ describe('useToolCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getSandboxToolInfoMock.mockReturnValue(undefined);
-    (global as any).feConfigs = {};
+    global.systemInstanceConfig = createDefaultInstanceConfig();
   });
 
   afterEach(() => {
-    delete (global as any).feConfigs;
+    global.systemInstanceConfig = createDefaultInstanceConfig();
   });
 
   it('creates user tool schemas, read-file tool and tool info lookup', async () => {
@@ -79,7 +79,6 @@ describe('useToolCatalog', () => {
         createToolNode({
           nodeId: 'weather',
           name: 'Weather',
-          toolDescription: '',
           intro: 'Weather intro',
           inputs: [
             {
@@ -119,7 +118,7 @@ describe('useToolCatalog', () => {
         type: 'function',
         function: {
           name: 'search',
-          description: 'Search: Search data',
+          description: 'Search: Search intro',
           parameters: explicitSchema
         }
       },
@@ -164,6 +163,16 @@ describe('useToolCatalog', () => {
       })
     );
     expect(result.getToolInfo('missing')).toBeUndefined();
+  });
+
+  it('uses the node intro regardless of dispatch language', async () => {
+    const { tools } = await useToolCatalog({
+      messages: [],
+      toolNodes: [createToolNode({ intro: 'Search summary' })],
+      lang: 'zh-CN'
+    });
+
+    expect(tools[0].function.description).toBe('Search: Search summary');
   });
 
   it('exposes only agent-generated params to model schema', () => {
@@ -313,9 +322,7 @@ describe('useToolCatalog', () => {
   });
 
   it('appends sandbox prompt when sandbox is enabled', async () => {
-    (global as any).feConfigs = {
-      show_agent_sandbox: true
-    };
+    getTestInstanceConfig().subservice.agentSandbox.provider = 'opensandbox';
     getSandboxToolInfoMock.mockReturnValue({
       name: 'Run shell',
       avatar: 'sandbox-avatar'
@@ -350,9 +357,7 @@ describe('useToolCatalog', () => {
   });
 
   it('prepends sandbox system prompt when original messages have no system message', async () => {
-    (global as any).feConfigs = {
-      show_agent_sandbox: true
-    };
+    getTestInstanceConfig().subservice.agentSandbox.provider = 'opensandbox';
 
     const result = await useToolCatalog({
       messages: [

@@ -2,11 +2,11 @@ import { delay } from '@fastgpt/global/common/system/utils';
 import { TrackModel } from './schema';
 import { TrackEnum } from '@fastgpt/global/common/middle/tracks/constants';
 import { getLogger, LogCategories } from '../../logger';
-import { serviceEnv } from '../../../env';
 
 const logger = getLogger(LogCategories.EVENT.TRACK);
 
-const batchUpdateTime = serviceEnv.TRACK_BATCH_UPDATE_TIME;
+// 埋点计数批量写入统一使用固定间隔，单位为毫秒。
+const TRACK_BATCH_INTERVAL_MS = 5_000;
 
 const getCurrentTenMinuteBoundary = () => {
   const now = new Date();
@@ -25,13 +25,15 @@ const getCurrentMinuteBoundary = () => {
   return boundary;
 };
 
+/** 启动埋点计数刷新循环；首轮立即处理，之后每轮等待固定 5 秒。 */
 export const trackTimerProcess = async () => {
   while (true) {
     await countTrackTimer();
-    await delay(batchUpdateTime);
+    await delay(TRACK_BATCH_INTERVAL_MS);
   }
 };
 
+/** 刷新累计计数；点击保留入队时的小时桶，延迟或并发刷新都不会改变归属时间。 */
 export const countTrackTimer = async () => {
   if (!global.countTrackQueue || global.countTrackQueue.size === 0) {
     return;
@@ -46,6 +48,21 @@ export const countTrackTimer = async () => {
 
     const bulkOps = queuedItems
       .map(({ event, count, data }) => {
+        if (event === TrackEnum.workflowBuilderClick) {
+          return [
+            {
+              updateOne: {
+                filter: { event, createTime: data.createTime },
+                update: {
+                  $setOnInsert: { event, createTime: data.createTime },
+                  $inc: { 'data.count': count }
+                },
+                upsert: true
+              }
+            }
+          ];
+        }
+
         if (event === TrackEnum.datasetSearch) {
           const { teamId, datasetId } = data;
 

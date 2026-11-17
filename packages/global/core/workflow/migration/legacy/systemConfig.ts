@@ -1,6 +1,7 @@
 import type {
   AppAutoExecuteConfigType,
   AppChatConfigType,
+  EntryPointItemType,
   AppQGConfigType,
   AppScheduledTriggerConfigType,
   AppTTSConfigType,
@@ -18,7 +19,7 @@ import type { LegacyStoreNodeItem, LegacyWorkflowData, LegacyWorkflowDataInput }
 /**
  * Legacy `FlowNodeTypeEnum.systemConfig`.
  */
-const legacySystemConfigNodeType = 'userGuide';
+export const legacySystemConfigNodeType = 'userGuide';
 /**
  * Legacy `FlowNodeTypeEnum.pluginConfig`.
  */
@@ -142,6 +143,13 @@ export function migrateSystemConfigToChatConfig(input: LegacyWorkflowDataInput) 
       getSystemConfigInputValue<AppAutoExecuteConfigType>(
         systemConfigNode,
         NodeInputKeyEnum.autoExecute
+      )
+    ],
+    [
+      'entryPoints',
+      getSystemConfigInputValue<EntryPointItemType[]>(
+        systemConfigNode,
+        NodeInputKeyEnum.entryPoints
       )
     ]
   ];

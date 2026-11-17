@@ -7,7 +7,10 @@ import { readDocsFile } from './extension/docx';
 import { readPptxRawText } from './extension/pptx';
 import { readXlsxRawText } from './extension/xlsx';
 import { readCsvRawText } from './extension/csv';
+import { readOfdFile } from './extension/ofd';
 import { isAnydocDocumentExtension, readAnydocRawText } from './extension/anydoc';
+import { UserError } from '@fastgpt/global/common/error/utils';
+import { documentFileType } from '@fastgpt/global/common/file/constants';
 import { type UploadFileHandler } from './type';
 import {
   createWorkerUploadFileHandlerWithListener,
@@ -103,6 +106,8 @@ const read = async (
       return readXlsxRawText(params);
     case 'csv':
       return readCsvRawText(params);
+    case 'ofd':
+      return readOfdFile(params);
     default:
       if (isAnydocDocumentExtension(params.extension)) {
         return readAnydocRawText(params, {
@@ -111,7 +116,9 @@ const read = async (
       }
 
       return Promise.reject(
-        `The file extension ".${params.extension.replace(/^\./, '')}" is not supported.`
+        new UserError(
+          `The current file extension is "${params.extension || '(none)'}". Only the following file types are supported: ${documentFileType}.`
+        )
       );
   }
 };

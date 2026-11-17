@@ -37,16 +37,23 @@ type CountableContentPart = ChatCompletionContentPart | { type: 'refusal'; refus
 /**
  * 将多模态 content part 转成可计数文本。
  *
- * 这里不尝试复刻各家模型对图片、音频、文件的精确计费规则，只把会进入上下文或
- * 明显影响输入规模的字段纳入估算；真实计费仍以模型供应商返回的 usage 为准。
+ * 媒体字段只保留固定占位符，不把 base64、媒体 URL 或文件二进制交给 tokenizer：
+ * 这些内容不是普通 prompt 文本，直接做 BPE 编码会造成 worker 超时，也会让估算结果
+ * 受签名 URL 和二进制长度影响。真实媒体 token 和计费仍以供应商返回的 usage 为准。
  */
 const contentPartToText = (part: CountableContentPart) => {
   if (part.type === 'text') return part.text;
-  if (part.type === 'image_url') return part.image_url.url;
-  if (part.type === 'input_audio') return part.input_audio.data;
+  if (part.type === 'image_url') {
+    return `[image${part.image_url.detail ? `:${part.image_url.detail}` : ''}]`;
+  }
+  if (part.type === 'input_audio')
+    return part.input_audio.format ? `[audio:${part.input_audio.format}]` : '[audio]';
+  if (part.type === 'video_url') return '[video]';
   if (part.type === 'file')
-    return [part.file.filename, part.file.file_id, part.file.file_data].filter(Boolean).join(' ');
-  if (part.type === 'file_url') return [part.name, part.url].filter(Boolean).join(' ');
+    return [part.file.filename, part.file.file_id, part.file.file_data ? '[file]' : '']
+      .filter(Boolean)
+      .join(' ');
+  if (part.type === 'file_url') return [part.name, '[file_url]'].filter(Boolean).join(' ');
   if (part.type === 'refusal') return part.refusal;
   return '';
 };
@@ -119,7 +126,8 @@ const getAssistantCallText = (message: ChatCompletionMessageParam) => {
 /**
  * 在 token worker 内同步统计 Chat messages token 数。
  *
- * 这里保持旧实现的消息常数近似规则，只替换为更快的 GPT tokenizer。
+ * 按传入消息逐条计入正文、reasoning 和工具调用，避免恢复历史时漏算旧思考，
+ * 并保证整段统计与追加消息的增量统计一致；供应商实际用量仍以 usage 为准。
  * 主线程只通过 worker 调用该函数，避免主进程加载 tokenizer rank 常驻内存。
  */
 export const countGptMessagesTokensInWorker = ({
@@ -128,9 +136,8 @@ export const countGptMessagesTokensInWorker = ({
   functionCall
 }: CountGptMessagesTokensParams) => {
   return (
-    messages.reduce((sum, item, index) => {
-      // 只有最后一条消息的 reasoning_content 会继续影响后续上下文预算。
-      const reasoningText = index === messages.length - 1 ? item.reasoning_content || '' : '';
+    messages.reduce((sum, item) => {
+      const reasoningText = item.reasoning_content ?? '';
       const contentPrompt = contentToText(item.content);
       const callPrompt = getAssistantCallText(item);
 

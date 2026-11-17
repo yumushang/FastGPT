@@ -1,3 +1,7 @@
+import {
+  createDefaultInstanceConfig,
+  getTestInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   checkTeamAIPoints,
@@ -16,10 +20,14 @@ import { MongoTeamMember } from '@fastgpt/service/support/user/team/teamMemberSc
 import * as vectorController from '@fastgpt/service/common/vectorDB/controller';
 import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
 import { SystemErrEnum } from '@fastgpt/global/common/error/code/system';
-import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { AppTypeList } from '@fastgpt/global/core/app/constants';
 import { TeamMemberStatusEnum } from '@fastgpt/global/support/user/team/constant';
 import { DatasetTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { StandardSubLevelEnum } from '@fastgpt/global/support/wallet/sub/constants';
+
+beforeEach(() => {
+  global.systemInstanceConfig = createDefaultInstanceConfig();
+});
 
 // Valid ObjectId for testing
 const mockTeamId = '507f1f77bcf86cd799439011';
@@ -27,16 +35,16 @@ const mockTeamId = '507f1f77bcf86cd799439011';
 describe('checkTeamAIPoints', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete (global as any).subPlans;
+    getTestInstanceConfig().commercial.subPlans = undefined;
   });
 
-  it('当 global.subPlans.standard 不存在时直接返回', async () => {
+  it('当 实例套餐配置.standard 不存在时直接返回', async () => {
     const result = await checkTeamAIPoints(mockTeamId);
     expect(result).toBeUndefined();
   });
 
   it('当积分充足时返回积分信息', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {
           totalPoints: 2000
@@ -59,7 +67,7 @@ describe('checkTeamAIPoints', () => {
   });
 
   it('积分额度为 null 时不限制', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {
           totalPoints: 2000
@@ -80,7 +88,7 @@ describe('checkTeamAIPoints', () => {
   });
 
   it('当积分不足时抛出错误', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {
           totalPoints: 2000
@@ -98,7 +106,7 @@ describe('checkTeamAIPoints', () => {
   });
 
   it('当已用积分等于总积分时抛出错误', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {
           totalPoints: 1000
@@ -116,7 +124,7 @@ describe('checkTeamAIPoints', () => {
   });
 
   it('当已用积分超过总积分时抛出错误', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {
           totalPoints: 1000
@@ -211,7 +219,7 @@ describe('checkTeamMemberLimit', () => {
 describe('checkTeamAppTypeLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete (global as any).licenseData;
+    getTestInstanceConfig().license.data = undefined;
   });
 
   describe('app 类型检查', () => {
@@ -306,9 +314,29 @@ describe('checkTeamAppTypeLimit', () => {
       expect(countSpy).toHaveBeenCalledWith({
         teamId: mockTeamId,
         type: {
-          $in: [AppTypeEnum.chatAgent, AppTypeEnum.simple, AppTypeEnum.workflow]
+          $in: AppTypeList
         }
       });
+    });
+
+    it.each([99, 100])('系统配额将新增数量计入边界：已有 %s 个', async (totalApps) => {
+      const countSpy = vi
+        .spyOn(MongoApp, 'countDocuments')
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(totalApps);
+      const standardSpy = vi
+        .spyOn(walletUtils, 'getTeamStandPlan')
+        .mockResolvedValue({ standard: undefined });
+      (getTestInstanceConfig().license as any).data = { maxApps: 100 };
+
+      const check = checkTeamAppTypeLimit({ teamId: mockTeamId, appCheckType: 'app' });
+      if (totalApps === 99) {
+        await expect(check).resolves.toBeUndefined();
+      } else {
+        await expect(check).rejects.toBe(SystemErrEnum.licenseAppAmountLimit);
+      }
+      expect(countSpy).toHaveBeenLastCalledWith({ type: { $in: AppTypeList } });
+      expect(standardSpy).toHaveBeenCalledWith({ teamId: mockTeamId, readPreference: 'primary' });
     });
 
     it('当系统许可证限制存在且超限时抛出系统错误', async () => {
@@ -323,7 +351,7 @@ describe('checkTeamAppTypeLimit', () => {
       };
       vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
-      (global as any).licenseData = {
+      (getTestInstanceConfig().license as any).data = {
         maxApps: 100
       };
 
@@ -345,7 +373,7 @@ describe('checkTeamAppTypeLimit', () => {
       };
       vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
-      (global as any).licenseData = {
+      (getTestInstanceConfig().license as any).data = {
         maxApps: 100
       };
 
@@ -672,7 +700,7 @@ describe('checkDatasetIndexLimit', () => {
 describe('checkTeamDatasetLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete (global as any).licenseData;
+    getTestInstanceConfig().license.data = undefined;
   });
 
   it('当数据集数量未超限时正常通过', async () => {
@@ -759,7 +787,7 @@ describe('checkTeamDatasetLimit', () => {
     };
     vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
-    (global as any).licenseData = {
+    (getTestInstanceConfig().license as any).data = {
       maxDatasets: 100
     };
 
@@ -778,7 +806,7 @@ describe('checkTeamDatasetLimit', () => {
     };
     vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
-    (global as any).licenseData = {
+    (getTestInstanceConfig().license as any).data = {
       maxDatasets: 100
     };
 
@@ -798,7 +826,7 @@ describe('checkTeamDatasetLimit', () => {
     };
     vi.spyOn(walletUtils, 'getTeamStandPlan').mockResolvedValue(mockStandard as any);
 
-    (global as any).licenseData = {
+    (getTestInstanceConfig().license as any).data = {
       maxDatasets: 100
     };
 
@@ -876,10 +904,10 @@ describe('checkTeamDatasetSyncPermission', () => {
 describe('checkTeamSandboxPermission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete (global as any).subPlans;
+    getTestInstanceConfig().commercial.subPlans = undefined;
   });
 
-  it('当 global.subPlans.standard 不存在时直接返回', async () => {
+  it('当 实例套餐配置.standard 不存在时直接返回', async () => {
     const getTeamStandPlanSpy = vi.spyOn(walletUtils, 'getTeamStandPlan');
 
     await expect(checkTeamSandboxPermission(mockTeamId)).resolves.toBeUndefined();
@@ -887,7 +915,7 @@ describe('checkTeamSandboxPermission', () => {
   });
 
   it('当 enableSandbox 为 false 时抛出错误', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {}
       }
@@ -905,7 +933,7 @@ describe('checkTeamSandboxPermission', () => {
   });
 
   it('当 standard 不存在时不抛出错误', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {}
       }
@@ -919,7 +947,7 @@ describe('checkTeamSandboxPermission', () => {
   });
 
   it('当 enableSandbox 为 true 时正常通过', async () => {
-    (global as any).subPlans = {
+    (getTestInstanceConfig().commercial as any).subPlans = {
       standard: {
         [StandardSubLevelEnum.basic]: {}
       }

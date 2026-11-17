@@ -1,8 +1,20 @@
+vi.mock('@fastgpt/service/core/dataset/entity', () => ({
+  findDatasetIndexModelReferences: vi.fn().mockResolvedValue([
+    {
+      _id: '68ad85a7463006c963799a07',
+      vectorModelId: '68ad85a7463006c963799a09',
+      vectorModel: 'embedding-model'
+    }
+  ])
+}));
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
 
 const mocks = vi.hoisted(() => ({
   parseApiInput: vi.fn(),
   authDatasetCollection: vi.fn(),
+  getAuthorizedModelIds: vi.fn(),
   checkDatasetIndexLimit: vi.fn(),
   getCollectionWithDataset: vi.fn(),
   getEmbeddingModelData: vi.fn(),
@@ -26,6 +38,10 @@ vi.mock('@fastgpt/service/support/permission/dataset/auth', () => ({
   authDatasetCollection: mocks.authDatasetCollection
 }));
 
+vi.mock('@fastgpt/service/support/permission/model/auth', () => ({
+  getAuthorizedModelIds: mocks.getAuthorizedModelIds
+}));
+
 vi.mock('@fastgpt/service/support/permission/teamLimit', () => ({
   checkDatasetIndexLimit: mocks.checkDatasetIndexLimit
 }));
@@ -34,8 +50,9 @@ vi.mock('@fastgpt/service/core/dataset/controller', () => ({
   getCollectionWithDataset: mocks.getCollectionWithDataset
 }));
 
-vi.mock('@fastgpt/service/core/ai/model', () => ({
-  getEmbeddingModelData: mocks.getEmbeddingModelData
+vi.mock('@fastgpt/service/core/ai/model/catalog/service', () => ({
+  getSystemModelHandle: async () => ({ getModelData: mocks.getEmbeddingModelData }),
+  getTeamModelHandle: async () => ({ getModelData: mocks.getEmbeddingModelData })
 }));
 
 vi.mock('@/service/core/dataset/data/utils', () => ({
@@ -85,11 +102,13 @@ describe('POST /api/core/dataset/data/insertData', () => {
     mocks.authDatasetCollection.mockResolvedValue({
       teamId: 'team-id',
       tmbId: 'tmb-id',
+      isRoot: false,
       collection: {
         name: 'Collection',
         dataset: { name: 'Dataset', type: 'dataset' }
       }
     });
+    mocks.getAuthorizedModelIds.mockResolvedValue(new Set([embeddingModelData.modelId]));
     mocks.getCollectionWithDataset.mockResolvedValue({
       dataset: { _id: datasetId, vectorModel: 'embedding-model' },
       indexPrefixTitle: true,
@@ -106,7 +125,7 @@ describe('POST /api/core/dataset/data/insertData', () => {
   it('creates the data in a Mongo transaction and forwards the same session', async () => {
     const result = await handler({} as never);
 
-    expect(result).toBe(insertId);
+    expect(result).toEqual({ dataIds: [insertId] });
     expect(mocks.mongoSessionRun).toHaveBeenCalledTimes(1);
     expect(mocks.createDatasetData).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -129,6 +148,25 @@ describe('POST /api/core/dataset/data/insertData', () => {
       inputTokens: 10,
       model: embeddingModelData
     });
+  });
+
+  it('rejects data insertion when the actor cannot use the dataset embedding model', async () => {
+    const error = new Error(ModelErrEnum.unAuthModel);
+    mocks.getAuthorizedModelIds.mockResolvedValue(new Set<string>());
+    mocks.getEmbeddingModelData.mockImplementation((_reference, options) => {
+      if (options?.authorizedIds && !options.authorizedIds.has(embeddingModelData.modelId)) {
+        throw error;
+      }
+      return embeddingModelData;
+    });
+
+    await expect(handler({} as never)).rejects.toBe(error);
+
+    expect(mocks.getAuthorizedModelIds).toHaveBeenCalledWith({
+      actor: { teamId: 'team-id', tmbId: 'tmb-id', isRoot: false },
+      handle: expect.anything()
+    });
+    expect(mocks.createDatasetData).not.toHaveBeenCalled();
   });
 
   it('does not record usage when the transactional create fails', async () => {

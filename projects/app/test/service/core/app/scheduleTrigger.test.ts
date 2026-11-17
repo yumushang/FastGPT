@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   preChatRound: vi.fn(),
   finalizeChatRound: vi.fn(),
   failChatRound: vi.fn(),
-  updateChatGenerateStatus: vi.fn(),
   getRunningUserInfoByTmbId: vi.fn(),
   createChatUsageRecord: vi.fn(),
   getWorkflowEntryNodeIds: vi.fn(),
@@ -22,12 +21,16 @@ const mocks = vi.hoisted(() => ({
   getNextTimeByCronStringAndTimezone: vi.fn()
 }));
 
-vi.mock('@fastgpt/service/common/logger', () => ({
-  getLogger: () => ({
-    info: vi.fn(),
-    error: vi.fn()
-  })
-}));
+vi.mock('@fastgpt/service/common/logger', () => {
+  const logCategory = new Proxy({}, { get: () => logCategory });
+  return {
+    LogCategories: logCategory,
+    getLogger: () => ({
+      info: vi.fn(),
+      error: vi.fn()
+    })
+  };
+});
 
 vi.mock('@fastgpt/service/support/wallet/sub/utils', () => ({
   getTeamPlanStatus: vi.fn(async () => ({ standard: { maxUploadFileCount: 20 } }))
@@ -53,10 +56,6 @@ vi.mock('@fastgpt/service/core/chat/saveChat', () => ({
 
 vi.mock('@fastgpt/service/core/chat/utils/prepare', () => ({
   preChatRound: mocks.preChatRound
-}));
-
-vi.mock('@fastgpt/service/core/chat/chatGenerateStatus', () => ({
-  updateChatGenerateStatus: mocks.updateChatGenerateStatus
 }));
 
 vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
@@ -105,7 +104,8 @@ describe('getScheduleTriggerApp', () => {
       versionId: 'version-id',
       nodes: [{ nodeId: 'start' }],
       edges: [],
-      chatConfig: { variables: [] }
+      chatConfig: { variables: [] },
+      resources: []
     });
     mocks.getWorkflowEntryNodeIds.mockReturnValue(['start']);
     mocks.storeNodes2RuntimeNodes.mockReturnValue([{ nodeId: 'runtime-start' }]);
@@ -117,10 +117,17 @@ describe('getScheduleTriggerApp', () => {
       durationSeconds: 1.2,
       system_memories: { memory: 'value' },
       customFeedbacks: ['feedback-id'],
-      nodeResponseSummary: {
+      workflowRuntimeSummary: {
+        responseIds: [],
+        finishedNodeIds: [],
         citeCollectionIds: [],
         errorCount: 0,
-        totalPoints: 0
+        totalPoints: 0,
+        hasLoopRunBreak: false,
+        hasToolStop: false,
+        hasNestedEnd: false,
+        llmInputTokens: 0,
+        llmOutputTokens: 0
       }
     });
     mocks.preChatRound.mockResolvedValue({
@@ -131,7 +138,6 @@ describe('getScheduleTriggerApp', () => {
     });
     mocks.finalizeChatRound.mockResolvedValue(undefined);
     mocks.failChatRound.mockResolvedValue(undefined);
-    mocks.updateChatGenerateStatus.mockResolvedValue(undefined);
     mocks.getNextTimeByCronStringAndTimezone.mockReturnValue(new Date('2026-06-08T00:00:00.000Z'));
   });
 
@@ -159,10 +165,17 @@ describe('getScheduleTriggerApp', () => {
     expect(saveInput).toMatchObject({
       chatId: dispatchInput.chatId,
       source: ChatSourceEnum.cronJob,
-      nodeResponseSummary: {
+      workflowRuntimeSummary: {
+        responseIds: [],
+        finishedNodeIds: [],
         citeCollectionIds: [],
         errorCount: 0,
-        totalPoints: 0
+        totalPoints: 0,
+        hasLoopRunBreak: false,
+        hasToolStop: false,
+        hasNestedEnd: false,
+        llmInputTokens: 0,
+        llmOutputTokens: 0
       }
     });
   });

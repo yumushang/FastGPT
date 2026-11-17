@@ -104,13 +104,10 @@ const Navbar = ({ unread }: { unread: number }) => {
               label: t('common:navbar.Config'),
               icon: 'support/config/configLight',
               activeIcon: 'support/config/configFill',
-              link: '/config/plugin/tool',
-              activeLink: [
-                '/config/plugin/tool',
-                '/config/plugin/marketplace',
-                '/config/model',
-                '/config/system/migrations'
-              ]
+              // 交给 /admin 入口页按部署形态与授权状态分发默认落地页
+              link: '/admin',
+              activePrefix: ['/admin'],
+              activeLink: [] as string[]
             }
           ]
         : [])
@@ -143,7 +140,9 @@ const Navbar = ({ unread }: { unread: number }) => {
       {/* 导航列表 */}
       <Box flex={1}>
         {navbarList.map((item) => {
-          const isActive = item.activeLink.includes(router.pathname);
+          const isActive =
+            (item.activePrefix?.some((prefix) => router.pathname.startsWith(prefix)) ?? false) ||
+            item.activeLink.includes(router.pathname);
 
           return (
             <Box

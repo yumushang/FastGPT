@@ -36,8 +36,12 @@ import {
   UpdateTeamCollaboratorBodySchema,
   UpdateTeamCollaboratorOneBodySchema
 } from '@fastgpt/global/openapi/support/user/team/collaborator/api';
-import { GetInvitationLinkInfoResponseSchema } from '@fastgpt/global/openapi/support/user/team/invitationLink/api';
-import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
+import {
+  AcceptInvitationWithMemberNameBodySchema,
+  GetInvitationLinkInfoResponseSchema
+} from '@fastgpt/global/openapi/support/user/team/invitationLink/api';
+import { AuditEventEnum, TeamAuditEventList } from '@fastgpt/global/support/user/audit/constants';
+import { DatasetAuditEventEnum } from '@fastgpt/global/core/dataset/audit/constants/event';
 import { InformLevelEnum } from '@fastgpt/global/support/user/inform/constants';
 import { TeamMemberStatusEnum } from '@fastgpt/global/support/user/team/constant';
 
@@ -48,6 +52,10 @@ const thirdObjectId = '68ad85a7463006c963799a07';
 describe('support user OpenAPI contracts', () => {
   it('registers all requested Pro user routes', () => {
     expect(openAPIDocument.paths?.['/proApi/support/user/team/audit/list']?.post).toBeDefined();
+    expect(
+      openAPIDocument.paths?.['/proApi/support/user/team/audit/export']?.post?.responses?.[200]
+        ?.content?.['text/csv']
+    ).toBeDefined();
     expect(openAPIDocument.paths?.['/proApi/support/user/inform/list']?.post).toBeDefined();
     expect(openAPIDocument.paths?.['/proApi/support/user/inform/countUnread']?.get).toBeDefined();
     expect(openAPIDocument.paths?.['/proApi/support/user/inform/read']?.get).toBeDefined();
@@ -79,8 +87,12 @@ describe('support user OpenAPI contracts', () => {
       openAPIDocument.paths?.['/proApi/support/user/team/collaborator/updateOne']?.put?.tags
     ).toEqual([DevApiTagsMap.teamPermission]);
     expect(
-      openAPIDocument.paths?.['/proApi/support/user/team/invitationLink/accept']?.post?.tags
+      openAPIDocument.paths?.['/proApi/support/user/team/invitationLink/acceptWithMemberName']?.post
+        ?.tags
     ).toEqual([DevApiTagsMap.teamInvitationLink]);
+    expect(
+      openAPIDocument.paths?.['/proApi/support/user/team/invitationLink/accept']
+    ).toBeUndefined();
     expect(
       openAPIDocument.paths?.['/proApi/support/user/team/invitationLink/create']?.post?.tags
     ).toEqual([DevApiTagsMap.teamInvitationLink]);
@@ -134,9 +146,46 @@ describe('support user OpenAPI contracts', () => {
     ).toBeUndefined();
   });
 
+  it('accepts every dataset audit event in filter and response', () => {
+    // 配置/标签事件与 upstream 已合入的训练事件共用团队审计合同；每个事件都必须能通过筛选和响应校验。
+    const datasetEvents = Object.values(DatasetAuditEventEnum);
+
+    expect(TeamAuditEventList).toEqual(expect.arrayContaining(datasetEvents));
+
+    expect(
+      AuditListBodySchema.parse({
+        dateStart: '2026-01-01T00:00:00.000Z',
+        dateEnd: '2026-01-07T23:59:59.999Z',
+        events: datasetEvents
+      }).events
+    ).toEqual(datasetEvents);
+
+    for (const event of datasetEvents) {
+      const parsed = AuditListResponseSchema.parse({
+        total: 1,
+        list: [
+          {
+            _id: objectId,
+            sourceMember: {
+              name: '张三',
+              avatar: null,
+              status: TeamMemberStatusEnum.active
+            },
+            event,
+            timestamp: '2026-01-02T00:00:00.000Z',
+            metadata: { name: '张三' }
+          }
+        ]
+      });
+      expect(parsed.list[0].event).toBe(event);
+    }
+  });
+
   it('parses audit filters and responses', () => {
     expect(
       AuditListBodySchema.parse({
+        dateStart: '2026-01-01T00:00:00.000Z',
+        dateEnd: '2026-01-07T23:59:59.999Z',
         pageSize: '20',
         pageNum: '1',
         tmbIds: [objectId],
@@ -334,9 +383,103 @@ describe('support user OpenAPI contracts', () => {
     expect(UserSyncResponseSchema.parse(undefined)).toBeUndefined();
   });
 
-  it('allows empty invitation details for existing team members', () => {
-    expect(GetInvitationLinkInfoResponseSchema.parse(undefined)).toBeUndefined();
+  it('parses invitation details and requires a valid member name when accepting', () => {
+    expect(
+      GetInvitationLinkInfoResponseSchema.parse({
+        _id: objectId,
+        linkId: 'invite-link-id',
+        teamId: secondObjectId,
+        expires: '2026-08-26T00:00:00.000Z',
+        description: '邀请加入团队',
+        creatorUsername: 'root',
+        members: [],
+        teamAvatar: null,
+        teamName: 'FastGPT 团队',
+        alreadyJoined: true
+      })
+    ).toMatchObject({ alreadyJoined: true, creatorUsername: 'root' });
+
+    expect(
+      AcceptInvitationWithMemberNameBodySchema.parse({
+        linkId: 'invite-link-id',
+        memberName: '  张三  '
+      })
+    ).toEqual({ linkId: 'invite-link-id', memberName: '张三' });
+    expect(
+      AcceptInvitationWithMemberNameBodySchema.safeParse({
+        linkId: 'invite-link-id',
+        memberName: 'a'.repeat(21)
+      }).success
+    ).toBe(false);
   });
+
+  it.each([
+    { memberName: undefined, expected: 'Member' },
+    { memberName: null, expected: 'Member' },
+    { memberName: '', expected: '' },
+    { memberName: '张三', expected: '张三' }
+  ])(
+    'normalizes member name $memberName in team response contracts',
+    ({ memberName, expected }) => {
+      const member = {
+        tmbId: objectId,
+        userId: objectId,
+        teamId: objectId,
+        name: memberName,
+        memberName,
+        status: TeamMemberStatusEnum.active,
+        createTime: '2026-01-01T00:00:00.000Z'
+      };
+
+      const searchResponse = SearchMembersOrgsGroupsResponseSchema.parse({
+        members: [member],
+        orgs: [],
+        groups: []
+      });
+      expect(searchResponse.members[0]).toMatchObject({ name: expected, memberName: expected });
+
+      expect(
+        GetTeamListResponseSchema.parse([
+          {
+            userId: objectId,
+            teamId: objectId,
+            teamName: 'FastGPT 团队',
+            memberName,
+            tmbId: objectId,
+            status: TeamMemberStatusEnum.active,
+            permission: {
+              role: 1,
+              isOwner: false,
+              hasManagePer: false,
+              hasWritePer: false,
+              hasReadPer: true,
+              hasManageRole: false,
+              hasWriteRole: false,
+              hasReadRole: true
+            }
+          }
+        ])[0].memberName
+      ).toBe(expected);
+
+      expect(
+        ListTeamMembersResponseSchema.parse({
+          total: 1,
+          list: [
+            {
+              userId: objectId,
+              username: 'member-account',
+              tmbId: objectId,
+              teamId: objectId,
+              memberName,
+              isSetMemberName: true,
+              status: TeamMemberStatusEnum.active,
+              createTime: '2026-01-01T00:00:00.000Z'
+            }
+          ]
+        }).list[0].memberName
+      ).toBe(expected);
+    }
+  );
 
   it('parses team management list and write contracts', () => {
     expect(GetTeamListQuerySchema.parse({ status: 'active' })).toEqual({ status: 'active' });
@@ -498,6 +641,33 @@ describe('support user OpenAPI contracts', () => {
     expect(ListTeamMembersBodySchema.safeParse({ tmbIds: ['not-an-id'] }).success).toBe(false);
   });
 
+  it('requires a login username in team member responses', () => {
+    const member = {
+      userId: objectId,
+      tmbId: objectId,
+      teamId: objectId,
+      memberName: 'Member',
+      status: 'active',
+      createTime: '2025-01-13T05:34:31.329Z'
+    };
+
+    expect(
+      ListTeamMembersResponseSchema.parse({
+        total: 1,
+        list: [{ ...member, username: 'member-account' }]
+      }).list[0].username
+    ).toBe('member-account');
+
+    for (const username of [undefined, null]) {
+      expect(
+        ListTeamMembersResponseSchema.safeParse({
+          total: 1,
+          list: [{ ...member, username }]
+        }).success
+      ).toBe(false);
+    }
+  });
+
   it('accepts nullable contact values for historical team members', () => {
     expect(
       ListTeamMembersResponseSchema.parse({
@@ -505,9 +675,11 @@ describe('support user OpenAPI contracts', () => {
         list: [
           {
             userId: objectId,
+            username: 'member-account',
             tmbId: objectId,
             teamId: objectId,
             memberName: '历史成员',
+            isSetMemberName: true,
             avatar: null,
             status: 'active',
             contact: null,
@@ -525,9 +697,11 @@ describe('support user OpenAPI contracts', () => {
         list: [
           {
             userId: objectId,
+            username: 'member-account',
             tmbId: objectId,
             teamId: objectId,
             memberName: '历史成员',
+            isSetMemberName: true,
             avatar: null,
             status: 'waiting',
             contact: null,

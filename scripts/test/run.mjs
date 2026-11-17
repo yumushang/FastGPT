@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import process from 'node:process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,9 +9,12 @@ const workspaceFilters = {
   admin: '@fastgpt/admin',
   global: '@fastgpt/global',
   service: '@fastgpt/service',
-  web: '@fastgpt/web'
+  web: '@fastgpt/web',
+  'workflow-core': '@fastgpt/workflow-core',
+  'workflow-cli': '@fastgpt/workflow-cli'
 };
 const workspaceScopes = Object.keys(workspaceFilters);
+const optionalWorkspaceScopes = new Set(['workflow-core', 'workflow-cli']);
 const supportedModes = ['unit', 'integration', 'sandbox', 'all'];
 
 const parseUnitScopes = (scopeValue) => {
@@ -48,7 +52,8 @@ const parseUnitScopes = (scopeValue) => {
 };
 
 /**
- * 将测试模式、范围和路径解析为顺序执行计划，集中维护根目录测试入口的语义。
+ * Resolve the root test mode and scope into an ordered execution plan.
+ * @param {{ args?: string[], modeValue?: string, scopeValue?: string }} [options]
  */
 export const resolveTestPlan = ({ args = [], modeValue, scopeValue } = {}) => {
   if (args.length > 0) {
@@ -95,9 +100,13 @@ export const resolveTestPlan = ({ args = [], modeValue, scopeValue } = {}) => {
     throw new Error('FASTGPT_TEST_MODE=all does not accept FASTGPT_TEST_SCOPE');
   }
 
-  // all 保留原 test:all 的语义：workspace 单测完成后再跑 service 集成测试。
   const unitScopes = parseUnitScopes(mode === 'all' ? 'workspace' : scopeValue);
-  const selectedWorkspaces = unitScopes.filter((scope) => scope in workspaceFilters);
+  const selectedWorkspaces = unitScopes.filter(
+    (scope) =>
+      scope in workspaceFilters &&
+      (!optionalWorkspaceScopes.has(scope) ||
+        existsSync(resolve(process.cwd(), 'packages', scope, 'package.json')))
+  );
   const plan = [];
 
   if (selectedWorkspaces.length > 0) {

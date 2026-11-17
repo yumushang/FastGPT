@@ -3,12 +3,15 @@ import {
   GetSystemModelsResponseSchema,
   type GetSystemModelsResponse
 } from '@fastgpt/global/openapi/core/ai/model/api';
+import { getSystemModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
+import { getModelProviderMetadata } from '@fastgpt/service/core/ai/model/provider/controller';
 
-/** 价格页公开模型接口，只通过响应 Schema 白名单返回最小字段。 */
+/** 返回无需鉴权的公开系统模型价格目录。 */
 async function handler(): Promise<GetSystemModelsResponse> {
+  const modelHandle = await getSystemModelHandle();
   return GetSystemModelsResponseSchema.parse({
-    models: global.systemActiveModelList,
-    providers: global.ModelProviderRawCache
+    models: modelHandle.getSystemModels().filter((model) => model.isActive),
+    providers: getModelProviderMetadata().providers
   });
 }
 

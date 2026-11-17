@@ -110,12 +110,12 @@ export type ContentReplaceEntry = {
 };
 
 /**
- * File read options.
+ * 单条内容替换的结果，与输入条目一一对应，路径统一为 provider 规范化后的路径。
+ *
+ * replaced 携带实际替换次数；unmatched 表示明确零匹配；unknown 表示请求已完成但缺少计数，
+ * 修改可能已经生效；skipped 表示遇到未命中后尚未发送的编辑。真实 I/O 异常仍向上抛出。
  */
-export type ReadFileOptions = {
-  /** Zero-based byte offset. Defaults to the beginning of the file. */
-  offset?: number;
-
-  /** Maximum number of bytes to read. Omit to read to the end of the file. */
-  length?: number;
-};
+export type ContentReplaceResult = { path: string } & (
+  | { status: 'replaced'; replacedCount: number }
+  | { status: 'unmatched' | 'unknown' | 'skipped' }
+);

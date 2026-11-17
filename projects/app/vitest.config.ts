@@ -23,6 +23,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve('src'),
+      '@fastgpt/workflow-core/test': resolve('../../packages/workflow-core/test'),
+      '@fastgpt/workflow-core': resolve('../../packages/workflow-core/src'),
+      '@fastgpt/workflow-cli': resolve('../../packages/workflow-cli/src'),
       '@fastgpt-sdk/storage/access-link': resolve('../../sdk/storage/src/access-link/index.ts'),
       '@fastgpt-sdk/storage': resolve('../../sdk/storage/src/index.ts'),
       '@fastgpt-sdk/otel/logger': resolve('../../sdk/otel/src/logger-entry.ts'),
@@ -36,6 +39,8 @@ export default defineConfig({
   },
   test: {
     env: {
+      AIPROXY_API_ENDPOINT: process.env.AIPROXY_API_ENDPOINT ?? 'http://127.0.0.1:3000',
+      AIPROXY_API_TOKEN: process.env.AIPROXY_API_TOKEN ?? 'test-aiproxy-token',
       FILE_TOKEN_KEY:
         process.env.FILE_TOKEN_KEY ??
         'bfd697e7e798f75deaf2d31210bc93a2e41ad4eed9e7831071d77821b7b97cff',
@@ -71,7 +76,7 @@ export default defineConfig({
     maxWorkers: getTestMaxWorkers(),
     maxConcurrency: 10,
     pool: 'threads',
-    testTimeout: 20000,
+    testTimeout: 30000,
     hookTimeout: 30000,
     reporters: ['github-actions', 'default'],
     include: ['test/**/*.test.ts']

@@ -1,9 +1,10 @@
 ---
 title: V4.5.1
-description: FastGPT V4.5.1 Update
+description: 'FastGPT V4.5.1 release notes covering container image updates, upgrade steps, and feature changes.'
 releaseTime: '2023-10-24'
 upgradeTags:
   - MIGRATION
+deprecated: true
 ---
 
 ## Run the Initialization API
@@ -24,7 +25,7 @@ What the initialization does:
 2. Initializes Dataset-related fields in the Mongo APP collection.
 3. Initializes PG and Mongo content — creates a collection in Mongo for each file and assigns the references back to PG.
 
-**This initialization endpoint may be very slow. If the request times out, don't worry — just check the logs.**
+**This initialization endpoint may take a long time. If the request times out, check the logs for its progress and result.**
 
 ## What's New
 

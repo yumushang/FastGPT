@@ -118,20 +118,32 @@ vi.mock('@fastgpt/service/core/ai/embedding', async (importOriginal) => {
 /**
  * Setup global mock for AI model module
  */
-vi.mock('@fastgpt/service/core/ai/model', async (importOriginal) => {
+vi.mock('@fastgpt/service/core/ai/model/catalog/service', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
     ...actual,
-    getEmbeddingModelData: vi.fn().mockReturnValue({
-      modelId: '68ad85a7463006c963799a68',
-      model: 'text-embedding-ada-002',
-      name: 'text-embedding-ada-002',
-      provider: 'openai',
-      type: 'embedding',
-      scope: 'system' as const,
-      isActive: true,
-      isCustom: false,
-      config: { defaultToken: 100, maxToken: 100, weight: 0 }
-    })
+    getSystemModelHandle: async () => {
+      const handle = await actual.getSystemModelHandle();
+      return {
+        ...handle,
+        getModelData: vi.fn(
+          (reference: any, options?: { type?: string; vision?: boolean; optional?: boolean }) => {
+            if (options?.type === 'embedding') {
+              return {
+                modelId: '68ad85a7463006c963799a68',
+                model: 'text-embedding-ada-002',
+                name: 'text-embedding-ada-002',
+                provider: 'openai',
+                type: 'embedding',
+                scope: 'system' as const,
+                isActive: true,
+                config: { defaultToken: 100, maxToken: 100, weight: 0 }
+              };
+            }
+            return handle.getModelData(reference, options);
+          }
+        )
+      };
+    }
   };
 });

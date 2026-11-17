@@ -1,13 +1,16 @@
+import { UsageListItemSchema } from '../../../../openapi/support/wallet/usage/api';
 import { describe, expect, it } from 'vitest';
 import { openAPIDocument } from '../../../../openapi/provider/devapi';
 import { openAPIPaths, openAPITagGroups } from '../../../../openapi/path';
 import { DevApiTagsMap } from '../../../../openapi/tag';
 import { BillItemSchema } from '../../../../openapi/support/wallet/bill/api';
-import { GetPaysResponseSchema } from '../../../../openapi/admin/routes/pays/api';
+import { GetPaysResponseSchema } from '../../../../openapi/admin/wallet/pay/api';
 import {
+  GetTeamHeaderResponseSchema,
   InvoiceRecordsResponseSchema,
   InvoiceSubmitBodySchema,
-  UnInvoiceListResponseSchema
+  UnInvoiceListResponseSchema,
+  UpdateTeamHeaderBodySchema
 } from '../../../../openapi/support/wallet/bill/invoice/api';
 import {
   BillPayWayEnum,
@@ -38,6 +41,19 @@ describe('wallet OpenAPI contracts', () => {
     '/proApi/support/wallet/bill/invoice/account/getTeamHeader': 'get',
     '/proApi/support/wallet/bill/invoice/account/updateHeader': 'post'
   } as const;
+
+  it.each([{ totalTokens: 77 }, { totalTokens: 0 }, { duration: 3 }, { duration: 0 }])(
+    'preserves only the STT usage and charged amount: %j',
+    (quantity) => {
+      const item = UsageListItemSchema.shape.list.element;
+      const record = {
+        moduleName: 'STT',
+        amount: 0.00077,
+        ...quantity
+      };
+      expect(item.parse(record)).toEqual(record);
+    }
+  );
 
   it('registers all wallet routes with their real proApi paths and methods', () => {
     for (const [path, method] of Object.entries(routes)) {
@@ -163,6 +179,49 @@ describe('wallet OpenAPI contracts', () => {
     });
 
     expect(response.list[0].contactPhone).toBe('-');
+  });
+
+  it('normalizes empty, null or whitespace invoice contact phone in team header to undefined', () => {
+    const cases = ['', '   ', null, undefined];
+    for (const phone of cases) {
+      const response = GetTeamHeaderResponseSchema.parse({
+        teamName: 'Example Team',
+        unifiedCreditCode: '91110000MA1234567X',
+        needSpecialInvoice: false,
+        emailAddress: 'billing@example.com',
+        contactPhone: phone
+      });
+      expect(response.contactPhone).toBeUndefined();
+    }
+
+    const validResponse = GetTeamHeaderResponseSchema.parse({
+      teamName: 'Example Team',
+      unifiedCreditCode: '91110000MA1234567X',
+      needSpecialInvoice: false,
+      emailAddress: 'billing@example.com',
+      contactPhone: ' 13800138000 '
+    });
+    expect(validResponse.contactPhone).toBe('13800138000');
+
+    const updateBody = UpdateTeamHeaderBodySchema.parse({
+      teamName: 'Example Team',
+      unifiedCreditCode: '91110000MA1234567X',
+      needSpecialInvoice: false,
+      emailAddress: 'billing@example.com',
+      contactPhone: ''
+    });
+    expect(updateBody.contactPhone).toBeUndefined();
+
+    const submitBody = InvoiceSubmitBodySchema.parse({
+      amount: 9900,
+      billIdList: ['68ee0bd23d17260b7829b137'],
+      teamName: 'Example Team',
+      unifiedCreditCode: '91110000MA1234567X',
+      needSpecialInvoice: false,
+      emailAddress: 'billing@example.com',
+      contactPhone: ''
+    });
+    expect(submitBody.contactPhone).toBeUndefined();
   });
 
   it('omits empty request and response placeholders', () => {

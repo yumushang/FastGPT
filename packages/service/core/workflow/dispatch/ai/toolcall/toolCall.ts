@@ -19,10 +19,14 @@ import {
   type AgentLoopCoreToolRunFlowResponse
 } from '../agentLoopCore/interface';
 import { createToolCallToolProvider } from './toolProvider';
+import { runtimeSummaryToNodeSummary, stripNodeSummaryErrorFields } from '../../utils/summary';
+import { getDispatchModerationContext } from '../../utils/runtime';
+import { getWorkflowFileContext } from '../../../utils/context';
 
 type ResponseType = {
   requestIds: string[];
-  error?: string;
+  firstTokenTime?: number;
+  error?: unknown;
   toolDispatchFlowResponses: AgentLoopCoreToolRunFlowResponse[];
   toolCallInputTokens: number;
   toolCallOutputTokens: number;
@@ -68,12 +72,19 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
   let getProviderToolInfo: (name: string) => ToolInfo | undefined = () => undefined;
   const getToolInfo = (name: string) => getProviderToolInfo(name);
 
+  const mergeChildWorkflowSummary = (
+    workflowSummary: Parameters<typeof runtimeSummaryToNodeSummary>[0]
+  ) => {
+    props.nodeSummary.mergeNodeSummary(
+      stripNodeSummaryErrorFields(runtimeSummaryToNodeSummary(workflowSummary))
+    );
+  };
+
   const runtimeEnvironment = createAgentLoopCoreRuntimeEnvironment({
     node: workflowProps.node,
     workflowStreamResponse,
     streamAnswer: isResponseAnswerText,
     streamReasoning: aiChatReasoning,
-    sliceToolResponse: true,
     getToolInfo,
     collectToolRunResponses: true
   });
@@ -85,7 +96,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     workflowProps,
     runtimeNodes,
     runtimeEdges,
-    cacheToolFlowResponse: runtimeEnvironment.cacheToolFlowResponse
+    cacheToolFlowResponse: runtimeEnvironment.cacheToolFlowResponse,
+    onWorkflowRuntimeSummary: mergeChildWorkflowSummary
   });
   getProviderToolInfo = toolProvider.getToolInfo;
   const systemPrompt = toolProvider.finalMessages
@@ -100,7 +112,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     (message) => message.role !== ChatCompletionRequestMessageRoleEnum.System
   );
 
-  const { summary: outputSummary } =
+  const { result: coreResult, summary: outputSummary } =
     await runAgentLoopCoreWithSummary<WorkflowInteractiveResponseType>({
       provider: 'fastAgent',
       input: buildAgentLoopCoreInput({
@@ -110,6 +122,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       }),
       runtime: createAgentLoopCoreRuntimeWithEnvironment({
         teamId: workflowProps.runningUserInfo.teamId,
+        fileContext: getWorkflowFileContext(),
         environment: runtimeEnvironment,
         llmParams: {
           model: toolModel,
@@ -156,6 +169,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         checkIsStopping,
         toolRuntime: {
           toolProvider,
+          context: getDispatchModerationContext(workflowProps),
           /**
            * ToolCall 节点内部工具执行依赖流式输出、交互状态和 nodeResponse 顺序，
            * 这里显式保持串行；普通 Agent 入口再按 batchToolSize 控制并发。
@@ -166,6 +180,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         usagePush
       }),
       assistantResponses: {
+        persistInputContext: !childrenInteractiveParams,
         showReasoning: aiChatReasoning,
         getEventToolInfo: getToolInfo
       }
@@ -173,7 +188,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
 
   return {
     requestIds: outputSummary.requestIds,
-    error: outputSummary.errorText,
+    firstTokenTime: outputSummary.firstTokenTime,
+    error: coreResult.status === 'error' ? coreResult.error : undefined,
     toolDispatchFlowResponses: runtimeEnvironment.toolRunResponses,
     toolCallInputTokens: outputSummary.inputTokens,
     toolCallOutputTokens: outputSummary.outputTokens,

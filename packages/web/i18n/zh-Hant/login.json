@@ -4,6 +4,7 @@
   "agree": "同意",
   "cookies_tip": "本網站使用 cookies 提供更好的服務體驗。繼續使用即表示您同意我們的 Cookie 政策。",
   "forget_password": "忘記密碼？",
+  "login_redirect_failed": "登入已完成，但頁面跳轉失敗，請重新整理頁面",
   "login_success": "登入成功",
   "no_remind": "不再提醒",
   "password_condition": "密碼最多 60 個字元",
@@ -13,6 +14,6 @@
   "redirect": "跳轉",
   "register": "註冊帳號",
   "reset_password_tip": "新密碼至少 8 位，且至少包含數字、小寫字母、大寫字母或特殊字元中的兩種，不允許包含空格",
-  "root_password_placeholder": "root 使用者密碼為環境變數 DEFAULT_ROOT_PSW 的值",
+  "root_password_placeholder": "root 初始密碼請見部署文件，首次登入需修改",
   "use_root_login": "使用 root 使用者登入"
 }

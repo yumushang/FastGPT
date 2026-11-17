@@ -1,9 +1,9 @@
-import type { LLMSystemModelDataType } from '../../ai/model.schema';
 import { WorkflowIOValueTypeEnum, NodeInputKeyEnum, NodeOutputKeyEnum } from '../constants';
 import { FlowNodeInputTypeEnum, FlowNodeOutputTypeEnum } from '../node/constant';
 import { SecretValueTypeSchema } from '../../../common/secret/type';
 import z from 'zod';
 import { BoolSchema, IntSchema, NumSchema } from '../../../common/zod';
+import { JsonValueOpenApiMeta } from '../../../common/zod/openapi';
 
 /* Dataset node */
 export const SelectedDatasetSchema = z.object({
@@ -17,13 +17,39 @@ export const SelectedDatasetSchema = z.object({
     description: '可选知识库名称'
   }),
   vectorModel: z.object({
+    modelId: z.string().optional().meta({
+      description: '知识库绑定的向量模型 ID'
+    }),
     model: z.string().meta({
-      description: '知识库使用的向量模型'
+      description: '知识库使用的向量模型（兼容历史数据）'
     })
   }),
-  isDeleted: BoolSchema.optional()
+  /** 资源异常状态码（如 resource_missing, resource_no_permission），正常时为 undefined */
+  error: z.string().optional()
 });
 export type SelectedDatasetType = z.infer<typeof SelectedDatasetSchema>;
+
+export const StoredSelectedDatasetSchema = z.object({
+  datasetId: z.string().meta({
+    description: '知识库 ID'
+  }),
+  avatar: z.string().optional().meta({
+    description: '知识库头像快照'
+  }),
+  name: z.string().optional().meta({
+    description: '知识库名称快照'
+  }),
+  vectorModel: z
+    .object({
+      modelId: z.string().optional(),
+      model: z.string().optional()
+    })
+    .optional()
+    .meta({
+      description: '知识库向量模型快照'
+    })
+});
+export type StoredSelectedDatasetType = z.infer<typeof StoredSelectedDatasetSchema>;
 
 // Dynamic input field configuration
 export const CustomFieldConfigTypeSchema = z.object({
@@ -57,9 +83,13 @@ export const InputComponentPropsTypeSchema = z.object({
   required: BoolSchema.optional().meta({
     description: '该变量是否必填'
   }),
-  defaultValue: z.any().optional().meta({
-    description: '变量默认值'
-  }),
+  defaultValue: z
+    .any()
+    .optional()
+    .meta({
+      description: '变量默认值',
+      ...JsonValueOpenApiMeta
+    }),
 
   // 不同组件的配置嘻嘻
   referencePlaceholder: z.string().optional().meta({
@@ -227,15 +257,24 @@ export const InputConfigTypeSchema = z.object({
   description: z.string().optional().meta({
     description: '输入配置说明'
   }),
+  placeholder: z.string().optional().meta({
+    description: '输入配置占位提示'
+  }),
   required: BoolSchema.optional().meta({
     description: '该输入配置是否必填'
   }),
   inputType: InputConfigInputTypeSchema.meta({
     description: '输入配置渲染组件类型'
   }),
-  value: SecretValueTypeSchema.optional().meta({
-    description: '输入配置默认值或密钥值'
-  }),
+  value: z
+    .union([
+      SecretValueTypeSchema,
+      z.object({ value: z.union([z.number(), z.boolean()]) }).strict()
+    ])
+    .optional()
+    .meta({
+      description: '输入配置默认值或密钥值'
+    }),
 
   // Selector
   list: z
@@ -267,9 +306,13 @@ export const FlowNodeInputItemTypeSchema = InputComponentPropsTypeSchema.extend(
   valueDesc: z.string().optional().meta({
     description: '输入值说明，通常用于展示引用值含义'
   }), // data desc
-  value: z.any().optional().meta({
-    description: '节点输入当前值'
-  }),
+  value: z
+    .any()
+    .optional()
+    .meta({
+      description: '节点输入当前值',
+      ...JsonValueOpenApiMeta
+    }),
 
   debugLabel: z.string().optional().meta({
     description: '调试模式下展示的输入名称'
@@ -320,7 +363,7 @@ export const ToolReferenceNodeInputTypeSchema = FlowNodeInputItemTypeSchema.omit
   customJsonSchema: true
 });
 
-// Workflow node output
+/** 工作流输出的纯数据契约，供存储、运行时、Core、CLI 和 API 共用。 */
 export const FlowNodeOutputItemTypeSchema = z.object({
   id: z.string().meta({
     description: '节点输出 ID'
@@ -337,9 +380,13 @@ export const FlowNodeOutputItemTypeSchema = z.object({
   valueDesc: z.string().optional().meta({
     description: '输出值说明，通常用于展示引用值含义'
   }),
-  value: z.any().optional().meta({
-    description: '节点输出默认值或静态值'
-  }),
+  value: z
+    .any()
+    .optional()
+    .meta({
+      description: '节点输出默认值或静态值',
+      ...JsonValueOpenApiMeta
+    }),
 
   label: z.string().optional().meta({
     description: '节点输出展示名称'
@@ -347,9 +394,13 @@ export const FlowNodeOutputItemTypeSchema = z.object({
   description: z.string().optional().meta({
     description: '节点输出说明'
   }),
-  defaultValue: z.any().optional().meta({
-    description: '节点输出默认值'
-  }),
+  defaultValue: z
+    .any()
+    .optional()
+    .meta({
+      description: '节点输出默认值',
+      ...JsonValueOpenApiMeta
+    }),
   required: BoolSchema.optional().meta({
     description: '该输出是否为必需输出'
   }),
@@ -357,25 +408,6 @@ export const FlowNodeOutputItemTypeSchema = z.object({
   invalid: BoolSchema.optional().meta({
     description: '该输出当前是否不可用'
   }),
-  invalidCondition: z
-    .function({
-      input: z.tuple([
-        z.object({
-          inputs: z.custom<FlowNodeInputItemType[]>(),
-          llmModelMap:
-            z.custom<Record<string, Pick<LLMSystemModelDataType, 'model' | 'modelId' | 'config'>>>()
-        })
-      ]),
-      output: BoolSchema
-    })
-    .optional()
-    .meta({
-      override: {
-        type: 'string',
-        description: 'Function placeholder; not represented in JSON payloads'
-      }
-    }),
-
   customFieldConfig: CustomFieldConfigTypeSchema.optional().meta({
     description: '动态输出项编辑配置'
   }),
@@ -403,3 +435,12 @@ export const HttpParamAndHeaderItemTypeSchema = z.object({
   value: z.string()
 });
 export type HttpParamAndHeaderItemType = z.infer<typeof HttpParamAndHeaderItemTypeSchema>;
+
+export type EditorVariablePickerType = {
+  key: string;
+  label: string;
+  required?: boolean;
+  icon?: string;
+  valueType?: WorkflowIOValueTypeEnum;
+  valueDesc?: string;
+};

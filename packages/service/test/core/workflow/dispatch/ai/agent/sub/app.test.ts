@@ -5,8 +5,12 @@ import {
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { WorkflowVariableState } from '@fastgpt/service/core/workflow/dispatch/utils/variables';
-import { summarizeRuntimeNodeResponses } from '@fastgpt/service/core/workflow/dispatch/utils';
-import { ChatFileTypeEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { summarizeRuntimeNodeResponses } from '@fastgpt/service/core/workflow/dispatch/utils/summary';
+import {
+  ChatFileTypeEnum,
+  ChatRoleEnum,
+  ChatSourceTypeEnum
+} from '@fastgpt/global/core/chat/constants';
 import { prepareWorkflowFileContext } from '@fastgpt/service/core/workflow/utils/fileContext';
 import {
   getWorkflowFileContext,
@@ -30,7 +34,8 @@ vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
 }));
 
 vi.mock('@fastgpt/service/core/app/version/controller', () => ({
-  getAppVersionById: mocks.getAppVersionById
+  getAppVersionById: mocks.getAppVersionById,
+  getAppPublishedWorkflowMap: vi.fn(async () => new Map())
 }));
 
 vi.mock('@fastgpt/service/support/user/team/utils', () => ({
@@ -77,7 +82,7 @@ describe('agent sub app dispatchPlugin', () => {
     mocks.serverGetWorkflowToolRunUserQuery.mockReturnValue({ value: [] });
     mocks.runWorkflow.mockResolvedValue({
       flowUsages: [],
-      runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
         {
           id: 'pluginOutputResponse',
           nodeId: 'pluginOutput',
@@ -117,8 +122,52 @@ describe('agent sub app dispatchPlugin', () => {
       variableState: await createVariableState(),
       checkIsStopping: vi.fn(() => false),
       maxRunTimes: 20,
-      workflowDispatchDeep: 0
+      workflowDispatchDeep: 0,
+      stream: true
     } as any);
+
+  it('keeps Agent V2 child workflow execution non-streaming', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      avatar: '',
+      nodes: [],
+      edges: [],
+      chatConfig: { variables: [] },
+      currentCost: 0
+    });
+    await dispatchSystemWorkflow();
+    expect(mocks.runWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: false,
+        workflowStreamResponse: undefined
+      })
+    );
+  });
+
+  it('does not expose system workflow LLM tokens to the parent agent summary', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      avatar: '',
+      nodes: [],
+      edges: [],
+      chatConfig: { variables: [] },
+      currentCost: 0
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      flowUsages: [],
+      workflowRuntimeSummary: {
+        ...summarizeRuntimeNodeResponses(undefined, []),
+        llmInputTokens: 20,
+        llmOutputTokens: 5
+      }
+    });
+
+    const result = await dispatchSystemWorkflow();
+
+    expect(result.nodeSummary).toBeUndefined();
+  });
 
   it('initializes workflow tool variables from child chatConfig', async () => {
     mocks.authAppByTmbId.mockResolvedValue({
@@ -130,6 +179,7 @@ describe('agent sub app dispatchPlugin', () => {
       }
     });
     mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
       nodes: [
         {
           nodeId: 'pluginInput',
@@ -259,7 +309,7 @@ describe('agent sub app dispatchPlugin', () => {
     });
     mocks.runWorkflow.mockResolvedValueOnce({
       flowUsages: [{ moduleName: 'Child token/tool usage', totalPoints: 3 }],
-      runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
         {
           id: 'pluginOutputResponse',
           nodeId: 'pluginOutput',
@@ -286,6 +336,8 @@ describe('agent sub app dispatchPlugin', () => {
         totalPoints: expectedPoints
       }
     ]);
+    expect(result.nodeResponse?.totalPoints).toBe(10);
+    expect(result.nodeSummary?.totalPoints).toBe(hasTokenFee ? 3 : undefined);
   });
 
   it('does not charge a system workflow when its child run fails', async () => {
@@ -300,7 +352,7 @@ describe('agent sub app dispatchPlugin', () => {
     });
     mocks.runWorkflow.mockResolvedValueOnce({
       flowUsages: [{ moduleName: 'Failed child usage', totalPoints: 3 }],
-      runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
         {
           id: 'failedResponse',
           nodeId: 'failedNode',
@@ -334,7 +386,7 @@ describe('agent sub app dispatchPlugin', () => {
     });
     mocks.runWorkflow.mockResolvedValueOnce({
       flowUsages: [{ moduleName: 'Child usage', totalPoints: 3 }],
-      runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
         {
           id: 'pluginOutputResponse',
           nodeId: 'pluginOutput',
@@ -389,6 +441,7 @@ describe('agent sub app dispatchPlugin', () => {
       }
     });
     mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
       nodes: [
         {
           nodeId: 'pluginInput',
@@ -427,7 +480,7 @@ describe('agent sub app dispatchPlugin', () => {
       expect(props.variableState.get('defaultFiles')).toEqual([defaultUrl]);
       return {
         flowUsages: [],
-        runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+        workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
           {
             id: 'pluginOutputResponse',
             nodeId: 'pluginOutput',
@@ -475,7 +528,9 @@ describe('agent sub app dispatchPlugin', () => {
   it('returns plugin child interactive state and forwards lastInteractive on resume', async () => {
     const previousInteractive = {
       type: 'userSelect',
-      entryNodeIds: ['select_1']
+      entryNodeIds: ['select_1'],
+      memoryEdges: [{ source: 'before', target: 'select_1', status: 'active' }],
+      nodeOutputs: [{ nodeId: 'select_1', key: 'result', value: 'restored' }]
     };
     const nextInteractive = {
       type: 'userInput',
@@ -490,14 +545,25 @@ describe('agent sub app dispatchPlugin', () => {
       }
     });
     mocks.getAppVersionById.mockResolvedValue({
-      nodes: [],
-      edges: [],
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'select_1',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.pluginInput,
+          inputs: [],
+          outputs: [{ key: 'result', value: 'initial' }]
+        }
+      ],
+      edges: [
+        { source: 'before', sourceHandle: 'output', target: 'select_1', targetHandle: 'input' }
+      ],
       chatConfig: { variables: [] }
     });
     mocks.runWorkflow.mockResolvedValue({
       assistantResponses: [{ text: { content: 'waiting for plugin input' } }],
       flowUsages: [],
-      runtimeNodeResponseSummary: undefined,
+      workflowRuntimeSummary: undefined,
       workflowInteractiveResponse: nextInteractive
     });
 
@@ -527,24 +593,29 @@ describe('agent sub app dispatchPlugin', () => {
       checkIsStopping: vi.fn(() => false),
       maxRunTimes: 20,
       workflowDispatchDeep: 0,
-      lastInteractive: previousInteractive
+      lastInteractive: previousInteractive,
+      query: [{ text: { content: '{"selection":"Confirm"}' } }]
     } as any);
 
     expect(mocks.runWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
-        lastInteractive: previousInteractive
+        lastInteractive: previousInteractive,
+        query: [{ text: { content: '{"selection":"Confirm"}' } }],
+        runtimeEdges: previousInteractive.memoryEdges,
+        runtimeNodes: [
+          expect.objectContaining({
+            nodeId: 'select_1',
+            isEntry: true,
+            outputs: [{ key: 'result', value: 'restored' }]
+          })
+        ]
       })
     );
     expect(result).toMatchObject({
       response: 'waiting for plugin input',
-      interactive: nextInteractive,
-      assistantMessages: [
-        expect.objectContaining({
-          role: 'assistant',
-          content: 'waiting for plugin input'
-        })
-      ]
+      interactive: nextInteractive
     });
+    expect(result.assistantMessages).toBeUndefined();
   });
 });
 
@@ -560,6 +631,7 @@ describe('agent sub app dispatchApp', () => {
       }
     });
     mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
       nodes: [],
       edges: [],
       chatConfig: {
@@ -568,15 +640,33 @@ describe('agent sub app dispatchApp', () => {
     });
   });
 
-  it('returns child assistant messages and interactive state to the agent-loop tool provider', async () => {
+  it('returns child response and interactive state without child transcript messages', async () => {
     const previousInteractive = {
       type: 'userSelect',
-      entryNodeIds: ['select_1']
+      entryNodeIds: ['select_1'],
+      memoryEdges: [{ source: 'before', target: 'select_1', status: 'active' }],
+      nodeOutputs: [{ nodeId: 'select_1', key: 'result', value: 'restored' }]
     };
     const nextInteractive = {
       type: 'userInput',
       entryNodeIds: ['input_2']
     };
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'select_1',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.chatNode,
+          inputs: [],
+          outputs: [{ key: 'result', value: 'initial' }]
+        }
+      ],
+      edges: [
+        { source: 'before', sourceHandle: 'output', target: 'select_1', targetHandle: 'input' }
+      ],
+      chatConfig: { variables: [] }
+    });
     mocks.runWorkflow.mockResolvedValue({
       assistantResponses: [
         { text: { content: 'child answer' } },
@@ -594,7 +684,7 @@ describe('agent sub app dispatchApp', () => {
         }
       ],
       flowUsages: [],
-      runtimeNodeResponseSummary: undefined,
+      workflowRuntimeSummary: undefined,
       workflowInteractiveResponse: nextInteractive
     });
 
@@ -625,12 +715,22 @@ describe('agent sub app dispatchApp', () => {
       checkIsStopping: vi.fn(() => false),
       maxRunTimes: 20,
       workflowDispatchDeep: 0,
-      lastInteractive: previousInteractive
+      lastInteractive: previousInteractive,
+      query: [{ text: { content: '{"ces ":"33"}' } }]
     } as any);
 
     expect(mocks.runWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
-        lastInteractive: previousInteractive
+        lastInteractive: previousInteractive,
+        query: [{ text: { content: '{"ces ":"33"}' } }],
+        runtimeEdges: previousInteractive.memoryEdges,
+        runtimeNodes: [
+          expect.objectContaining({
+            nodeId: 'select_1',
+            isEntry: true,
+            outputs: [{ key: 'result', value: 'restored' }]
+          })
+        ]
       })
     );
     expect(mocks.getAppVersionById).toHaveBeenCalledWith(
@@ -640,23 +740,17 @@ describe('agent sub app dispatchApp', () => {
       })
     );
     expect(result.response).toBe('child answer');
-    expect(result.assistantMessages).toEqual([
-      expect.objectContaining({
-        role: 'assistant',
-        content: 'child answer',
-        tool_calls: [expect.objectContaining({ id: 'call_nested' })]
-      }),
-      {
-        role: 'tool',
-        tool_call_id: 'call_nested',
-        content: 'nested result'
-      }
-    ]);
+    expect(result.nodeResponse).toMatchObject({
+      moduleType: FlowNodeTypeEnum.appModule,
+      toolRes: 'child answer'
+    });
+    expect(result.assistantMessages).toBeUndefined();
     expect(result.interactive).toBe(nextInteractive);
   });
 
   it('does not allow workflow tool arguments to override internal variables', async () => {
     mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
       nodes: [],
       edges: [],
       chatConfig: {
@@ -674,7 +768,7 @@ describe('agent sub app dispatchApp', () => {
     mocks.runWorkflow.mockResolvedValue({
       assistantResponses: [],
       flowUsages: [],
-      runtimeNodeResponseSummary: undefined
+      workflowRuntimeSummary: undefined
     });
 
     await dispatchApp({
@@ -711,4 +805,158 @@ describe('agent sub app dispatchApp', () => {
       'internal default'
     );
   });
+
+  it('forwards fileUrlList into child query and propagates sandbox usage', async () => {
+    const fileUrl = 'https://files.example.com/input.pdf';
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [],
+      edges: [],
+      chatConfig: { fileSelectConfig: { canSelectFile: true }, variables: [] }
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      assistantResponses: [{ text: { content: 'final child agent answer' } }],
+      flowUsages: [],
+      workflowRuntimeSummary: {
+        ...summarizeRuntimeNodeResponses(undefined, []),
+        hasAgentSandbox: true
+      }
+    });
+
+    const result = await dispatchApp({
+      app: { id: 'child-app', name: 'Child ChatAgent' },
+      runningAppInfo: {
+        sourceType: ChatSourceTypeEnum.app,
+        sourceId: 'middle-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'Middle'
+      },
+      runningUserInfo: { teamId: 'team', tmbId: 'member' },
+      customAppVariables: { fileUrlList: [fileUrl] },
+      userChatInput: 'analyze this file',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0
+    } as any);
+
+    const callArgs = mocks.runWorkflow.mock.calls[0][0];
+    expect(callArgs.query).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: expect.objectContaining({ url: fileUrl }) }),
+        expect.objectContaining({ text: { content: 'analyze this file' } })
+      ])
+    );
+    expect(result.response).toBe('final child agent answer');
+    expect(result.nodeSummary?.hasAgentSandbox).toBe(true);
+  });
+});
+
+describe('Agent nested workflow memory isolation', () => {
+  it.each(['app', 'plugin'] as const)(
+    'isolates the shared descendant of two cloned %s tools across calls and reloads',
+    async (type) => {
+      const { WorkflowMemoryState } = await import('@fastgpt/service/core/workflow/memory/state');
+      const rootSource = { sourceType: ChatSourceTypeEnum.app, sourceId: 'parent-app' };
+      let rootState = WorkflowMemoryState.fromRecord({}, { rootSource });
+      let agentState = rootState.fork('node:agent1');
+      const descendantSource = { sourceType: ChatSourceTypeEnum.app, sourceId: 'shared-plugin' };
+      const seen: Array<{ appId: string; previous: unknown; key: string }> = [];
+
+      mocks.authAppByTmbId.mockImplementation(async ({ appId }: { appId: string }) => ({
+        app: { _id: appId, name: appId, teamId: 'team', tmbId: 'member' }
+      }));
+      mocks.getAppVersionById.mockResolvedValue({
+        resources: [],
+        nodes: [],
+        edges: [],
+        chatConfig: { variables: [] }
+      });
+      mocks.serverGetWorkflowToolRunUserQuery.mockReturnValue({ value: [] });
+      mocks.runWorkflow.mockImplementation(async (args: any) => {
+        const descendantState = args.memoryState.fork('node:shared_plugin_node');
+        const key = descendantState.getNodeMemoryKey({
+          runningAppInfo: descendantSource,
+          nodeId: 'extract_1'
+        });
+        seen.push({
+          appId: args.runningAppInfo.sourceId,
+          previous: descendantState.readNodeMemory({
+            runningAppInfo: descendantSource,
+            nodeId: 'extract_1'
+          }),
+          key
+        });
+        descendantState.merge({ [key]: { origin: args.runningAppInfo.sourceId } });
+        return {
+          assistantResponses: [],
+          flowUsages: [],
+          system_memories: descendantState.getDelta(),
+          workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+            {
+              id: 'output',
+              nodeId: 'output',
+              moduleType: FlowNodeTypeEnum.pluginOutput,
+              moduleName: 'Output',
+              pluginOutput: { result: 'ok' }
+            }
+          ])
+        };
+      });
+
+      /** 经过真实的子应用/插件入口，模拟其内部相同节点挂载同一个插件。 */
+      const callTool = async (id: string) => {
+        const props = {
+          app: { id, name: id },
+          memoryState: agentState,
+          runningAppInfo: { ...rootSource, teamId: 'team', tmbId: 'member', name: 'Parent' },
+          runningUserInfo: {
+            teamId: 'team',
+            tmbId: 'member',
+            username: 'user',
+            teamName: 'Team',
+            memberName: 'Member',
+            contact: ''
+          },
+          customAppVariables: {},
+          userChatInput: 'hello',
+          timezone: 'Asia/Shanghai',
+          uid: 'user',
+          chatId: 'chat',
+          responseChatItemId: 'response',
+          variableState: await createVariableState(),
+          checkIsStopping: () => false,
+          maxRunTimes: 20,
+          workflowDispatchDeep: 0,
+          mode: 'chat' as const,
+          externalProvider: {},
+          query: []
+        };
+        return type === 'app' ? dispatchApp(props) : dispatchPlugin(props);
+      };
+
+      await Promise.all([callTool('clone_A'), callTool('clone_B')]);
+      expect(seen.map(({ previous }) => previous)).toEqual([undefined, undefined]);
+      expect(new Set(seen.map(({ key }) => key)).size).toBe(2);
+      expect(Object.keys(agentState.getDelta())).toHaveLength(2);
+
+      rootState.merge(agentState.getDelta());
+      rootState = WorkflowMemoryState.fromHistories(
+        [{ obj: ChatRoleEnum.AI, value: [], memories: rootState.toRecord() }],
+        { rootSource }
+      );
+      agentState = rootState.fork('node:agent1');
+      await callTool('clone_B');
+      await callTool('clone_A');
+      expect(seen.slice(2)).toMatchObject([
+        { appId: 'clone_B', previous: { origin: 'clone_B' } },
+        { appId: 'clone_A', previous: { origin: 'clone_A' } }
+      ]);
+    }
+  );
 });

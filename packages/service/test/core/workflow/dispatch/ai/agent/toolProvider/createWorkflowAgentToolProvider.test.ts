@@ -1,9 +1,9 @@
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { createWorkflowAgentToolProvider as createWorkflowAgentToolProviderWithoutContext } from '@fastgpt/service/core/workflow/dispatch/ai/agent/toolProvider';
 import {
   getWorkflowFileContext,
   runWithContext
 } from '@fastgpt/service/core/workflow/utils/context';
-import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { describe, expect, it, vi } from 'vitest';
 
 const { dispatchWorkflowReadFilesMock, dispatchAgentDatasetSearchMock, getLLMModelDataMock } =
@@ -18,9 +18,22 @@ const { dispatchWorkflowReadFilesMock, dispatchAgentDatasetSearchMock, getLLMMod
     }))
   }));
 
-vi.mock('@fastgpt/service/core/ai/model', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@fastgpt/service/core/ai/model')>()),
-  getLLMModelData: getLLMModelDataMock
+vi.mock('@fastgpt/service/core/ai/model/catalog/service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/core/ai/model/catalog/service')>()),
+  getSystemModelHandle: async () => ({
+    ...(await (
+      await importOriginal<typeof import('@fastgpt/service/core/ai/model/catalog/service')>()
+    ).getSystemModelHandle()),
+    getModelData: getLLMModelDataMock,
+    getLLMModelData: getLLMModelDataMock
+  }),
+  getTeamModelHandle: async () => ({
+    ...(await (
+      await importOriginal<typeof import('@fastgpt/service/core/ai/model/catalog/service')>()
+    ).getSystemModelHandle()),
+    getModelData: getLLMModelDataMock,
+    getLLMModelData: getLLMModelDataMock
+  })
 }));
 
 vi.mock('@fastgpt/service/core/workflow/dispatch/ai/readFiles', () => ({
@@ -221,13 +234,17 @@ describe('createWorkflowAgentToolProvider', () => {
         } as any,
         messages: [{ role: 'user', content: 'search FastGPT' }],
         childrenResponse: previousInteractive as any,
-        toolParams: {
-          toolCallId: 'call_search'
-        }
+        toolCallId: 'call_search'
       })
     ).resolves.toEqual({
       response: 'waiting again',
-      interactive: nextInteractive
+      interactive: {
+        type: 'toolChildrenInteractive',
+        entryNodeIds: [],
+        memoryEdges: [],
+        nodeOutputs: [],
+        params: { childrenResponse: nextInteractive, toolCallId: 'call_search' }
+      }
     });
     expect(executeToolMock).toHaveBeenCalledWith({
       callId: 'call_search',
@@ -295,7 +312,9 @@ describe('createWorkflowAgentToolProvider', () => {
   });
 
   it('creates dataset search executor and current input files from workflow agent context', async () => {
+    const onToolResult = vi.fn();
     dispatchAgentDatasetSearchMock.mockResolvedValue({
+      nodeSummary: { llmInputTokens: 12, llmOutputTokens: 4 },
       response: 'dataset content',
       usages: [{ moduleName: 'Dataset search', totalPoints: 2 }],
       nodeResponse: {
@@ -303,6 +322,7 @@ describe('createWorkflowAgentToolProvider', () => {
       }
     });
     const provider = createWorkflowAgentToolProvider({
+      onToolResult,
       context: createContext({
         requestOrigin: 'https://fastgpt.example.com',
         currentFiles: [
@@ -354,6 +374,10 @@ describe('createWorkflowAgentToolProvider', () => {
         }
       })
     );
+    expect(onToolResult).toHaveBeenCalledWith({
+      response: 'dataset content',
+      nodeSummary: { llmInputTokens: 12, llmOutputTokens: 4 }
+    });
     expect(result.metadata).toEqual(
       expect.objectContaining({
         id: 'call_dataset',

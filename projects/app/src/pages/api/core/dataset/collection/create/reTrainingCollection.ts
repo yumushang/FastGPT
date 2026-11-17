@@ -1,4 +1,5 @@
 import { createCollectionAndInsertData } from '@fastgpt/service/core/dataset/collection/controller';
+import { getDatasetModelAuthContext } from '@fastgpt/service/core/dataset/model';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
 import { NextAPI } from '@/service/middleware/entry';
 import { type ApiRequestProps } from '@fastgpt/next/type';
@@ -9,6 +10,8 @@ import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { getI18nDatasetType } from '@fastgpt/service/support/user/audit/util';
 import { collectionTagsToTagLabel } from '@fastgpt/service/core/dataset/collection/utils';
+import { getCollectionCollaborators } from '@fastgpt/service/support/permission/collection/collaborator';
+import { carryOverCollectionPermission } from '@fastgpt/service/support/permission/collection/controller';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   ReTrainingCollectionBodySchema,
@@ -22,15 +25,29 @@ async function handler(req: ApiRequestProps): Promise<ReTrainingCollectionRespon
     bodySchema: ReTrainingCollectionBodySchema
   }).body;
 
-  const { collection, teamId, tmbId } = await authDatasetCollection({
+  const { collection, teamId, tmbId, isRoot } = await authDatasetCollection({
     req,
     authToken: true,
     authApiKey: true,
     collectionId: inputCollectionId,
     per: WritePermissionVal
   });
+  const modelAuthContext = await getDatasetModelAuthContext({
+    dataset: collection.dataset,
+    teamId,
+    tmbId,
+    isRoot
+  });
 
   return mongoSessionRun(async (session) => {
+    // 重训会以新 _id 重建 collection，而创建流程只写入默认快照（独立态仅 owner）：
+    // 必须在删除原集合前留存其权限快照，并在新集合创建后写回，否则协作者配置会丢失。
+    const collaborators = await getCollectionCollaborators({
+      teamId,
+      collectionId: inputCollectionId,
+      session
+    });
+
     await delCollection({
       collections: [collection],
       session,
@@ -40,6 +57,8 @@ async function handler(req: ApiRequestProps): Promise<ReTrainingCollectionRespon
 
     const { collectionId } = await createCollectionAndInsertData({
       dataset: collection.dataset,
+      session,
+      modelAuthContext,
       createCollectionParams: {
         ...collection,
         ...data,
@@ -53,6 +72,13 @@ async function handler(req: ApiRequestProps): Promise<ReTrainingCollectionRespon
           tags: collection.tags
         })
       }
+    });
+
+    await carryOverCollectionPermission({
+      teamId,
+      collectionId,
+      collaborators,
+      session
     });
 
     (async () => {

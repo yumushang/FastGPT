@@ -40,7 +40,13 @@ export class S3DatasetSource extends S3PrivateBucket {
 
   // 下载链接
   async createGetDatasetFileURL(params: CreateGetDatasetFileURLParams) {
-    const { key, expiredHours, external } = CreateGetDatasetFileURLParamsSchema.parse(params);
+    const { key, datasetId, expiredHours, external } =
+      CreateGetDatasetFileURLParamsSchema.parse(params);
+    // 传入 datasetId 时强制绑定：key 内嵌的 datasetId 必须匹配已鉴权上下文，否则拒绝签发，
+    // 避免调用方遗漏校验导致跨库文件被签名。未传时保持兼容，仅由上层负责授权。
+    if (datasetId !== undefined && !isAuthorizedDatasetFileS3Key({ key, datasetId })) {
+      throw new Error('Invalid dataset file key');
+    }
     const fileMetadata = await this.getFileMetadata(key).catch((error) => {
       if (error === CommonErrEnum.fileNotFound) return undefined;
       throw error;
@@ -140,8 +146,16 @@ export class S3DatasetSource extends S3PrivateBucket {
   }
 
   async getDatasetFileRawText(params: GetDatasetFileContentParams) {
-    const { fileId, teamId, tmbId, customPdfParse, getFormatText, usageId, datasetId } =
-      GetDatasetFileContentParamsSchema.parse(params);
+    const {
+      fileId,
+      teamId,
+      tmbId,
+      customPdfParse,
+      sangforFileParseConfig,
+      getFormatText,
+      usageId,
+      datasetId
+    } = GetDatasetFileContentParamsSchema.parse(params);
 
     if (!isAuthorizedDatasetFileS3Key({ key: fileId, datasetId })) {
       return Promise.reject('Invalid dataset file key');
@@ -149,6 +163,7 @@ export class S3DatasetSource extends S3PrivateBucket {
 
     const rawTextBuffer = await this.rawTextSource.getRawTextBuffer({
       customPdfParse,
+      sangforFileParseConfig,
       sourceId: fileId
     });
     if (rawTextBuffer) {
@@ -166,6 +181,7 @@ export class S3DatasetSource extends S3PrivateBucket {
       tmbId,
       source,
       customPdfParse,
+      sangforFileParseConfig,
       usageId,
       getFormatText,
       imageKeyOptions: {
@@ -177,7 +193,8 @@ export class S3DatasetSource extends S3PrivateBucket {
       sourceId: fileId,
       sourceName: filename,
       text: rawText,
-      customPdfParse
+      customPdfParse,
+      sangforFileParseConfig
     });
 
     return {

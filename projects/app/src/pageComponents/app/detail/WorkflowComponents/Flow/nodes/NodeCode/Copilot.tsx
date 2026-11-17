@@ -1,42 +1,39 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, CloseButton, Flex } from '@chakra-ui/react';
-import { useContextSelector } from 'use-context-selector';
-import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import MyPopover from '@fastgpt/web/components/common/MyPopover';
-import Avatar from '@fastgpt/web/components/common/Avatar';
-import AIModelSelector from '@/components/Select/AIModelSelector';
 import Markdown from '@/components/Markdown';
-import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
+import AIModelSelector from '@/components/Select/AIModelSelector';
 import { onOptimizeCode } from '@/web/common/api/fetch';
-import { HUGGING_FACE_ICON } from '@fastgpt/global/common/system/constants';
+import { getModelDefault } from '@/web/core/ai/model/modelData';
+import { Box, Button, CloseButton, Flex } from '@chakra-ui/react';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { ChatCompletionMessageParam } from '@fastgpt/global/core/ai/llm/type';
 import type { WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import { ArrayTypeMap, NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { AppContext } from '../../../../context';
-import { useTranslation } from 'next-i18next';
-import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
-import { useToast } from '@fastgpt/web/hooks/useToast';
 import {
   FlowNodeInputTypeEnum,
   FlowNodeOutputTypeEnum
 } from '@fastgpt/global/core/workflow/node/constant';
-import { nanoid } from 'nanoid';
-import type { ChatCompletionMessageParam } from '@fastgpt/global/core/ai/llm/type';
 import {
   JS_TEMPLATE,
   SandboxCodeTypeEnum
 } from '@fastgpt/global/core/workflow/template/system/sandbox/constants';
-import { WorkflowBufferDataContext } from '../../../context/workflowInitContext';
-import { getEditorVariables } from '../../../utils';
-import { extractCodeFromMarkdown } from './parser';
-import { WorkflowActionsContext } from '../../../context/workflowActionsContext';
-import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
 import type {
   FlowNodeInputItemType,
   FlowNodeOutputItemType
 } from '@fastgpt/global/core/workflow/type/io';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import MyPopover from '@fastgpt/web/components/common/MyPopover';
+import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
+import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
+import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { nanoid } from 'nanoid';
+import { useTranslation } from 'next-i18next';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useContextSelector } from 'use-context-selector';
+import { AppContext } from '../../../../context';
+import { WorkflowActionsContext } from '../../../context/workflowActionsContext';
+import { WorkflowBufferDataContext } from '../../../context/workflowInitContext';
+import { getEditorVariables } from '../../../utils';
+import { extractCodeFromMarkdown } from './parser';
 
 export type OnOptimizeCodeProps = {
   optimizerInput: string;
@@ -59,15 +56,13 @@ const NodeCopilot = ({
 }) => {
   const { t } = useTranslation();
   const { toast } = useToast();
-  const { defaultModels } = useUserModelStore();
-  const { llmModelList } = useUserModelLists();
   const { edges, getNodeById } = useContextSelector(WorkflowBufferDataContext, (v) => v);
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
   const appDetail = useContextSelector(AppContext, (v) => v.appDetail);
 
   const [optimizerInput, setOptimizerInput] = useState('');
   const [codeResult, setCodeResult] = useState('');
-  const [selectedModel, setSelectedModel] = useState(defaultModels.llm?.modelId || '');
+  const [selectedModel, setSelectedModel] = useState('');
   const [conversationHistory, setConversationHistory] = useState<ChatCompletionMessageParam[]>([]);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const closePopoverRef = useRef<() => void>();
@@ -116,11 +111,11 @@ const NodeCopilot = ({
                 input.value && Array.isArray(input.value) && input.value.length === 2
                   ? `[${input.value[0]}.${input.value[1]}]`
                   : '';
-              return `- ${input.label} (${input.valueType}): ${referenceInfo}`;
+              return `- ${input.key} (${input.valueType}): ${referenceInfo}`;
             })
             .join('\n'),
           outputs: dynamicOutputs
-            .map((output) => `- ${output.label} (${output.valueType})`)
+            .map((output) => `- ${output.key} (${output.valueType})`)
             .join('\n')
         })
       };
@@ -136,25 +131,6 @@ const NodeCopilot = ({
       setConversationHistory(initialConversationHistory);
     }
   }, [conversationHistory, codeType, code, dynamicInputs, dynamicOutputs, t]);
-
-  const modelOptions = useMemo(() => {
-    return llmModelList.map((model) => ({
-      label: (
-        <Flex alignItems="center">
-          <Avatar
-            src={model.avatar || HUGGING_FACE_ICON}
-            fallbackSrc={HUGGING_FACE_ICON}
-            mr={1.5}
-            w={5}
-          />
-          <Box fontWeight="normal" fontSize="14px" color="myGray.900">
-            {model.name}
-          </Box>
-        </Flex>
-      ),
-      value: model.modelId
-    }));
-  }, [llmModelList]);
 
   const replaceVariables = (text: string): string => {
     const variableRegex = /(\{\{([^}]+)\}\}|\$([^$]+)\$)/g;
@@ -174,8 +150,10 @@ const NodeCopilot = ({
         const outputVar = currentNode?.outputs?.find((output) => output.id === variable.key);
         const inputVar = currentNode?.inputs?.find((input) => input.key === variable.key);
         const variableType = outputVar?.valueType || inputVar?.valueType;
+        // 选择器用输出 id 定位端口；提示词使用业务 key，原有引用标识保持不变。
+        const parameterKey = outputVar?.key ?? inputVar?.key ?? variable.key;
 
-        return `[param: {paramName:${variable.parent.label}.${variable.label}, paramRefer:${cleanRef}, paramType:${variableType}}]`;
+        return `[param: {paramName:${parameterKey}, paramRefer:${cleanRef}, paramType:${variableType}}]`;
       }
       return match;
     });
@@ -255,8 +233,8 @@ const NodeCopilot = ({
             renderTypeList: [FlowNodeInputTypeEnum.reference],
             valueType: input.type as WorkflowIOValueTypeEnum,
             canEdit: true,
-            key: input.label,
-            label: input.label,
+            key: input.key,
+            label: input.key,
             value: referenceValue,
             customInputConfig: {
               selectValueTypeList: Object.values(ArrayTypeMap),
@@ -268,25 +246,25 @@ const NodeCopilot = ({
         });
       });
       const existingOutputIdMap = new Map(dynamicOutputs.map((output) => [output.key, output.id]));
-      const nextOutputKeys = new Set(outputs.map((output) => output.label));
+      const nextOutputKeys = new Set(outputs.map((output) => output.key));
       dynamicOutputs.forEach((output) => {
         if (!nextOutputKeys.has(output.key)) {
           onChangeNode({ nodeId, type: 'delOutput', key: output.key });
         }
       });
       outputs.forEach((output) => {
-        const existingId = existingOutputIdMap.get(output.label);
+        const existingId = existingOutputIdMap.get(output.key);
         if (existingId) {
           onChangeNode({
             nodeId,
             type: 'updateOutput',
-            key: output.label,
+            key: output.key,
             value: {
               id: existingId,
               type: FlowNodeOutputTypeEnum.dynamic,
-              key: output.label,
+              key: output.key,
               valueType: output.type as WorkflowIOValueTypeEnum,
-              label: output.label,
+              label: output.key,
               valueDesc: '',
               description: ''
             }
@@ -298,9 +276,9 @@ const NodeCopilot = ({
             value: {
               id: nanoid(),
               type: FlowNodeOutputTypeEnum.dynamic,
-              key: output.label,
+              key: output.key,
               valueType: output.type as WorkflowIOValueTypeEnum,
-              label: output.label,
+              label: output.key,
               valueDesc: '',
               description: ''
             }
@@ -313,7 +291,7 @@ const NodeCopilot = ({
         status: 'success',
         title: t('app:code_applied_successfully')
       });
-    } catch (error) {
+    } catch {
       toast({
         status: 'error',
         title: t('app:apply_code_failed')
@@ -352,6 +330,14 @@ const NodeCopilot = ({
 
   return (
     <MyPopover
+      onOpenFunc={() => {
+        if (!selectedModel)
+          getModelDefault({ modelType: ModelTypeEnum.llm })
+            .then((model) => {
+              if (model) setSelectedModel((current) => current || model.modelId);
+            })
+            .catch(() => {});
+      }}
       Trigger={trigger}
       trigger="click"
       placement="right-start"
@@ -363,17 +349,16 @@ const NodeCopilot = ({
         return (
           <Box p={4}>
             <Flex align="center" pb={2}>
-              {modelOptions.length > 0 && (
+              {
                 <AIModelSelector
                   modelType={ModelTypeEnum.llm}
                   borderColor="transparent"
                   _hover={{ border: '1px solid', borderColor: 'primary.400' }}
                   size="sm"
                   value={selectedModel}
-                  list={modelOptions}
                   onChange={setSelectedModel}
                 />
-              )}
+              }
               <Box flex={1} />
               <CloseButton
                 onClick={() => {

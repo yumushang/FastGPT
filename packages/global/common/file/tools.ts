@@ -5,7 +5,11 @@ export const formatFileSize = (bytes: number): string => {
 
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  let i = Math.floor(Math.log(bytes) / Math.log(k));
+  // 1048575 B 是 1023.999 KB，保留两位后变成 1024，要进到下一个单位显示 1 MB
+  if (i < sizes.length - 1 && parseFloat((bytes / Math.pow(k, i)).toFixed(2)) >= k) {
+    i += 1;
+  }
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
@@ -218,6 +222,7 @@ export const getContentDisposition = ({
   )}`;
 };
 
+/** 优先解码 filename*；值无效或为空时回退到 filename，无可用文件名时返回空字符串。 */
 export const parseContentDispositionFilename = (contentDisposition?: string) => {
   if (!contentDisposition) return '';
 
@@ -229,12 +234,17 @@ export const parseContentDispositionFilename = (contentDisposition?: string) => 
     } catch {}
   }
 
-  const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i;
+  // 精确匹配普通参数，避免解码失败后再次把 filename* 当作备用文件名。
+  // 双引号值是 RFC 6266 的 quoted-string，里面的 `\"` 是转义而不是结束引号。
+  const filenameRegex = /(?:^|;)\s*filename\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^;\n]*)/i;
   const matches = filenameRegex.exec(contentDisposition);
   if (matches?.[1]) {
     const filename = matches[1];
     const quote = filename[0];
-    if ((quote === '"' || quote === "'") && filename.endsWith(quote)) {
+    if (quote === '"' && filename.endsWith(quote)) {
+      return filename.slice(1, -1).replace(/\\(.)/g, '$1');
+    }
+    if (quote === "'" && filename.endsWith(quote)) {
       return filename.slice(1, -1);
     }
     return filename;

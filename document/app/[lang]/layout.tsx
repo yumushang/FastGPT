@@ -3,11 +3,18 @@ import { RootProvider } from 'fumadocs-ui/provider';
 import type { ReactNode } from 'react';
 import type { Translations } from 'fumadocs-ui/i18n';
 import CustomSearchDialog from '@/components/CustomSearchDialog';
+import TopBanner from '@/components/docs/TopBanner';
 import Script from 'next/script';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { getFastGPTDocsOrigin } from '@/lib/fastgpt-home-url';
-import { i18n } from '@/lib/i18n';
+import {
+  getFastGPTDocsOriginForLocale,
+  getProductionDocsUrl,
+  getPublishedDocsLocales,
+  isPreviewDocsSite,
+  type FastGPTDocsLocale
+} from '@/lib/fastgpt-home-url';
+import { defaultHomePath, getLocalizedPath, i18n } from '@/lib/i18n';
 
 const zh_CN: Partial<Translations> = {
   search: '搜索',
@@ -24,7 +31,7 @@ const en: Partial<Translations> = {
   search: 'Search',
   nextPage: 'Next Page',
   previousPage: 'Previous Page',
-  lastUpdate: 'File Updated',
+  lastUpdate: 'Last updated',
   editOnGithub: 'Edit on GitHub',
   searchNoResult: 'No results found',
   toc: 'On this page',
@@ -43,6 +50,12 @@ const locales = [
   }
 ];
 
+/** Generate static route params restricted to locales published by the active site variant. */
+export function generateStaticParams() {
+  return getPublishedDocsLocales().map((lang) => ({ lang }));
+}
+
+/** Build root locale metadata including canonical home OpenGraph URL, preview indexing guard, and site verification tags. */
 export async function generateMetadata({
   params
 }: {
@@ -51,13 +64,44 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!i18n.languages.includes(lang)) notFound();
 
-  const domain = getFastGPTDocsOrigin();
+  const locale: FastGPTDocsLocale = lang === 'en' ? 'en' : 'zh-CN';
+  const domain = getFastGPTDocsOriginForLocale(locale);
+  const isPreview = isPreviewDocsSite();
+  const homeUrl = isPreview
+    ? `${domain}${getLocalizedPath(defaultHomePath, locale)}`
+    : getProductionDocsUrl(locale, defaultHomePath);
 
-  const title = lang === 'zh-CN' ? 'FastGPT 文档 - 快速开始' : 'FastGPT Documentation - Getting Started';
+  const verification = (() => {
+    const google = process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION?.trim() ?? '';
+    const bing = process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION?.trim() ?? '';
+    const baidu = process.env.NEXT_PUBLIC_BAIDU_SITE_VERIFICATION?.trim() ?? '';
+    const other: Record<string, string> = {};
+
+    if (bing !== '') {
+      other['msvalidate.01'] = bing;
+    }
+    if (baidu !== '') {
+      other['baidu-site-verification'] = baidu;
+    }
+
+    const hasGoogle = google !== '';
+    const hasOther = Object.keys(other).length > 0;
+    if (!hasGoogle && !hasOther) {
+      return undefined;
+    }
+
+    return {
+      ...(hasGoogle ? { google } : {}),
+      ...(hasOther ? { other } : {})
+    };
+  })();
+
+  const title =
+    lang === 'zh-CN' ? 'FastGPT 文档 - 快速开始' : 'FastGPT Documentation - Getting Started';
   const description =
     lang === 'zh-CN'
       ? '学习如何使用 FastGPT 构建 AI 智能体。完整文档涵盖知识库、可视化工作流、RAG 系统和 API 集成。'
-      : 'Learn how to build AI agents with FastGPT. Complete documentation covering knowledge base, visual workflow, RAG system, and API integration.';
+      : 'Learn how to build AI agents with FastGPT. Explore guides to Datasets, visual workflows, RAG systems, and API integrations.';
 
   return {
     title: {
@@ -70,21 +114,15 @@ export async function generateMetadata({
     creator: 'Labring',
     publisher: 'Labring',
     metadataBase: new URL(domain),
-    alternates: {
-      canonical: '/',
-      languages: {
-        en: '/en',
-        'zh-CN': '/zh-CN'
-      }
-    },
     openGraph: {
       type: 'website',
       locale: lang === 'zh-CN' ? 'zh_CN' : 'en_US',
-      url: domain,
+      url: homeUrl,
       title: lang === 'zh-CN' ? 'FastGPT 快速开始' : 'Getting Started with FastGPT',
-      description: lang === 'zh-CN' 
-        ? 'FastGPT 是基于大语言模型的知识库问答系统，结合智能对话与可视化编排，让 AI 应用开发变得简单自然。'
-        : 'FastGPT is a knowledge base Q&A system built on LLMs, combining intelligent conversation with visual orchestration to make AI application development simple and natural.',
+      description:
+        lang === 'zh-CN'
+          ? 'FastGPT 是基于大语言模型的知识库问答系统，结合智能对话与可视化编排，让 AI 应用开发变得简单自然。'
+          : 'FastGPT is a knowledge base Q&A system built on LLMs, combining intelligent conversation with visual orchestration to make AI application development simple and natural.',
       siteName: 'FastGPT Documentation',
       images: [
         {
@@ -98,22 +136,29 @@ export async function generateMetadata({
     twitter: {
       card: 'summary_large_image',
       title: lang === 'zh-CN' ? 'FastGPT 快速开始' : 'Getting Started with FastGPT',
-      description: lang === 'zh-CN'
-        ? '学习如何使用 FastGPT 构建 AI 智能体。完整文档涵盖知识库、可视化工作流、RAG 系统和 API 集成。'
-        : 'Learn how to build AI agents with FastGPT. Complete documentation covering knowledge base, visual workflow, RAG system, and API integration.',
+      description:
+        lang === 'zh-CN'
+          ? '学习如何使用 FastGPT 构建 AI 智能体。完整文档涵盖知识库、可视化工作流、RAG 系统和 API 集成。'
+          : 'Learn how to build AI agents with FastGPT. Explore guides to Datasets, visual workflows, RAG systems, and API integrations.',
       images: ['/og-image.png']
     },
-    robots: {
-      index: true,
-      follow: true,
-      googleBot: {
-        index: true,
-        follow: true,
-        'max-video-preview': -1,
-        'max-image-preview': 'large',
-        'max-snippet': -1
-      }
-    },
+    robots: isPreview
+      ? {
+          index: false,
+          follow: false
+        }
+      : {
+          index: true,
+          follow: true,
+          googleBot: {
+            index: true,
+            follow: true,
+            'max-video-preview': -1,
+            'max-image-preview': 'large',
+            'max-snippet': -1
+          }
+        },
+    ...(verification !== undefined ? { verification } : {}),
     icons: {
       icon: [
         { url: '/favicon/favicon.ico' },
@@ -126,6 +171,7 @@ export async function generateMetadata({
   };
 }
 
+/** Render the root HTML shell, analytics script, and Fumadocs provider for the active locale. */
 export default async function Layout({
   children,
   params
@@ -150,10 +196,11 @@ export default async function Layout({
           i18n={{
             locale: lang,
             locales,
-            translations: {
-              'zh-CN': zh_CN,
-              en
-            }[lang] ?? en
+            translations:
+              {
+                'zh-CN': zh_CN,
+                en
+              }[lang] ?? en
           }}
           search={{
             enabled: true,
@@ -163,6 +210,7 @@ export default async function Layout({
             enabled: true
           }}
         >
+          <TopBanner lang={lang} />
           {children}
         </RootProvider>
       </body>

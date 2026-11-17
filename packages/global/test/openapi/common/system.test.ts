@@ -15,7 +15,6 @@ const desensitizedEmbeddingModel = {
   model: 'text-embedding-3-small',
   name: 'Embedding-2',
   scope: 'system' as const,
-  isCustom: false,
   config: {
     defaultToken: 500,
     maxToken: 3000
@@ -23,6 +22,31 @@ const desensitizedEmbeddingModel = {
 };
 
 describe('system initialization OpenAPI contract', () => {
+  it('drops the retired Workflow Builder visibility setting', () => {
+    const result = GetSystemInitDataResponseSchema.parse({
+      feConfigs: { show_workflow_builder: false }
+    });
+    expect(result.feConfigs).not.toHaveProperty('show_workflow_builder');
+  });
+
+  it('declares SSO capabilities without returning the stored root address', () => {
+    const result = GetSystemInitDataResponseSchema.parse({
+      feConfigs: {
+        sso: {
+          enabled: true,
+          title: 'Company SSO',
+          url: 'https://sso.internal.example.com',
+          secret: 'private'
+        }
+      }
+    });
+    expect(result.feConfigs?.sso).toEqual({ enabled: true, title: 'Company SSO' });
+  });
+  it('accepts page-specific configuration without inserting unused upload fields', () => {
+    const feConfigs = { systemTitle: 'Public page', favicon: '/custom.ico' };
+    const result = GetSystemInitDataResponseSchema.parse({ feConfigs });
+    expect(result.feConfigs).toEqual(feConfigs);
+  });
   it('drops all model catalog fields from system initialization', () => {
     const modelWithSecrets = {
       ...desensitizedEmbeddingModel,
@@ -142,7 +166,6 @@ describe('system initialization OpenAPI contract', () => {
         model: 'gpt-5',
         name: 'GPT-5',
         scope: 'system',
-        isCustom: false,
         config: {
           maxContext: 128000,
           maxResponse: 16000,

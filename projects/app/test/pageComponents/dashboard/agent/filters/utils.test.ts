@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   AppListFilterSchema,
   AppListFiltersStoreSchema,
+  buildAppListRequest,
   defaultAppListFilters,
   getResourceListDisplayTime,
   hasAppListActiveFilter,
+  hasResourceListActiveFilter,
   resolveSceneListType,
   toListTmbIds
 } from '@/pageComponents/dashboard/agent/filters/utils';
@@ -40,8 +42,44 @@ describe('app list filter helpers', () => {
 
   it('maps creator filter to list tmbIds', () => {
     expect(toListTmbIds({ mode: 'all', tmbIds: ['me'] })).toBeUndefined();
-    expect(toListTmbIds({ mode: 'selected', tmbIds: [] })).toEqual([]);
+    expect(toListTmbIds({ mode: 'selected', tmbIds: [] })).toBeUndefined();
     expect(toListTmbIds({ mode: 'selected', tmbIds: ['me'] })).toEqual(['me']);
+  });
+
+  it('preserves every selected creator when building the paginated app request', () => {
+    const tmbIds = ['member-1', 'member-2', 'member-3'];
+
+    expect(
+      buildAppListRequest({
+        parentId: '',
+        type: [AppTypeEnum.folder, AppTypeEnum.simple, AppTypeEnum.workflow],
+        searchKey: '',
+        offset: 0,
+        pageSize: 51,
+        sort: AppListSortEnum.createTimeDesc,
+        tmbIds
+      })
+    ).toMatchObject({ tmbIds });
+    expect(
+      buildAppListRequest({
+        parentId: null,
+        type: AppTypeEnum.simple,
+        searchKey: '',
+        offset: 0,
+        pageSize: 51,
+        tmbIds: []
+      }).tmbIds
+    ).toEqual([]);
+    expect(
+      buildAppListRequest({
+        parentId: '',
+        type: AppTypeEnum.workflow,
+        searchKey: '',
+        offset: 0,
+        pageSize: 50,
+        withRelatedAppCount: true
+      }).withRelatedAppCount
+    ).toBe(true);
   });
 
   it('treats search, type and creator as active filters, but not sort', () => {
@@ -82,6 +120,32 @@ describe('app list filter helpers', () => {
         searchKey: '',
         type: AppTypeEnum.workflow,
         creatorMode: 'selected',
+        applyToolbarFilters: false
+      })
+    ).toBe(false);
+  });
+
+  it('shares active-filter semantics with dataset and skill lists', () => {
+    expect(
+      hasResourceListActiveFilter({
+        searchKey: '',
+        type: 'all',
+        creatorMode: 'selected',
+        applyToolbarFilters: true
+      })
+    ).toBe(true);
+    expect(
+      hasResourceListActiveFilter({
+        searchKey: '',
+        creatorMode: 'all',
+        applyToolbarFilters: true
+      })
+    ).toBe(false);
+    expect(
+      hasResourceListActiveFilter({
+        searchKey: '  ',
+        type: 'websiteDataset',
+        creatorMode: 'all',
         applyToolbarFilters: false
       })
     ).toBe(false);

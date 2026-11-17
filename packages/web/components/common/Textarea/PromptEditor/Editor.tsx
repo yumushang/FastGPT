@@ -1,13 +1,12 @@
-/**
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- *
- */
-
-import type { CSSProperties } from 'react';
-import { Fragment, useMemo, useState, useTransition, useRef } from 'react';
+import React, {
+  type CSSProperties,
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  useTransition,
+  useRef
+} from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
@@ -29,15 +28,14 @@ import VariablePlugin from './plugins/VariablePlugin';
 import { VariableNode } from './plugins/VariablePlugin/node';
 import type { LexicalEditor } from 'lexical';
 import OnBlurPlugin from './plugins/OnBlurPlugin';
-import type { FormPropsType } from './type';
-import { type EditorVariableLabelPickerType, type EditorVariablePickerType } from './type';
+import type { FormPropsType, EditorVariableLabelPickerType } from './type';
+import type { EditorVariablePickerType } from '@fastgpt/global/core/workflow/type/io';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import FocusPlugin from './plugins/FocusPlugin';
 import { textToEditorState, editorStateToText } from './utils';
 import { MaxLengthPlugin } from './plugins/MaxLengthPlugin';
 import { VariableLabelNode } from './plugins/VariableLabelPlugin/node';
 import VariableLabelPlugin from './plugins/VariableLabelPlugin';
-import { useDeepCompareEffect } from 'ahooks';
 import MarkdownPlugin from './plugins/MarkdownPlugin';
 import MyIcon from '../../Icon';
 import ListExitPlugin from './plugins/ListExitPlugin';
@@ -48,6 +46,14 @@ import type { SkillLabelItemType } from './plugins/SkillLabelPlugin';
 import SkillLabelPlugin from './plugins/SkillLabelPlugin';
 import { SkillNode } from './plugins/SkillLabelPlugin/node';
 import type { SkillOptionItemType } from './plugins/SkillPickerPlugin';
+
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ */
 
 const Placeholder = ({ children, padding }: { children: React.ReactNode; padding: string }) => (
   <Box
@@ -84,7 +90,6 @@ export type EditorProps = {
   value: string;
 
   skillOption?: SkillOptionItemType;
-  onRemoveSkill?: (id: string) => void;
   onClickSkill?: (id: string) => void;
   selectedSkills?: SkillLabelItemType[];
 
@@ -120,7 +125,6 @@ export default function Editor({
   skillOption,
   selectedSkills,
   onClickSkill,
-  onRemoveSkill,
 
   onChange,
   onChangeText,
@@ -165,12 +169,11 @@ export default function Editor({
     }
   };
 
-  // 技能菜单和标签状态由插件内部同步；不能因 selectedSkills 变化重建编辑器，
-  // 否则 @ 插入瞬间会销毁 SkillNode，并误触发工具移除监听。
-  useDeepCompareEffect(() => {
-    if (focus && value === editorOutputRef.current) return;
+  // 变量插件会同步 props；仅在外部文本值变化时重建编辑器。
+  useEffect(() => {
+    if (value === editorOutputRef.current) return;
     setKey(getNanoid(6));
-  }, [value, variables, variableLabels]);
+  }, [value]);
 
   const showFullScreenIcon = useMemo(() => {
     return showOpenModal && scrollHeight > maxH;
@@ -259,6 +262,7 @@ export default function Editor({
             <KeyDownPlugin onKeyDown={onKeyDown} />
             <OnBlurPlugin onBlur={onBlur} />
             <OnChangePlugin
+              ignoreSelectionChange
               onChange={(editorState, editor) => {
                 editorOutputRef.current = editorStateToText(editor);
                 const rootElement = editor.getRootElement();
@@ -286,12 +290,11 @@ export default function Editor({
             </>
           )}
 
-          {skillOption && onClickSkill && onRemoveSkill && selectedSkills && (
+          {skillOption && onClickSkill && selectedSkills && (
             <>
               <SkillLabelPlugin
                 selectedSkills={selectedSkills}
                 onClickSkill={onClickSkill}
-                onRemoveSkill={onRemoveSkill}
                 pendingSkillsRef={pendingSkillsRef}
               />
               <SkillPickerPlugin

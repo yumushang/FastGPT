@@ -1,14 +1,16 @@
+import { STT_PRICE_UNITS } from '@fastgpt/global/core/ai/audio/constants';
 import React from 'react';
 import { Box, Flex, Grid, Link } from '@chakra-ui/react';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import ModelTable from '@/components/core/ai/ModelTable';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { getPublicModelList } from '@/web/common/system/api';
+import { getPublicModelList } from '@/web/core/ai/model/catalogApi';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import PriceTiersLabel from '@/components/core/ai/PriceTiersLabel';
+import { roundModelPrice, resolveSTTPricing } from '@fastgpt/global/core/ai/model/pricing';
 
 const Points = () => {
-  const { t } = useClientTranslation('price');
+  const { t } = useSafeTranslation();
 
   return (
     <Flex
@@ -41,7 +43,7 @@ const Points = () => {
 export default React.memo(Points);
 
 export const AiPointsTable = () => {
-  const { t } = useClientTranslation('price');
+  const { t } = useSafeTranslation();
   const { data: modelList = [] } = useRequest(getPublicModelList, {
     manual: false,
     errorToast: ''
@@ -49,7 +51,9 @@ export const AiPointsTable = () => {
   const llmModelList = modelList.filter((model) => model.type === ModelTypeEnum.llm);
   const embeddingModelList = modelList.filter((model) => model.type === ModelTypeEnum.embedding);
   const ttsModelList = modelList.filter((model) => model.type === ModelTypeEnum.tts);
-  const sttModelList = modelList.filter((model) => model.type === ModelTypeEnum.stt);
+  const sttModelList = modelList
+    .filter((model) => model.type === ModelTypeEnum.stt)
+    .map((model) => ({ ...model, sttPricing: resolveSTTPricing(model.pricing) }));
 
   return (
     <Grid gap={6} w={'100%'} color={'myGray.900'}>
@@ -80,7 +84,7 @@ export const AiPointsTable = () => {
               <Box flex={'1 0 0'}>
                 <PriceTiersLabel
                   config={item}
-                  unitLabel={`${t('common:support.wallet.subscription.point')} / 1K Tokens`}
+                  unitLabel={`${t('common:support.wallet.subscription.point')} / M Tokens`}
                 />
               </Box>
             </Flex>
@@ -108,9 +112,9 @@ export const AiPointsTable = () => {
             <Flex key={`${item.provider}-${item.name}`} py={4} bg={i % 2 !== 0 ? 'myGray.100' : ''}>
               <Box flex={'1 0 0'}>{item.name}</Box>
               <Box flex={'1 0 0'}>
-                {item.charsPointsPrice +
+                {roundModelPrice(item.pricing?.unitPrice) +
                   t('common:support.wallet.subscription.point') +
-                  ' / 1000 Tokens'}
+                  ' / M Tokens'}
               </Box>
             </Flex>
           ))}
@@ -134,9 +138,9 @@ export const AiPointsTable = () => {
             <Flex key={`${item.provider}-${item.name}`} py={4} bg={i % 2 !== 0 ? 'myGray.50' : ''}>
               <Box flex={'1 0 0'}>{item.name}</Box>
               <Box flex={'1 0 0'}>
-                {item.charsPointsPrice +
+                {roundModelPrice(item.pricing?.unitPrice) +
                   t('common:support.wallet.subscription.point') +
-                  ' / 1000' +
+                  ' / 1M ' +
                   t('common:unit.character')}
               </Box>
             </Flex>
@@ -161,10 +165,18 @@ export const AiPointsTable = () => {
             <Flex key={`${item.provider}-${item.name}`} py={4}>
               <Box flex={'1 0 0'}>{item.name}</Box>
               <Box flex={'1 0 0'}>
-                {item.charsPointsPrice +
+                {item.sttPricing.type === 'tokens' ? (
+                  <>
+                    <Box>{`${t('common:Input')}: ${roundModelPrice(item.sttPricing.inputPrice)} ${t('common:support.wallet.subscription.point')} / 1M Tokens`}</Box>
+                    <Box>{`${t('common:Output')}: ${roundModelPrice(item.sttPricing.outputPrice)} ${t('common:support.wallet.subscription.point')} / 1M Tokens`}</Box>
+                  </>
+                ) : (
+                  roundModelPrice(item.sttPricing.unitPrice) +
                   t('common:support.wallet.subscription.point') +
-                  ' / 60' +
-                  t('common:unit.seconds')}
+                  ' / ' +
+                  STT_PRICE_UNITS.duration +
+                  t('common:unit.seconds')
+                )}
               </Box>
             </Flex>
           ))}

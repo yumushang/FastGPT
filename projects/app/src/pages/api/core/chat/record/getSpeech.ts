@@ -1,15 +1,19 @@
-import type { NextApiResponse } from 'next';
+import { NextAPI } from '@/service/middleware/entry';
 import { jsonRes } from '@fastgpt/service/common/response';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
+import type { NextApiResponse } from 'next';
 
-import { text2Speech } from '@fastgpt/service/core/ai/audio/speech';
+import { authChatTargetCrud } from '@fastgpt/service/core/chat/auth';
 import { pushAudioSpeechUsage } from '@/service/support/wallet/usage/push';
-import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
 import { authType2UsageSource } from '@/service/support/wallet/usage/utils';
-import { getTTSModelData } from '@fastgpt/service/core/ai/model';
-import { MongoTTSBuffer } from '@fastgpt/service/common/buffer/tts/schema';
-import { type ApiRequestProps } from '@fastgpt/next/type';
+import { text2Speech } from '@fastgpt/service/core/ai/audio/speech';
+
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import { GetChatSpeechBodySchema } from '@fastgpt/global/openapi/core/chat/record/api';
+import { type ApiRequestProps } from '@fastgpt/next/type';
+import { MongoTTSBuffer } from '@fastgpt/service/common/buffer/tts/schema';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { authTargetModelResource } from '@fastgpt/service/core/app/resource/service';
 
 /*
 1. get tts from chatItem store
@@ -17,8 +21,26 @@ import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 4. push bill
 */
 async function handler(req: ApiRequestProps, res: NextApiResponse) {
+  /** 音频开始输出后只能关闭失效连接，不能向音频字节中追加 JSON 错误。 */
+  const writeSpeechError = (error: unknown) => {
+    if (res.headersSent || res.writableEnded || res.destroyed) {
+      if (!res.writableEnded && !res.destroyed) res.destroy();
+      return;
+    }
+    jsonRes(res, { code: 500, error });
+  };
+
   try {
-    const { ttsConfig, input, sourceType, sourceId, outLinkAuthData } = parseApiInput({
+    const {
+      chatId,
+      customUid,
+      authProxy,
+      ttsConfig,
+      input,
+      sourceType,
+      sourceId,
+      outLinkAuthData
+    } = parseApiInput({
       req,
       bodySchema: GetChatSpeechBodySchema
     }).body;
@@ -27,7 +49,17 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
       throw new Error('model reference or voice not found');
     }
 
-    const { teamId, tmbId, authType } = await authChatTargetCrud({
+    const {
+      teamId,
+      tmbId,
+      isRoot,
+      authType,
+      sourceType: resolvedSourceType,
+      sourceId: resolvedSourceId
+    } = await authChatTargetCrud({
+      chatId,
+      customUid,
+      authProxy,
       req,
       authToken: true,
       authApiKey: true,
@@ -35,8 +67,24 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
       sourceId,
       outLinkAuthData
     });
-
-    const ttsModel = getTTSModelData({ modelId: ttsConfig.modelId, model: ttsConfig.model });
+    const modelHandle = await getTeamModelHandle({ teamId });
+    const ttsModel = modelHandle.getModelData(
+      {
+        modelId: ttsConfig.modelId,
+        model: ttsConfig.model
+      },
+      { type: ModelTypeEnum.tts }
+    );
+    await authTargetModelResource({
+      targetType: resolvedSourceType,
+      targetId: resolvedSourceId,
+      modelId: ttsModel.modelId,
+      teamId,
+      tmbId,
+      isRoot,
+      authType,
+      handle: modelHandle
+    });
     const voiceData = ttsModel.config.voices.find((item) => item.value === ttsConfig.voice);
 
     if (!voiceData) {
@@ -53,6 +101,9 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
       },
       'buffer'
     );
+
+    // 声明音频类型即可让 NextAPI 跳过默认 JSON；不提前 flush，首包前失败仍可返回 JSON。
+    res.setHeader('Content-Type', 'audio/mpeg');
 
     if (ttsBuffer?.buffer) {
       return res.end(new Uint8Array(ttsBuffer.buffer.buffer));
@@ -77,37 +128,18 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
           });
 
           /* create buffer */
-          await MongoTTSBuffer.create(
-            {
-              bufferId,
-              text: JSON.stringify({ text: input, speed: ttsConfig.speed }),
-              buffer
-            },
-            ttsModel.requestUrl && ttsModel.requestAuth
-              ? {
-                  path: ttsModel.requestUrl,
-                  headers: {
-                    Authorization: `Bearer ${ttsModel.requestAuth}`
-                  }
-                }
-              : {}
-          );
+          await MongoTTSBuffer.create({
+            bufferId,
+            text: JSON.stringify({ text: input, speed: ttsConfig.speed }),
+            buffer
+          });
         } catch {}
       },
-      onError: (err) => {
-        jsonRes(res, {
-          code: 500,
-          error: err
-        });
-      }
+      onError: writeSpeechError
     });
   } catch (err) {
-    jsonRes(res, {
-      code: 500,
-      error: err
-    });
+    writeSpeechError(err);
   }
 }
 
-// 不能使用 NextApiResponse
-export default handler;
+export default NextAPI(handler);

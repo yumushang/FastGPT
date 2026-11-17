@@ -1,16 +1,16 @@
-import React, { useEffect } from 'react';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
-import { Box, css, HStack, IconButton, useDisclosure } from '@chakra-ui/react';
-import type { SettingAIDataType } from '@fastgpt/global/core/app/type';
 import AISettingModal, { type AIChatSettingsModalProps } from '@/components/core/ai/AISettingModal';
+import AIModelSelector from '@/components/Select/AIModelSelector';
+import { getModelDetail } from '@/web/core/ai/model/modelData';
+import { Box, css, HStack, IconButton, useDisclosure } from '@chakra-ui/react';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { getLLMSupportParams } from '@fastgpt/global/core/ai/llm/utils';
+import type { SettingAIDataType } from '@fastgpt/global/core/app/type';
+import MyIcon from '@fastgpt/web/components/common/Icon';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import { useTranslation } from 'next-i18next';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import AIModelSelector from '@/components/Select/AIModelSelector';
-import { getWebDefaultLLMModel } from '@/web/common/system/utils';
-import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
-import { findClientModelByValue } from '@/web/core/ai/model/modelReference';
+import React, { useEffect, useRef } from 'react';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { filterModelMultimodalSettings } from './utils';
 
 type Props = {
   defaultData: SettingAIDataType;
@@ -20,29 +20,19 @@ type Props = {
 
 const SettingLLMModel = ({ defaultData, onChange, ...props }: AIChatSettingsModalProps & Props) => {
   const { t } = useTranslation();
-  const { llmModelList } = useUserModelLists();
-
   const modelId = defaultData.modelId;
-
-  const { modelList, defaultLLMModel } = useMemoEnhance(() => {
-    const defaultModelData = getWebDefaultLLMModel(llmModelList);
-    return {
-      modelList: llmModelList,
-      defaultLLMModel: defaultModelData?.modelId
-    };
-  }, [llmModelList]);
-
-  const selectedModelData = findClientModelByValue({ models: llmModelList, value: modelId });
-
-  // 只在新建场景没有 value 时设置默认模型；已有异常 value 必须保留给选择器展示错误。
+  const { toast } = useToast();
+  const latestData = useRef(defaultData);
+  const selectionRevision = useRef(0);
   useEffect(() => {
-    if (modelId === undefined && defaultLLMModel) {
-      onChange({
-        ...defaultData,
-        modelId: defaultLLMModel
-      });
-    }
-  }, [modelId, defaultData, defaultLLMModel]);
+    latestData.current = defaultData;
+  }, [defaultData]);
+  useEffect(
+    () => () => {
+      selectionRevision.current++;
+    },
+    []
+  );
 
   const {
     isOpen: isOpenAIChatSetting,
@@ -58,17 +48,51 @@ const SettingLLMModel = ({ defaultData, onChange, ...props }: AIChatSettingsModa
         }
       })}
       position={'relative'}
+      minW={0}
+      maxW={'100%'}
     >
-      <HStack spacing={1}>
-        <Box flex={'1 0 0'}>
+      <HStack spacing={1} minW={0}>
+        <Box flex={'1 1 0'} minW={0}>
           <AIModelSelector
             {...props}
             modelType={ModelTypeEnum.llm}
             w={'100%'}
             value={modelId}
-            onChange={(e) => {
+            onChange={async (e) => {
+              const revision = ++selectionRevision.current;
+              const next = { ...defaultData, modelId: e };
+              latestData.current = next;
+              onChange(next);
+              const modelData = await getModelDetail({
+                modelId: e,
+                modelType: ModelTypeEnum.llm
+              }).catch(() => {
+                if (selectionRevision.current === revision)
+                  toast({ status: 'error', title: t('common:model_detail_load_failed') });
+              });
+              if (
+                !modelData ||
+                selectionRevision.current !== revision ||
+                latestData.current.modelId !== e
+              )
+                return;
+              const currentData = latestData.current;
+              const settings = (() => {
+                // 只清理有显式开关的工作流配置，隐藏配置的表单交给后端判断模型能力。
+                if (
+                  props.showMultimodalConfig === false ||
+                  currentData.aiChatVision === undefined ||
+                  !modelData
+                ) {
+                  return currentData;
+                }
+                return filterModelMultimodalSettings({
+                  settings: currentData,
+                  support: getLLMSupportParams(modelData)
+                });
+              })();
               onChange({
-                ...defaultData,
+                ...settings,
                 modelId: e
               });
             }}
@@ -91,8 +115,7 @@ const SettingLLMModel = ({ defaultData, onChange, ...props }: AIChatSettingsModa
             onChange(e);
             onCloseAIChatSetting();
           }}
-          defaultData={{ ...defaultData, modelId: selectedModelData?.modelId ?? modelId }}
-          llmModels={modelList}
+          defaultData={defaultData}
           {...props}
         />
       )}

@@ -1,4 +1,6 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import { type FlowNodeItemType } from '@fastgpt/global/core/workflow/type/node';
+/* eslint-disable react-hooks/refs -- react-beautiful-dnd requires render-time drag props. */
 import React, { useMemo, useState } from 'react';
 import { type NodeProps, useViewport } from 'reactflow';
 import NodeCard from '../render/NodeCard';
@@ -9,19 +11,7 @@ import {
   type FlowNodeInputItemType,
   type FlowNodeOutputItemType
 } from '@fastgpt/global/core/workflow/type/io';
-import {
-  Box,
-  Button,
-  Flex,
-  HStack,
-  Table,
-  TableContainer,
-  Tbody,
-  Td,
-  Th,
-  Thead,
-  Tr
-} from '@chakra-ui/react';
+import { Box, Button, Flex, HStack, Table, Tbody, Td, Th, Thead, Tr } from '@chakra-ui/react';
 import { type UserInputFormItemType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import { useTranslation } from 'next-i18next';
 import type { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
@@ -146,6 +136,7 @@ const NodeFormInput = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
               </Button>
               {!!editField && (
                 <InputFormEditModal
+                  nodeId={nodeId}
                   defaultValue={editField}
                   keys={inputs.map((item) => item.key)}
                   onClose={() => {
@@ -155,7 +146,13 @@ const NodeFormInput = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
                 />
               )}
             </HStack>
-            <TableContainer borderWidth={'1px'} borderRadius={'md'}>
+            <FixedTableContainer
+              bodyBg="white"
+              flush
+              className="nodrag nowheel"
+              borderWidth={'1px'}
+              borderRadius={'md'}
+            >
               <Table variant={'workflow'}>
                 <Thead>
                   <Tr>
@@ -235,7 +232,7 @@ const NodeFormInput = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
                   )}
                 </DndDrag>
               </Table>
-            </TableContainer>
+            </FixedTableContainer>
           </Box>
         );
       }
@@ -244,7 +241,7 @@ const NodeFormInput = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
   );
 
   return (
-    <NodeCard minW={'400px'} selected={selected} {...data}>
+    <NodeCard minW={'524px'} selected={selected} {...data}>
       <Container>
         <IOTitle text={t('common:Input')} />
         <RenderInput nodeId={nodeId} flowInputList={inputs} CustomComponent={CustomComponent} />

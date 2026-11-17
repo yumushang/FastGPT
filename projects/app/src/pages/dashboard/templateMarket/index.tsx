@@ -1,9 +1,8 @@
 'use client';
-import { serviceSideProps } from '@/web/common/i18n/utils';
 import DashboardContainer from '@/pageComponents/dashboard/Container';
 import { Box, Button, Flex, Grid, HStack } from '@chakra-ui/react';
 import { useRouter } from 'next/router';
-import { useTranslation } from 'next-i18next';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
@@ -49,7 +48,7 @@ const TemplateMarket = ({
   MenuIcon: JSX.Element;
 }) => {
   const router = useRouter();
-  const { t } = useTranslation();
+  const { t } = useSafeTranslation();
   const { isPc } = useSystem();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -81,12 +80,11 @@ const TemplateMarket = ({
       ...tag,
       templates: templateList.filter((template) => template.tags.includes(tag.typeId))
     }));
-    // 移动端不展示分类筛选，也不能继续按持久化 tagIds 把列表筛空。
-    if (!isPc || categoryFilter.mode !== 'selected') return groups;
+    if (categoryFilter.mode !== 'selected') return groups;
     if (categoryFilter.tagIds.length === 0) return [];
     const selected = new Set(categoryFilter.tagIds);
     return groups.filter((item) => selected.has(item.typeId));
-  }, [categoryFilter, isPc, selectableTags, templateList]);
+  }, [categoryFilter, selectableTags, templateList]);
 
   const { runAsync: onUseTemplate, loading: isCreating } = useRequest(
     async (template: AppTemplateListItemType) => {
@@ -107,7 +105,7 @@ const TemplateMarket = ({
         avatar: template.avatar,
         name: template.name,
         type: appType,
-        modules: templateDetail.workflow.nodes || [],
+        nodes: templateDetail.workflow.nodes || [],
         edges: templateDetail.workflow.edges || [],
         chatConfig: templateDetail.workflow.chatConfig,
         templateId: templateDetail.templateId
@@ -125,7 +123,7 @@ const TemplateMarket = ({
         router.push(
           getAppDetailRoute({
             appId,
-            openSystemConfig: isWorkflowAppType(appType)
+            openWorkflowBuilder: isWorkflowAppType(appType)
           })
         );
       },
@@ -136,7 +134,7 @@ const TemplateMarket = ({
 
   const TemplateCard = useCallback(
     ({ item }: { item: AppTemplateListItemType }) => {
-      const { t } = useTranslation();
+      const { t } = useSafeTranslation();
       const icon = appTypeTagMap[item.type as keyof typeof appTypeTagMap]?.icon;
 
       return (
@@ -267,25 +265,22 @@ const TemplateMarket = ({
 
   const searchedTemplates = useMemo(() => {
     return templateList.filter((template) => {
-      if (isPc && categoryFilter.mode === 'selected') {
+      if (categoryFilter.mode === 'selected') {
         if (categoryFilter.tagIds.length === 0) return false;
         if (!template.tags.some((tag) => categoryFilter.tagIds.includes(tag))) return false;
       }
       return `${template.name}${template.intro}`.includes(searchKey);
     });
-  }, [categoryFilter, isPc, searchKey, templateList]);
+  }, [categoryFilter, searchKey, templateList]);
 
   return (
     <MyBox ref={containerRef} h={'100%'} isLoading={isCreating}>
       <Flex flexDirection={'column'} h={'100%'} py={6}>
-        <Flex alignItems={'center'} px={6} mb={5}>
-          {isPc ? (
-            <Box fontSize={'lg'} color={'myGray.900'} fontWeight={'medium'} flexShrink={0}>
-              {t('app:template_market')}
-            </Box>
-          ) : (
-            MenuIcon
-          )}
+        <Flex alignItems={'center'} gap={3} px={6} mb={5} flexShrink={0}>
+          {!isPc && MenuIcon}
+          <Box fontSize={'lg'} color={'myGray.900'} fontWeight={'medium'} flexShrink={0}>
+            {t('app:template_market')}
+          </Box>
           <Box flex={1} />
           {isPc && (
             <Flex alignItems={'center'} gap={3} flexShrink={0}>
@@ -305,19 +300,24 @@ const TemplateMarket = ({
             </Flex>
           )}
         </Flex>
-        {!isPc && (
-          <Box px={6} mb={5}>
-            <SearchInput
-              h={9}
-              bg={'white'}
-              placeholder={t('app:templateMarket.Search_template')}
-              value={searchKey}
-              onChange={(e) => setSearchKey(e.target.value)}
-            />
-          </Box>
-        )}
+        <Box flex={'1 1 0'} minH={0} px={6} overflow={'auto'}>
+          {!isPc && (
+            <Flex mb={5} direction={'column'} gap={3}>
+              <SearchInput
+                h={9}
+                bg={'white'}
+                placeholder={t('app:templateMarket.Search_template')}
+                value={searchKey}
+                onChange={(e) => setSearchKey(e.target.value)}
+              />
+              <TemplateCategoryFilter
+                tags={selectableTags}
+                value={categoryFilter}
+                onChange={setCategoryFilter}
+              />
+            </Flex>
+          )}
 
-        <Box flex={'1 0 0'} px={6} overflow={'auto'}>
           {searchKey ? (
             <>
               <Box fontSize={'lg'} color={'myGray.900'} mb={4}>
@@ -407,11 +407,3 @@ const TemplateMarketContainer = () => {
 };
 
 export default TemplateMarketContainer;
-
-export async function getServerSideProps(content: any) {
-  return {
-    props: {
-      ...(await serviceSideProps(content, ['app']))
-    }
-  };
-}

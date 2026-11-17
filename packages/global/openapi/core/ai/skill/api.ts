@@ -1,4 +1,6 @@
+import { ChatIdSchema } from '../../../../core/chat/schema';
 import { z } from 'zod';
+import { LOGO_ICON } from '../../../../common/system/constants';
 import { TeamMemberStatusEnum } from '../../../../support/user/team/constant';
 import { SourceMemberSchema } from '../../../../support/user/type';
 import {
@@ -13,6 +15,7 @@ import {
   ZipEntryInfoSchema
 } from '../../../../core/ai/skill/type';
 import { SkillPermissionSchema } from '../../../../support/permission/skill/controller.schema';
+import { InheritPermissionSchema } from '../../../../support/permission/inheritPermission';
 import { ChatCompletionMessageParamSchema } from '../../../../core/ai/llm/type';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import {
@@ -20,38 +23,88 @@ import {
   CollaboratorUpdateListSchema,
   ShowUsernameQuerySchema
 } from '../../../../support/permission/collaborator.schema';
-import { AppListSortEnum } from '../../../../core/app/constants';
+import { AppListSortSchema } from '../../../../core/app/constants';
+import { BoolSchema, IntSchema } from '../../../../common/zod';
+import { FolderAccessModeSchema, ParentIdSchema } from '../../../../common/parentFolder/type';
+import {
+  PaginationPageSizeLimit,
+  PaginationPageSizeSchema,
+  createPaginationSchema,
+  PaginationPageNumSchema
+} from '../../../api';
 
 const IdSchema = z.string().min(1).meta({ description: '资源 ID' });
 const SandboxInstanceKeySchema = z.string().min(1).describe('FastGPT sandbox instance key');
-const NullableParentIdSchema = z.string().nullable().optional().meta({
+const NullableParentIdSchema = ParentIdSchema.meta({
   description: '父级目录 ID'
 });
 
-export const ListSkillsQuerySchema = z.object({
+/* ============================================================================
+ * API: 获取技能列表 V2
+ * Route: POST /api/core/ai/skill/listV2
+ * Method: POST
+ * Description: 分页或按 ID 列表获取当前团队可见的系统技能或个人技能，优先按 ID 查询并过滤目录和分页字段。
+ * Tags: ['Skill', 'Read']
+ * ============================================================================ */
+const ListSkillsV2FiltersSchema = z.object({
   source: z.enum(['store', 'mine']).optional().describe('技能来源: store=系统技能, mine=我的技能'),
   searchKey: z.string().optional().describe('搜索关键词'),
   category: AgentSkillCategorySchema.optional().describe('技能分类'),
   type: AgentSkillTypeSchema.optional().describe('技能类型过滤'),
-  skillIds: z.array(IdSchema).optional().describe('按技能 ID 列表过滤，用于校验已关联技能状态'),
-  parentId: NullableParentIdSchema,
-  page: z.coerce.number().int().positive().optional().describe('页码'),
-  pageSize: z.coerce.number().int().positive().optional().describe('每页数量'),
-  withAppCount: z.boolean().optional().describe('是否返回引用应用数量'),
-  sort: z.enum(AppListSortEnum).optional().describe('列表排序，缺省按最近修改倒序'),
+  sort: AppListSortSchema.optional(),
+  withAppCount: BoolSchema.optional().meta({
+    example: false,
+    description:
+      '是否返回被正式应用引用的数量；默认统计，传 false 跳过，仅非文件夹资源的 Owner 可查看'
+  }),
   tmbIds: z.array(ObjectIdSchema).optional().describe('按创建者筛选；空数组返回空列表')
 });
-export type ListSkillsQuery = z.infer<typeof ListSkillsQuerySchema>;
+
+// ID 分支优先匹配，由 Zod 过滤目录和分页字段；分页分支拒绝已有但无效的 ID，避免意外扩大查询范围。
+export const ListSkillsV2QuerySchema = z.union([
+  z
+    .object({
+      skillIds: z
+        .array(IdSchema)
+        .min(1)
+        .max(PaginationPageSizeLimit)
+        .meta({
+          example: ['68ad85a7463006c963799a05'],
+          description: `按技能 ID 精确查询，最多 ${PaginationPageSizeLimit} 个；优先匹配该分支，解析时过滤 parentId 和分页参数，保留公共筛选字段`
+        }),
+      ...ListSkillsV2FiltersSchema.shape
+    })
+    .meta({ title: '按 IDs 获取' }),
+  createPaginationSchema(
+    {
+      ...ListSkillsV2FiltersSchema.shape,
+      parentId: NullableParentIdSchema.meta({
+        example: null,
+        description:
+          '父级目录 ID；null 或空字符串表示根目录；个人技能搜索限定在指定目录及其子树，不传则搜索全部可读技能'
+      }),
+      skillIds: z.never().optional()
+    },
+    { page: PaginationPageNumSchema }
+  ).meta({ title: '分页获取' })
+]);
+export type ListSkillsV2Query = z.infer<typeof ListSkillsV2QuerySchema>;
 
 export const ListSkillsResponseItemSchema = AgentSkillListItemSchema.omit({
   createTime: true,
   updateTime: true
 }).extend({
+  _id: ObjectIdSchema,
+  parentId: ObjectIdSchema.nullable().optional(),
+  avatar: z
+    .preprocess((value) => value ?? undefined, z.string().default(LOGO_ICON))
+    .meta({ description: '技能头像' }),
   source: AgentSkillSourceSchema,
   type: AgentSkillTypeSchema,
   createTime: z.string(),
   updateTime: z.string(),
   permission: SkillPermissionSchema,
+  folderAccessMode: FolderAccessModeSchema.optional(),
   sourceMember: z
     .object({
       name: z.string(),
@@ -72,7 +125,8 @@ export const CreateSkillBodySchema = z.object({
   name: z.string().trim().min(1).describe('技能名称'),
   description: z.string().optional().describe('技能描述'),
   category: z.array(AgentSkillCategorySchema).optional().describe('技能分类'),
-  avatar: z.string().optional().describe('技能头像')
+  avatar: z.string().optional().describe('技能头像'),
+  inheritPermission: InheritPermissionSchema
 });
 export type CreateSkillBody = z.infer<typeof CreateSkillBodySchema>;
 
@@ -85,11 +139,7 @@ export const UpdateSkillBodySchema = z.object({
   description: z.string().optional(),
   category: z.array(AgentSkillCategorySchema).optional(),
   avatar: z.string().optional(),
-  parentId: z
-    .string()
-    .nullable()
-    .optional()
-    .describe('移动到指定文件夹，null 表示根目录，undefined 表示不移动')
+  parentId: ParentIdSchema.describe('移动到指定文件夹，null 表示根目录，undefined 表示不移动')
 });
 export type UpdateSkillBody = z.infer<typeof UpdateSkillBodySchema>;
 
@@ -247,30 +297,35 @@ export const UpdateSkillCollaboratorResponseSchema = z.undefined().meta({
 export type UpdateSkillCollaboratorResponse = z.infer<typeof UpdateSkillCollaboratorResponseSchema>;
 
 export const GetSkillDetailResponseSchema = z.object({
-  _id: z.string(),
+  _id: ObjectIdSchema,
   source: AgentSkillSourceSchema,
   type: AgentSkillTypeSchema.optional(),
-  parentId: z.string().nullable().optional(),
+  parentId: ObjectIdSchema.nullable().optional(),
   inheritPermission: z.boolean().optional(),
   name: z.string(),
   description: z.string(),
   category: z.array(AgentSkillCategorySchema),
-  avatar: z.string().optional(),
+  avatar: z
+    .preprocess((value) => value ?? undefined, z.string().default(LOGO_ICON))
+    .meta({ description: '技能头像' }),
   creationStatus: AgentSkillCreationStatusSchema.optional(),
   creationError: z.string().optional(),
-  teamId: z.string().optional(),
-  tmbId: z.string().optional(),
+  teamId: ObjectIdSchema.optional(),
+  tmbId: ObjectIdSchema.optional(),
   currentVersionId: z.string().optional(),
   createTime: z.string(),
   updateTime: z.string(),
   permission: SkillPermissionSchema,
-  appCount: z.number().optional()
+  appCount: IntSchema.optional().meta({
+    description: '被正式应用引用的 Skill 数量',
+    example: 0
+  })
 });
 export type GetSkillDetailResponse = z.infer<typeof GetSkillDetailResponseSchema>;
 
 export const ImportSkillQuerySchema = z.object({
   filename: z.string().min(1).describe('上传的 .zip 文件原始文件名'),
-  parentId: z.string().nullable().optional().describe('导入的目标目录 ID'),
+  parentId: ParentIdSchema.describe('导入的目标目录 ID'),
   name: z.string().optional().describe('导入后的技能名称'),
   description: z.string().optional().describe('导入后的技能描述'),
   avatar: z.string().optional().describe('导入后的技能头像')
@@ -344,7 +399,7 @@ export type {
 
 export const SkillDebugChatBodySchema = z.object({
   skillId: IdSchema,
-  chatId: z.string().min(1),
+  chatId: ChatIdSchema.min(1),
   responseChatItemId: z.string().optional(),
   messages: z.array(ChatCompletionMessageParamSchema),
   modelId: z.string().meta({ description: '调试使用的模型 ID' }),
@@ -352,37 +407,11 @@ export const SkillDebugChatBodySchema = z.object({
 });
 export type SkillDebugChatBody = z.infer<typeof SkillDebugChatBodySchema>;
 
-export const ListAppsBySkillIdQuerySchema = z.object({
-  skillId: IdSchema
-});
-export type ListAppsBySkillIdQuery = z.infer<typeof ListAppsBySkillIdQuerySchema>;
-
-export const AppsBySkillIdItemSchema = z.object({
-  _id: z.string(),
-  name: z.string(),
-  avatar: z.string(),
-  intro: z.string(),
-  tmbId: z.string(),
-  type: z.string(),
-  updateTime: z.coerce.date(),
-  sourceMember: z.object({
-    name: z.string(),
-    avatar: z.string().nullable().optional(),
-    status: z.string()
-  })
-});
-export type AppsBySkillIdItem = z.infer<typeof AppsBySkillIdItemSchema>;
-
-export const ListAppsBySkillIdResponseSchema = z.object({
-  list: z.array(AppsBySkillIdItemSchema),
-  hiddenCount: z.number().int().nonnegative().describe('当前用户无权限查看的引用应用数量')
-});
-export type ListAppsBySkillIdResponse = z.infer<typeof ListAppsBySkillIdResponseSchema>;
-
 export const CreateSkillFolderBodySchema = z.object({
   parentId: NullableParentIdSchema,
   name: z.string(),
-  description: z.string().optional()
+  description: z.string().optional(),
+  inheritPermission: InheritPermissionSchema
 });
 export type CreateSkillFolderBody = z.infer<typeof CreateSkillFolderBodySchema>;
 
@@ -400,7 +429,8 @@ export type GetSkillFolderPathQuery = z.infer<typeof GetSkillFolderPathQuerySche
 export const GetSkillFolderPathResponseSchema = z.array(
   z.object({
     parentId: z.string().nullable(),
-    parentName: z.string()
+    parentName: z.string(),
+    folderAccessMode: FolderAccessModeSchema.optional()
   })
 );
 export type GetSkillFolderPathResponse = z.infer<typeof GetSkillFolderPathResponseSchema>;
@@ -413,7 +443,7 @@ export type ExportSkillQuery = z.infer<typeof ExportSkillQuerySchema>;
 export const ListSkillVersionsBodySchema = z.object({
   skillId: IdSchema,
   pageNum: z.number().int().positive().optional().describe('页码，从 1 开始'),
-  pageSize: z.number().int().positive().describe('每页数量'),
+  pageSize: PaginationPageSizeSchema,
   isCurrent: z.boolean().optional().describe('筛选是否为当前版本')
 });
 export type ListSkillVersionsBody = z.infer<typeof ListSkillVersionsBodySchema>;

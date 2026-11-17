@@ -44,9 +44,12 @@ export const FilterSummaryValue = ({
   </Flex>
 );
 
-export type FilterButtonProps = Omit<FlexProps, 'children' | 'title' | 'value'> & {
-  title: ReactNode;
+export type FilterButtonProps = Omit<FlexProps, 'children' | 'title' | 'value' | 'maxW'> & {
+  /** 触发器左侧前缀标题；省略时不渲染前缀与竖分割线（如双下拉拼接按钮）。 */
+  title?: ReactNode;
   value: ReactNode;
+  /** 桌面端的最大宽度；移动端始终允许撑满容器。 */
+  maxW?: string | number;
 };
 
 /** 测量触发器宽度，让下拉菜单不窄于按钮。 */
@@ -65,15 +68,16 @@ export const useFilterTriggerWidth = (syncKey?: unknown) => {
 };
 
 const FilterButton = forwardRef<HTMLDivElement, FilterButtonProps>(
-  ({ title, value, ...props }, ref) => (
+  ({ title, value, maxW = '240px', sx, ...props }, ref) => (
     <Flex
       ref={ref}
       as={'button'}
       alignItems={'center'}
+      justifyContent={'space-between'}
       gap={2}
       px={3}
-      w={'fit-content'}
-      maxW={'240px'}
+      w={['100%', 'fit-content']}
+      maxW={['100%', maxW]}
       minW={0}
       flexShrink={0}
       h={'36px'}
@@ -94,13 +98,18 @@ const FilterButton = forwardRef<HTMLDivElement, FilterButtonProps>(
         '&[aria-expanded="true"]': {
           borderColor: 'primary.600',
           boxShadow: '0px 0px 0px 2.4px rgba(51, 112, 255, 0.15)'
-        }
+        },
+        ...sx
       }}
       {...props}
     >
       <Flex alignItems={'center'} gap={2} minW={0} overflow={'hidden'}>
-        <Box flexShrink={0}>{title}</Box>
-        <Box w={'1px'} h={'16px'} flexShrink={0} bg={'myGray.200'} />
+        {title !== null && title !== undefined && title !== '' && (
+          <>
+            <Box flexShrink={0}>{title}</Box>
+            <Box w={'1px'} h={'16px'} flexShrink={0} bg={'myGray.200'} />
+          </>
+        )}
         <Flex minW={0} overflow={'hidden'} alignItems={'center'} whiteSpace={'nowrap'}>
           {value}
         </Flex>

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { openAPIDocument } from '../../../../openapi/provider/devapi';
 import { openAPIPaths, openAPITagGroups } from '../../../../openapi/path';
-import { DevApiTagNameAliases, DevApiTagsMap } from '../../../../openapi/tag';
+import { DevApiTagsMap } from '../../../../openapi/tag';
+import {
+  GetMarketplaceToolsBodySchema,
+  MarketplaceToolBaseSchema
+} from '../../../../openapi/core/plugin/marketplace/api';
 
 const marketplaceOperations = [
   ['/marketplace/api/tool/list', 'post'],
@@ -13,16 +17,17 @@ const marketplaceOperations = [
 ] as const;
 
 describe('marketplace OpenAPI contracts', () => {
-  it('places Marketplace after reverse invoke with only the system tools tag', () => {
+  it('places reverse invoke after Marketplace with only the system tools tag', () => {
     const reverseInvokeGroupIndex = openAPITagGroups.findIndex(
       ({ name }) => name === '通用-反向调用'
     );
 
     expect(DevApiTagsMap.appSystemTool).toBe('系统工具');
-    expect(DevApiTagsMap.pluginMarketplace).toBe('插件市场-系统工具');
-    expect(DevApiTagNameAliases[DevApiTagsMap.pluginMarketplace]).toBe('系统工具');
-    expect(openAPITagGroups[reverseInvokeGroupIndex + 1]).toEqual({
-      name: '插件市场',
+    expect(DevApiTagsMap.pluginMarketplace).toBe('工具');
+    // alias removed
+    expect(DevApiTagsMap.pluginMarketplace).toBe('工具');
+    expect(openAPITagGroups[reverseInvokeGroupIndex - 1]).toEqual({
+      name: '子服务-插件市场',
       tags: [DevApiTagsMap.pluginMarketplace]
     });
   });
@@ -44,6 +49,42 @@ describe('marketplace OpenAPI contracts', () => {
   it('keeps tool-tag management outside of the Marketplace group', () => {
     expect(openAPIDocument.paths?.['/core/plugin/toolTag/list']?.get?.tags).not.toContain(
       DevApiTagsMap.pluginMarketplace
+    );
+  });
+
+  it('validates marketplace tool schemas with tool and moderation types', () => {
+    const validToolBody = GetMarketplaceToolsBodySchema.parse({
+      type: 'tool',
+      pageNum: 1,
+      pageSize: 20
+    });
+    expect(validToolBody.type).toBe('tool');
+
+    const validModerationBody = GetMarketplaceToolsBodySchema.parse({
+      type: 'moderation',
+      pageNum: 1,
+      pageSize: 20
+    });
+    expect(validModerationBody.type).toBe('moderation');
+
+    const baseRecord = {
+      id: 'test-plugin',
+      toolId: 'test-plugin',
+      pluginId: 'test-plugin',
+      name: { en: 'Test', 'zh-CN': '测试' },
+      description: { en: 'Test plugin', 'zh-CN': '测试插件' },
+      icon: 'icon',
+      version: '1.0.0',
+      etag: 'etag123',
+      source: 'official',
+      isLatestVersion: true,
+      isToolset: false,
+      downloadCount: 0
+    };
+
+    expect(MarketplaceToolBaseSchema.parse({ ...baseRecord, type: 'tool' }).type).toBe('tool');
+    expect(MarketplaceToolBaseSchema.parse({ ...baseRecord, type: 'moderation' }).type).toBe(
+      'moderation'
     );
   });
 });

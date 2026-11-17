@@ -4,7 +4,9 @@ import { ObjectIdSchema } from '../../../../../common/type/mongo';
 import { GroupMemberRole } from '../../../../../support/permission/memberGroup/constant';
 import { PermissionSchema } from '../../../../../support/permission/controller';
 import { TeamMemberStatusEnum } from '../../../../../support/user/team/constant';
-import { PaginationResponseSchema, PaginationSchema } from '../../../../api';
+import { TeamMemberNameSchema } from '../../../../../support/user/team/memberName';
+import { TeamTmbItemSchema } from '../../../../../support/user/team/type';
+import { PaginationResponseSchema, createPaginationSchema } from '../../../../api';
 
 const TeamMemberIdSchema = ObjectIdSchema.meta({
   example: '68ad85a7463006c963799a06',
@@ -86,7 +88,7 @@ export type ExportTeamMembersResponseType = z.infer<typeof ExportTeamMembersResp
  * Tags: ['成员管理', '团队管理', 'Read']
  * ============================================================================ */
 
-export const ListTeamMembersBodySchema = PaginationSchema.extend({
+export const ListTeamMembersBodySchema = createPaginationSchema({
   withPermission: z.boolean().optional().meta({
     description: '是否返回成员权限信息'
   }),
@@ -120,9 +122,19 @@ export type ListTeamMembersBodyType = z.infer<typeof ListTeamMembersBodySchema>;
 export const TeamMemberListItemSchema = z
   .object({
     userId: ObjectIdSchema.meta({ description: '用户 ID' }),
+    username: z.string().meta({
+      description: '登录用户名',
+      example: 'zhangsan'
+    }),
     tmbId: TeamMemberIdSchema,
     teamId: ObjectIdSchema.meta({ description: '团队 ID' }),
-    memberName: z.string().meta({ description: '团队成员名称' }),
+    memberName: TeamTmbItemSchema.shape.memberName.meta({
+      description: '团队成员名；即数据库成员名，未显式设置过时为加入时的回落值'
+    }),
+    isSetMemberName: z.boolean().default(false).meta({
+      description:
+        '成员名是否已由显式来源设置；为 false 时 memberName 是待确认的回落展示名，不是用户提交值'
+    }),
     avatar: z.string().nullish().meta({ description: '团队成员头像' }),
     role: z.string().optional().meta({ description: '团队成员角色，owner 表示所有者' }),
     status: TeamMemberListStatusSchema,
@@ -173,9 +185,9 @@ export type UpdateTeamMemberInviteBodyType = z.infer<typeof UpdateTeamMemberInvi
  * ============================================================================ */
 
 export const UpdateTeamMemberNameBodySchema = z.object({
-  name: z.string().min(1).max(50).meta({
+  name: TeamMemberNameSchema.meta({
     example: '张三',
-    description: '新的成员名称，不能为空，最多 50 个字符'
+    description: '新的成员名称，trim 后不能为空，最多 20 个字符且不能使用系统保留值'
   })
 });
 export type UpdateTeamMemberNameBodyType = z.infer<typeof UpdateTeamMemberNameBodySchema>;
@@ -190,9 +202,9 @@ export type UpdateTeamMemberNameBodyType = z.infer<typeof UpdateTeamMemberNameBo
 
 export const UpdateTeamMemberNameByManagerBodySchema = z.object({
   tmbId: TeamMemberIdSchema.meta({ description: '需要修改名称的团队成员 ID' }),
-  name: z.string().min(1).max(50).meta({
+  name: TeamMemberNameSchema.meta({
     example: '李四',
-    description: '新的成员名称，不能为空，最多 50 个字符'
+    description: '新的成员名称，trim 后不能为空，最多 20 个字符且不能使用系统保留值'
   })
 });
 export type UpdateTeamMemberNameByManagerBodyType = z.infer<

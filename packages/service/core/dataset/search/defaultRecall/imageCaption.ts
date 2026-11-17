@@ -1,8 +1,9 @@
 import { createLLMResponse } from '../../../ai/llm/request';
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { normalizeImageToBase64 } from '../utils';
+import { getMultipleDataToBase64 } from '../../../../common/system/constants';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.DATA);
 
@@ -27,8 +28,8 @@ const emptyImageCaptionQueries = (): ImageCaptionQueries => ({
 
 /**
  * 将图片 query 转成可参与文本召回的图片描述 query。
- * VLM 未配置或单张图片生成失败时只降级图片描述召回；显式配置的 VLM 不存在时由
- * 模型解析层抛出“模型不存在”，不能静默切换到其他模型。
+ * 搜索入口已从候选知识库中选出首个可用 VLM；全部不可用或单张图片生成失败时，
+ * 只降级图片描述召回，不影响文本检索。
  * 原始图片仍可能继续走图片向量召回，所以这里不会抛出错误中断搜索。
  */
 export const getImageCaptionQueries = async ({
@@ -37,7 +38,7 @@ export const getImageCaptionQueries = async ({
   userKey,
   teamId
 }: {
-  vlmModel?: LLMSystemModelDataType;
+  vlmModel?: LLMModelDataType;
   imageQueries: string[];
   userKey?: OpenaiAccountType;
   teamId: string;
@@ -48,6 +49,8 @@ export const getImageCaptionQueries = async ({
 
   const vlmModelData = vlmModel;
 
+  // 批量入口一次求值下传，避免同批图片混合转/不转 base64
+  const toBase64 = getMultipleDataToBase64();
   const results = await Promise.all(
     imageQueries.map(async (url, index) => {
       try {
@@ -71,7 +74,7 @@ export const getImageCaptionQueries = async ({
                   {
                     type: 'image_url',
                     image_url: {
-                      url: await normalizeImageToBase64(url)
+                      url: await normalizeImageToBase64(url, toBase64)
                     }
                   },
                   {

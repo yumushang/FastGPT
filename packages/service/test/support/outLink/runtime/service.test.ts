@@ -27,8 +27,10 @@ import {
 import { getWorkflowFileLimits } from '@fastgpt/service/core/workflow/utils/fileLimits';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
 import { assertCancellation } from '@fastgpt/service/support/user/account/cancellation/guard';
+import { assertTeamFrequencyLimit } from '@fastgpt/service/common/api/frequencyLimit';
 
 vi.mock('@fastgpt/service/core/app/schema', () => ({
+  AppCollectionName: 'apps',
   MongoApp: { findById: vi.fn() }
 }));
 vi.mock('@fastgpt/service/core/app/version/controller', () => ({
@@ -56,9 +58,6 @@ vi.mock('@fastgpt/service/core/chat/saveChat', () => ({
   finalizeChatRound: vi.fn(),
   failChatRound: vi.fn()
 }));
-vi.mock('@fastgpt/service/core/chat/chatGenerateStatus', () => ({
-  updateChatGenerateStatus: vi.fn()
-}));
 vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
   dispatchWorkFlow: vi.fn()
 }));
@@ -75,6 +74,10 @@ vi.mock('@fastgpt/service/support/user/account/cancellation/guard', () => ({
 }));
 vi.mock('@fastgpt/service/support/outLink/runtime/auth', () => ({
   authOutLinkLimit: vi.fn()
+}));
+vi.mock('@fastgpt/service/common/api/frequencyLimit', () => ({
+  LimitTypeEnum: { chat: 'chat' },
+  assertTeamFrequencyLimit: vi.fn()
 }));
 vi.mock('@fastgpt/service/support/outLink/tools', () => ({
   addOutLinkUsage: vi.fn()
@@ -121,10 +124,12 @@ const workflowResult = {
   flowUsages: [{ totalPoints: 3 }],
   durationSeconds: 1.5,
   system_memories: { memory: 'value' },
-  nodeResponseSummary: {
+  workflowRuntimeSummary: {
     citeCollectionIds: [],
     errorCount: 0,
-    totalPoints: 3
+    totalPoints: 3,
+    inputTokens: 100,
+    outputTokens: 20
   }
 };
 
@@ -150,10 +155,12 @@ describe('runOutlinkRuntime', () => {
     vi.mocked(getAppLatestVersion).mockResolvedValue({
       nodes: [{ nodeId: 'start', inputs: [], outputs: [] }],
       edges: [],
-      chatConfig: { variables: [], fileSelectConfig: { maxFiles: 2 } }
+      chatConfig: { variables: [], fileSelectConfig: { maxFiles: 2 } },
+      resources: []
     } as any);
     vi.mocked(getChatItems).mockResolvedValue({ histories: [] } as any);
     vi.mocked(authOutLinkLimit).mockResolvedValue({ uid: message.chatUserId });
+    vi.mocked(assertTeamFrequencyLimit).mockResolvedValue({});
     vi.mocked(getWorkflowFileLimits).mockResolvedValue({
       maxFileAmount: 5,
       maxBytesPerFile: 4 * 1024 * 1024
@@ -244,6 +251,7 @@ describe('runOutlinkRuntime', () => {
     expect(respond).not.toHaveBeenCalled();
     expect(resolveQuery).not.toHaveBeenCalled();
     expect(authOutLinkLimit).not.toHaveBeenCalled();
+    expect(assertTeamFrequencyLimit).not.toHaveBeenCalled();
   });
 
   it('does not resolve media when the usage limit rejects the message', async () => {
@@ -260,6 +268,27 @@ describe('runOutlinkRuntime', () => {
 
     expect(resolveQuery).not.toHaveBeenCalled();
     expect(events).toEqual([{ type: 'error', content: 'App run error: usage limit reached' }]);
+  });
+
+  it('rejects before dispatch when the team chat QPM limit is exceeded', async () => {
+    vi.mocked(assertTeamFrequencyLimit).mockRejectedValue(new Error('Rate limit exceeded'));
+    const resolveQuery = vi.fn();
+    const { events, respond } = createResponder();
+
+    await runOutlinkRuntime({
+      outLinkConfig,
+      message: { ...message, resolveQuery },
+      respond
+    });
+
+    expect(assertTeamFrequencyLimit).toHaveBeenCalledWith({
+      teamId: String(outLinkConfig.teamId),
+      type: 'chat'
+    });
+    expect(resolveQuery).not.toHaveBeenCalled();
+    expect(preChatRound).not.toHaveBeenCalled();
+    expect(dispatchWorkFlow).not.toHaveBeenCalled();
+    expect(events).toEqual([{ type: 'error', content: 'App run error: Rate limit exceeded' }]);
   });
 
   it('does not resolve media when the responder fails to handle start', async () => {

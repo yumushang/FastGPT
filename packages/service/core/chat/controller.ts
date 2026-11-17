@@ -1,5 +1,10 @@
+import { AgentAskInteractiveSchema } from '@fastgpt/global/core/ai/agent/type';
+import {
+  extractDeepestInteractive,
+  isAgentAskInteractive
+} from '@fastgpt/global/core/workflow/runtime/utils';
 import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
-import { AgentPlanReadSchema } from '@fastgpt/global/core/ai/agent/type';
+import { AgentLoopAskSchema, AgentPlanReadSchema } from '@fastgpt/global/core/ai/agent/type';
 import { MongoChatItem } from './chatItemSchema';
 import { MongoChat } from './chatSchema';
 import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
@@ -9,11 +14,7 @@ import { UserError } from '@fastgpt/global/common/error/utils';
 import { getLogger, LogCategories } from '../../common/logger';
 import { composeChatItemResponseData } from './nodeResponseStorage';
 import type { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
-import {
-  buildChatSourceAggregateMatch,
-  buildChatSourceQuery,
-  type ChatSourceParams
-} from './source';
+import { buildChatSourceAggregateMatch, buildChatSourceQuery } from './source';
 
 const logger = getLogger(LogCategories.MODULE.CHAT.HISTORY);
 
@@ -36,9 +37,14 @@ const defaultNodeResponsePreviewProjection = {
   'data.toolId': 1,
   'data.toolRes.citeLinks': 1,
   'data.errorText': 1,
-  'data.errorCaptured': 1
+  'data.errorCaptured': 1,
+  'data.isToolCall': 1
 } as const;
 
+/**
+ * 在完整会话和删除状态范围内读取消息。完整轮次模式按方向选择锚点角色并补齐页首、页尾；
+ * 恢复模式读取压缩点之后的完整历史，普通分页始终按消息 _id 排序。
+ */
 export async function getChatItems({
   includeDeleted = false,
   sourceType,
@@ -52,7 +58,9 @@ export async function getChatItems({
   offset,
   initialId,
   prevId,
-  nextId
+  nextId,
+  completeRound = false,
+  includeInternalContext = offset === 0 && limit === 0
 }: {
   includeDeleted?: boolean;
   sourceType: ChatSourceTypeEnum;
@@ -67,6 +75,9 @@ export async function getChatItems({
   initialId?: string;
   prevId?: string;
   nextId?: string;
+  /** 公开链式分页补齐轮次，避免同轮 Human/AI 被不同页截断；其他内部读取保持原条数语义。 */
+  completeRound?: boolean;
+  includeInternalContext?: boolean;
 }): Promise<{
   histories: ChatItemMiniType[];
   total: number;
@@ -74,62 +85,31 @@ export async function getChatItems({
   hasMoreNext: boolean;
 }> {
   /**
-   * 只在读取边界迁移历史 Agent 数据，避免回写数据库或让旧字段扩散到客户端。
-   * 旧 ask 使用 planId 关联卡片、调用和回答；兼容读取后统一输出 askId。
+   * 读取时校验计划展示数据；旧 Ask 不做字段迁移或答案恢复。
    */
   const normalizePersistedAgentData = (histories: ChatItemMiniType[]) => {
-    const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
-      !!value && typeof value === 'object' && !Array.isArray(value);
-
-    const normalizeLegacyAskId = (value: unknown) => {
-      if (!isObjectRecord(value)) return;
-
-      const askId =
-        typeof value.askId === 'string' && value.askId
-          ? value.askId
-          : typeof value.planId === 'string' && value.planId
-            ? value.planId
-            : undefined;
-      if (askId) {
-        value.askId = askId;
-      }
-      delete value.planId;
-    };
-
-    const normalizeInteractiveAsk = (interactive: unknown) => {
-      let current = isObjectRecord(interactive) ? interactive : undefined;
-      let depth = 0;
-
-      while (current && depth < 100) {
-        const params = isObjectRecord(current.params) ? current.params : undefined;
-        const childrenResponse = isObjectRecord(params?.childrenResponse)
-          ? params.childrenResponse
-          : undefined;
-        if (!childrenResponse) break;
-
-        current = childrenResponse;
-        depth++;
-      }
-
-      if (current?.type === 'agentPlanAskQuery') {
-        normalizeLegacyAskId(current);
-      }
-    };
-
     histories.forEach((item) => {
       if (!item.value) return;
-
-      if (item.obj === ChatRoleEnum.Human) {
-        item.value.forEach(normalizeLegacyAskId);
-        return;
-      }
 
       if (item.obj !== ChatRoleEnum.AI) return;
 
       item.value.forEach((value) => {
-        normalizeLegacyAskId(value.agentAsk);
-        normalizeInteractiveAsk(value.interactive);
-
+        if (!includeInternalContext) delete value.inputContext;
+        if (!includeInternalContext && value.tools) {
+          value.tools = value.tools.map((tool) =>
+            tool.internalOnly ? { ...tool, params: '', response: '', hideDetails: true } : tool
+          );
+        }
+        if (value.agentAsk && !AgentLoopAskSchema.safeParse(value.agentAsk).success)
+          value.agentAsk = undefined;
+        if (value.interactive) {
+          const interactive = extractDeepestInteractive(value.interactive);
+          if (
+            isAgentAskInteractive(interactive) &&
+            !AgentAskInteractiveSchema.safeParse(interactive).success
+          )
+            value.interactive = undefined;
+        }
         if (!value.plan) return;
 
         const parsedPlan = AgentPlanReadSchema.safeParse(value.plan);
@@ -153,13 +133,73 @@ export async function getChatItems({
 
   const chatSource = { sourceType, sourceId };
   const shouldReadNodeResponse = nodeResponseMode || 'none';
-  field = `dataId ${field}`;
+  field = `dataId ${completeRound ? 'obj' : ''} ${field}`;
 
   const baseCondition = includeDeleted
     ? { ...buildChatSourceQuery(chatSource), chatId }
     : { ...buildChatSourceQuery(chatSource), chatId, deleteTime: null };
 
-  const { histories, total, hasMorePrev, hasMoreNext } = await (async () => {
+  /**
+   * 对外分页按方向选择角色；内部消息读取保持旧的 dataId 定位。
+   * 历史独立 dataId 或单侧消息删除后可能没有配对角色，前后翻页回退到仍可见的该条记录。
+   * 初始定位明确指向 AI，不回退到同轮 Human。
+   */
+  const findAnchor = async ({
+    dataId,
+    role,
+    projection,
+    allowUnpaired = false
+  }: {
+    dataId: string;
+    role: ChatRoleEnum;
+    projection: string | { _id: 1 };
+    allowUnpaired?: boolean;
+  }) => {
+    const condition = { ...baseCondition, dataId };
+    if (!completeRound) return MongoChatItem.findOne(condition, projection).lean();
+    const item = await MongoChatItem.findOne({ ...condition, obj: role }, projection).lean();
+    if (item || !allowUnpaired) return item;
+    return MongoChatItem.findOne(condition, projection).lean();
+  };
+
+  const result = await (async () => {
+    // Agent 的 limit=0 是恢复模式：读取最新压缩点后的连续历史，并保留最新计划（含 null）。
+    // 没有压缩点时必须读取完整会话，不能用分页窗口替代已移除的 Ask 消息快照。
+    if (offset === 0 && limit === 0) {
+      const [checkpoint, plan, count] = await Promise.all([
+        MongoChatItem.findOne(
+          {
+            ...baseCondition,
+            obj: ChatRoleEnum.AI,
+            value: {
+              $elemMatch: { contextCheckpoint: { $type: 'string' }, displayOnly: { $ne: true } }
+            }
+          },
+          { _id: 1 }
+        )
+          .sort({ _id: -1 })
+          .lean(),
+        MongoChatItem.findOne(
+          {
+            ...baseCondition,
+            obj: ChatRoleEnum.AI,
+            value: { $elemMatch: { plan: { $exists: true }, displayOnly: { $ne: true } } }
+          },
+          field
+        )
+          .sort({ _id: -1 })
+          .lean(),
+        MongoChatItem.countDocuments(baseCondition)
+      ]);
+      const tail = await MongoChatItem.find(
+        { ...baseCondition, ...(checkpoint ? { _id: { $gte: checkpoint._id } } : {}) },
+        field
+      )
+        .sort({ _id: 1 })
+        .lean();
+      if (checkpoint && plan && String(plan._id) < String(checkpoint._id)) tail.unshift(plan);
+      return { histories: tail, total: count, hasMorePrev: false, hasMoreNext: false };
+    }
     // Mode 1: offset pagination (original logic)
     if (offset !== undefined) {
       const [foundHistories, count] = await Promise.all([
@@ -175,13 +215,12 @@ export async function getChatItems({
     }
     // Mode 2: prevId - get records before the target
     else if (prevId) {
-      const prevItem = await MongoChatItem.findOne(
-        {
-          ...baseCondition,
-          dataId: prevId
-        },
-        { _id: 1 }
-      ).lean();
+      const prevItem = await findAnchor({
+        dataId: prevId,
+        role: ChatRoleEnum.Human,
+        projection: { _id: 1 },
+        allowUnpaired: true
+      });
       if (!prevItem) return Promise.reject(new UserError('Prev item not found'));
 
       const [items, count] = await Promise.all([
@@ -201,13 +240,12 @@ export async function getChatItems({
     }
     // Mode 3: nextId - get records after the target
     else if (nextId) {
-      const nextItem = await MongoChatItem.findOne(
-        {
-          ...baseCondition,
-          dataId: nextId
-        },
-        { _id: 1 }
-      ).lean();
+      const nextItem = await findAnchor({
+        dataId: nextId,
+        role: ChatRoleEnum.AI,
+        projection: { _id: 1 },
+        allowUnpaired: true
+      });
       if (!nextItem) return Promise.reject(new UserError('Next item not found'));
 
       const [items, total] = await Promise.all([
@@ -240,13 +278,15 @@ export async function getChatItems({
         };
       }
 
-      const halfLimit = Math.floor(limit / 2);
-      const ceilLimit = Math.ceil(limit / 2);
+      const surroundingLimit = completeRound ? Math.max(0, limit - 1) : limit;
+      const halfLimit = Math.floor(surroundingLimit / 2);
+      const ceilLimit = Math.ceil(surroundingLimit / 2);
 
-      const targetItem = await MongoChatItem.findOne(
-        { ...baseCondition, dataId: initialId },
-        field
-      ).lean();
+      const targetItem = await findAnchor({
+        dataId: initialId,
+        role: ChatRoleEnum.AI,
+        projection: field
+      });
       if (!targetItem) return Promise.reject(new UserError('Target item not found'));
 
       const [prevItems, nextItems, count] = await Promise.all([
@@ -272,6 +312,64 @@ export async function getChatItems({
         hasMoreNext: nextItems.length > ceilLimit
       };
     }
+  })();
+
+  const { histories, total, hasMorePrev, hasMoreNext } = await (async () => {
+    if (!completeRound || result.histories.length === 0) return result;
+
+    /** 优先补齐同 dataId 的配对消息；旧版本独立 dataId 使用相邻的 Human/AI 配对。 */
+    const extendBoundary = async (direction: 'prev' | 'next') => {
+      const before = direction === 'prev';
+      const boundary = before ? result.histories[0] : result.histories[result.histories.length - 1];
+      const expectedBoundaryRole = before ? ChatRoleEnum.AI : ChatRoleEnum.Human;
+      if (boundary.obj !== expectedBoundaryRole) return [];
+
+      const pairedRole = before ? ChatRoleEnum.Human : ChatRoleEnum.AI;
+      const range = before ? { $lt: boundary._id } : { $gt: boundary._id };
+      const paired = await MongoChatItem.findOne(
+        { ...baseCondition, dataId: boundary.dataId, obj: pairedRole, _id: range },
+        { _id: 1 }
+      )
+        .sort({ _id: before ? -1 : 1 })
+        .lean();
+      if (paired) {
+        // 用连续区间补齐，保持消息的排序和连续性。
+        return MongoChatItem.find(
+          {
+            ...baseCondition,
+            _id: before
+              ? { $gte: paired._id, $lt: boundary._id }
+              : { $gt: boundary._id, $lte: paired._id }
+          },
+          field
+        )
+          .sort({ _id: 1 })
+          .lean();
+      }
+      const adjacent = await MongoChatItem.findOne({ ...baseCondition, _id: range }, field)
+        .sort({ _id: before ? -1 : 1 })
+        .lean();
+      return adjacent?.obj === pairedRole ? [adjacent] : [];
+    };
+
+    const [prefix, suffix] = await Promise.all([extendBoundary('prev'), extendBoundary('next')]);
+    const [morePrev, moreNext] = await Promise.all([
+      prefix.length > 0
+        ? MongoChatItem.exists({ ...baseCondition, _id: { $lt: prefix[0]._id } }).then(Boolean)
+        : result.hasMorePrev,
+      suffix.length > 0
+        ? MongoChatItem.exists({
+            ...baseCondition,
+            _id: { $gt: suffix[suffix.length - 1]._id }
+          }).then(Boolean)
+        : result.hasMoreNext
+    ]);
+    return {
+      histories: [...prefix, ...result.histories, ...suffix],
+      total: result.total,
+      hasMorePrev: morePrev,
+      hasMoreNext: moreNext
+    };
   })();
 
   normalizePersistedAgentData(histories);

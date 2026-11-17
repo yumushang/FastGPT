@@ -1,17 +1,22 @@
 import { queryExtension } from '../../ai/functions/queryExtension';
+import { addHours } from 'date-fns';
 import { type ChatItemMiniType } from '@fastgpt/global/core/chat/type';
+import { isHttpUrl } from '@fastgpt/global/common/string/url';
 import { hashStr } from '@fastgpt/global/common/string/tools';
 import { getLogger, LogCategories } from '../../../common/logger';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
 import { getImageBase64 } from '../../../common/file/image/utils';
-import { serviceEnv } from '../../../env';
+import { getMultipleDataToBase64 } from '../../../common/system/constants';
 import { isS3ObjectKey } from '../../../common/s3/utils';
+import { S3Buckets } from '../../../common/s3/config/constants';
+import { createS3DownloadAccessUrl } from '../../../common/s3/accessLink/downloadAlias/service';
+import { isAuthorizedDatasetFileS3Key } from '../../../common/s3/sources/dataset/key';
 import { getS3DatasetSource } from '../../../common/s3/sources/dataset';
 import { DatasetDataIndexTypeEnum } from '@fastgpt/global/core/dataset/data/constants';
 import type {
-  EmbeddingSystemModelDataType,
-  LLMSystemModelDataType
-} from '@fastgpt/global/core/ai/model.schema';
+  EmbeddingModelDataType,
+  LLMModelDataType
+} from '@fastgpt/global/core/ai/model/schema';
 import { getDatasetSynonymRuntimeConfig, isDatasetSynonymEnabled } from '../synonym/entity';
 import {
   buildSynonymMatcher,
@@ -157,27 +162,27 @@ export const isValidImageEmbeddingSource = (imageUrl?: string) => {
 
   if (url.startsWith('data:image/')) return true;
   if (isS3ObjectKey(url, 'dataset')) return true;
-  if (isS3ObjectKey(url, 'temp')) return true;
-  if (isS3ObjectKey(url, 'chat')) return true;
-  if (/^https?:\/\//i.test(url)) return true;
+  if (isHttpUrl(url)) return true;
 
   return false;
 };
 
 /**
- * 按环境开关规范化图片输入。
- * data URL 已经是模型可读内容，始终原样返回；普通图片 URL 只有
- * serviceEnv.MULTIPLE_DATA_TO_BASE64 为 true 时才转成 base64。
+ * 按配置开关规范化图片输入。
+ * data URL 已经是模型可读内容，始终原样返回；普通图片 URL 只有开关为 true 时才转成 base64。
  * FastGPT 内部对象 key 的鉴权和临时 URL 生成应在入口层完成，避免通用规范化函数
  * 混入业务权限和存储来源判断。
  * 这里不吞异常，由上层按图片粒度降级，避免一张坏图中断整次检索。
+ *
+ * toBase64 显式传入时批量调用应在入口一次求值后下传：管理员中途保存配置会触发
+ * 快照重载，逐条读 getMultipleDataToBase64() 会出现部分转 base64、部分保留 URL 的混合形态。
  */
-export const normalizeImageToBase64 = async (imageUrl: string) => {
+export const normalizeImageToBase64 = async (imageUrl: string, toBase64?: boolean) => {
   if (imageUrl.startsWith('data:image/')) {
     return imageUrl;
   }
 
-  if (!serviceEnv.MULTIPLE_DATA_TO_BASE64) {
+  if (!(toBase64 ?? getMultipleDataToBase64())) {
     return imageUrl;
   }
 
@@ -188,16 +193,44 @@ export const normalizeImageToBase64 = async (imageUrl: string) => {
 export const isImageEmbeddingIndex = (index: { type?: string | number }) =>
   index.type === DatasetDataIndexTypeEnum.imageEmbedding;
 
-export const normalizeDatasetIndexImageToModelInput = async (imageUrl: string) => {
-  if (
-    isS3ObjectKey(imageUrl, 'dataset') ||
-    isS3ObjectKey(imageUrl, 'temp') ||
-    isS3ObjectKey(imageUrl, 'chat')
-  ) {
-    return getS3DatasetSource().getDatasetBase64Image(imageUrl);
+/**
+ * 将知识库图片索引转换为模型可读输入。
+ *
+ * 私有 S3 对象只允许读取绑定当前 datasetId 的 `dataset/*` key；只放行合法的
+ * data URL 或外部 HTTP(S) 链接，其余格式（包括 temp/*、chat/*、本地路径等）一律拒绝。
+ * toBase64 语义同 normalizeImageToBase64：批量入口一次求值下传，避免混合形态。
+ */
+export const normalizeDatasetIndexImageToModelInput = async ({
+  imageUrl,
+  datasetId,
+  toBase64
+}: {
+  imageUrl: string;
+  datasetId?: string;
+  toBase64?: boolean;
+}) => {
+  if (isS3ObjectKey(imageUrl, 'dataset')) {
+    // 知识库图片必须绑定当前 dataset；缺少 datasetId 时也拒绝读取，避免兼容分支绕过鉴权。
+    if (!isAuthorizedDatasetFileS3Key({ key: imageUrl, datasetId: datasetId ?? '' })) {
+      throw new Error('Invalid dataset file key');
+    }
+    // 与 normalizeImageToBase64 共用同一开关：Admin 切换后两条图片链路行为一致
+    if (toBase64 ?? getMultipleDataToBase64()) {
+      return getS3DatasetSource().getDatasetBase64Image(imageUrl);
+    }
+    return createS3DownloadAccessUrl({
+      objectKey: imageUrl,
+      bucketName: S3Buckets.private,
+      expiredTime: addHours(new Date(), 2)
+    });
   }
 
-  return normalizeImageToBase64(imageUrl);
+  if (imageUrl.startsWith('data:image/') || isHttpUrl(imageUrl)) {
+    // 透传 toBase64：同批 S3 key 与外部 URL 并存时保持单一快照，防混合形态
+    return normalizeImageToBase64(imageUrl, toBase64);
+  }
+
+  throw new Error('Invalid dataset file key');
 };
 
 /**
@@ -217,8 +250,8 @@ export const datasetSearchQueryExtension = async ({
   datasetIds = []
 }: {
   query: string;
-  llmModel?: LLMSystemModelDataType;
-  embeddingModel?: EmbeddingSystemModelDataType;
+  llmModel?: LLMModelDataType;
+  embeddingModel?: EmbeddingModelDataType;
   userKey?: OpenaiAccountType;
   teamId: string;
   extensionBg?: string;

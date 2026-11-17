@@ -1,6 +1,8 @@
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
+import { UserError } from '@fastgpt/global/common/error/utils';
+import type { LLMModelDataType, AIModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import type { CompletionFinishReason, CompletionUsage } from '@fastgpt/global/core/ai/llm/type';
-import { getLLMDefaultUsage } from '@fastgpt/global/core/ai/constants';
+import { getLLMDefaultUsage, ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import { removeDatasetCiteText } from '@fastgpt/global/core/ai/llm/utils';
 import json5 from 'json5';
 import { sliceJsonStr } from '@fastgpt/global/common/string/tools';
@@ -15,7 +17,7 @@ export const computedMaxToken = ({
   min
 }: {
   maxToken?: number;
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   min?: number;
 }) => {
   if (maxToken === undefined) return;
@@ -29,7 +31,7 @@ export const computedTemperature = ({
   model,
   temperature
 }: {
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   temperature: number;
 }) => {
   const maxTemperature = model.config.maxTemperature;
@@ -373,5 +375,34 @@ export const parseJsonArgs = <T = Record<string, any>>(str: string) => {
     return json5.parse(jsonrepair(sliceJsonStr(str))) as T;
   } catch {
     return;
+  }
+};
+
+/**
+ * 校验模型状态、类型及可选视觉能力。保留 modelUnExist 机器码兼容队列降级，
+ * 通过独立展示消息区分停用与类型错误；名称来自实际模型记录，不使用用户输入猜测。
+ */
+export const assertModelAvailable = ({
+  model,
+  type,
+  vision = false
+}: {
+  model?: Pick<AIModelDataType, 'name' | 'model' | 'type' | 'isActive' | 'config'>;
+  type?: `${ModelTypeEnum}`;
+  vision?: boolean;
+}) => {
+  if (!model) throw new UserError(ModelErrEnum.unExist);
+  const name = model.name || model.model;
+  if (type && model.type !== type) {
+    throw new UserError(ModelErrEnum.unExist, `Model type mismatch: ${name}`);
+  }
+  if (!model.isActive) {
+    throw new UserError(ModelErrEnum.unExist, `Model is disabled: ${name}`);
+  }
+  if (
+    vision &&
+    !(model.type === ModelTypeEnum.llm && 'vision' in model.config && model.config.vision)
+  ) {
+    throw new UserError(ModelErrEnum.unExist, `Model type mismatch: ${name}`);
   }
 };

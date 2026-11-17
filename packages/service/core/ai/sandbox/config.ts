@@ -1,22 +1,100 @@
 /**
  * Sandbox 领域共享配置派生。
  *
- * 这里只把已校验的环境配置换算为领域使用的字节限制，不依赖 interface、application
+ * 这里只派生已在入口校验的系统配置，不依赖 interface、application
  * 或 infrastructure，供各层单向引用。
+ *
+ * 所有字段以实例配置快照为唯一运行时来源；ENV 只在启动迁移时一次性 seed 进 DB。
  */
-import { serviceEnv } from '../../../env';
+import { MB_BYTES, RESERVED_DISK_MB } from './constants';
+import { getSystemInstanceConfig } from '../../../common/system/systemInstanceConfig/runtime';
 
-const MB_BYTES = 1024 * 1024;
-const RESERVED_DISK_MB = 150;
+type AgentSandboxInstanceConfig = ReturnType<
+  typeof getSystemInstanceConfig
+>['subservice']['agentSandbox'];
+
+/** 实例配置中的 Agent Sandbox 域；运行期以该快照为唯一权威。 */
+const getInstanceAgentSandboxConfig = (): AgentSandboxInstanceConfig =>
+  getSystemInstanceConfig().subservice.agentSandbox;
+
+/** 当前生效的 provider；none 表示未启用 Agent Sandbox。 */
+export const getAgentSandboxProvider = (): 'none' | 'sealosdevbox' | 'opensandbox' =>
+  getInstanceAgentSandboxConfig().provider;
+
+/** 票据签发、Proxy 反向鉴权和文件预览统一读取同一份实例代理配置。 */
+export const getAgentSandboxProxyConfig = () => getInstanceAgentSandboxConfig().proxy;
+
+/** App 启动前校验代理连接；ENV 仅用于迁移，不能覆盖管理员保存的配置。 */
+export const validateAgentSandboxProxyConfig = (provider: string): void => {
+  if (provider !== 'sealosdevbox' && provider !== 'opensandbox') return;
+
+  const proxy = getAgentSandboxProxyConfig();
+  const missing = (['wsUrl', 'previewUrl', 'secret'] as const).filter((key) => !proxy[key]);
+  if (missing.length > 0) {
+    throw new Error(`Agent Sandbox proxy configuration is missing: ${missing.join(', ')}`);
+  }
+};
+
+/** Pro 只复用文件预览能力，无需浏览器 WebSocket 地址或票据签名密钥。 */
+export const validateAgentSandboxPreviewProxyConfig = (provider: string): void => {
+  if (provider !== 'sealosdevbox' && provider !== 'opensandbox') return;
+  if (!getAgentSandboxProxyConfig().previewUrl) {
+    throw new Error('Agent Sandbox preview proxy configuration is missing');
+  }
+};
+
+/** 实例配置的公共资源与生命周期参数。 */
+export const getAgentSandboxCommonConfig = () => {
+  const common = getInstanceAgentSandboxConfig().common;
+
+  return {
+    cpuCount: common.cpuCount,
+    memoryMiB: common.memoryMiB,
+    storageSizeGi: common.storageSizeGi,
+    suspendMinutes: common.suspendMinutes,
+    archiveInactiveDays: common.archiveInactiveDays,
+    npmRegistry: common.npmRegistry,
+    pypiIndexUrl: common.pypiIndexUrl,
+    aptMirror: common.aptMirror
+  };
+};
+
+/** Sealos Devbox 连接配置。 */
+export const getAgentSandboxSealosConfig = () => {
+  const sealos = getInstanceAgentSandboxConfig().sealosdevbox;
+
+  return {
+    baseUrl: sealos.baseUrl,
+    token: sealos.token,
+    workDirectory: sealos.workDirectory,
+    image: sealos.image
+  };
+};
+
+/** OpenSandbox 连接配置。 */
+export const getAgentSandboxOpenSandboxConfig = () => {
+  const opensandbox = getInstanceAgentSandboxConfig().opensandbox;
+
+  return {
+    baseUrl: opensandbox.baseUrl,
+    apiKey: opensandbox.apiKey,
+    runtime: opensandbox.runtime,
+    cpuOvercommitFactor: opensandbox.cpuOvercommitFactor,
+    memoryOvercommitFactor: opensandbox.memoryOvercommitFactor,
+    image: opensandbox.image,
+    useServerProxy: opensandbox.useServerProxy,
+    volumeManagerUrl: opensandbox.volumeManagerUrl,
+    volumeManagerToken: opensandbox.volumeManagerToken,
+    volumeNamePrefix: opensandbox.volumeNamePrefix
+  };
+};
 
 /** 获取 Agent sandbox 磁盘基准字节数，按存储容量换算并预留 150MB。 */
 export const getAgentSandboxDiskBytes = () => {
-  const storageMB = serviceEnv.AGENT_SANDBOX_STORAGE_SIZE_GI * 1024;
+  const storageMB = getAgentSandboxCommonConfig().storageSizeGi * 1024;
   const diskMB = Math.round(storageMB / 2 - RESERVED_DISK_MB);
   if (diskMB <= 0) {
-    throw new Error(
-      `AGENT_SANDBOX_STORAGE_SIZE_GI must be greater than ${RESERVED_DISK_MB * 2}MiB`
-    );
+    throw new Error(`Agent Sandbox storage size must be greater than ${RESERVED_DISK_MB * 2} MiB`);
   }
   return diskMB * MB_BYTES;
 };
@@ -25,14 +103,28 @@ export const getAgentSandboxDiskBytes = () => {
 export const getAgentSandboxArchiveMaxBytes = getAgentSandboxDiskBytes;
 
 /** 获取运行中 sandbox 自动暂停前允许的未活跃分钟数。 */
-export const getAgentSandboxSuspendMinutes = () => serviceEnv.AGENT_SANDBOX_SUSPEND_MINUTES;
+export const getAgentSandboxSuspendMinutes = () => getAgentSandboxCommonConfig().suspendMinutes;
 
 /** 获取已暂停 sandbox 自动归档前允许的未活跃天数。 */
 export const getAgentSandboxArchiveInactiveDays = () =>
-  serviceEnv.AGENT_SANDBOX_ARCHIVE_INACTIVE_DAYS;
+  getAgentSandboxCommonConfig().archiveInactiveDays;
 
 /** 获取 Skill 包大小上限，等于磁盘基准。 */
 export const getAgentSandboxSkillMaxBytes = getAgentSandboxDiskBytes;
 
 /** 获取 IDE 单文件大小上限，等于磁盘基准。 */
 export const getAgentSandboxMaxFileBytes = getAgentSandboxDiskBytes;
+
+/**
+ * 获取 Agent sandbox 活跃实例系统总上限（app 会话与技能编辑共用同一计数池）。
+ * undefined 表示不限制。
+ */
+export const getAgentSandboxMax = (): number | undefined =>
+  getInstanceAgentSandboxConfig().common.maxEditDebug;
+
+/**
+ * 获取单团队 Agent sandbox 活跃实例配额；undefined 表示不限制。
+ * null 是实例配置的显式「不限量」语义，不能再回落成其它来源的配额。
+ */
+export const getAgentSandboxMaxPerTeam = (): number | undefined =>
+  getInstanceAgentSandboxConfig().common.maxPerTeam ?? undefined;

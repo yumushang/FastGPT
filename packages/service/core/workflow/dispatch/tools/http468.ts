@@ -1,4 +1,3 @@
-import { getErrText } from '@fastgpt/global/common/error/utils';
 import {
   contentTypeMap,
   ContentTypes,
@@ -23,23 +22,38 @@ import type { StoreSecretValueType } from '@fastgpt/global/common/secret/type';
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { formatHttpError, getNodeErrResponse } from '../utils';
 import { isInternalAddress, PRIVATE_URL_TEXT } from '../../../../common/system/utils';
-import { serviceRequestMaxContentLength } from '../../../../common/system/constants';
+import { getServiceRequestMaxContentLength } from '../../../../common/system/constants';
+import { logInstanceConfigRead } from '../../../../common/system/migrationCoverageLog';
+import { getSystemInstanceConfig } from '../../../../common/system/systemInstanceConfig/runtime';
 import { axios, type SafeAxiosRequestConfig } from '../../../../common/api/axios';
 import { replaceEditorVariable } from '../utils/replaceEditorVariable';
 import { checkStrOversize, logOversizeString } from '../../../../common/string/replaceVariable';
 import { getWorkflowAppId } from '../utils/source';
+import { getErrText, isUserConfigError, UserConfigError } from '@fastgpt/global/common/error/utils';
+import { getSafeHttpErrorLog } from '../../../../common/api/httpError';
 
 const logger = getLogger(LogCategories.MODULE.WORKFLOW.TOOLS);
 
 /**
  * 仅工作流 HTTP 节点允许按系统配置跳过 HTTPS 证书校验。
+ * App 与 Pro 均直接读取实例快照，避免各宿主的旧 systemEnv 桥接遗漏或覆盖新值。
  * 该配置不下沉到通用 axios,避免影响模型请求、HTTP 工具集等其它出站链路。
  */
 export const getWorkflowHttpNodeHttpsAgentConfig = (
   url: string
 ): Pick<SafeAxiosRequestConfig, '__safeAxios'> => {
   const ignoreHttpsCertificate =
-    global.systemEnv?.workflowHttpNode?.ignoreHttpsCertificate === true;
+    getSystemInstanceConfig().security.workflowHttpNode.ignoreHttpsCertificate;
+  logInstanceConfigRead({
+    callsite: 'runtime.workflow.http468.getWorkflowHttpNodeHttpsAgentConfig',
+    source: 'instance-config',
+    fields: [
+      {
+        path: 'security.workflowHttpNode.ignoreHttpsCertificate',
+        value: ignoreHttpsCertificate
+      }
+    ]
+  });
 
   if (!ignoreHttpsCertificate) {
     return {};
@@ -86,12 +100,16 @@ type HttpResponse = DispatchNodeResultType<
   {
     [NodeOutputKeyEnum.errorText]: string; //未使用，仅作类型。
     [NodeOutputKeyEnum.error]: string; // 适配字段
-    [NodeOutputKeyEnum.httpRawError]?: ReturnType<typeof formatHttpError>;
+    [NodeOutputKeyEnum.httpRawError]?: Omit<ReturnType<typeof formatHttpError>, 'rawText'>;
   }
 >;
 
 const UNDEFINED_SIGN = 'UNDEFINED_SIGN';
 
+/**
+ * 执行用户配置的 HTTP 请求，配置校验和请求失败使用 UserConfigError 降低系统观测噪声。
+ * 错误分支保留原有 HTTP 摘要和响应体；成功响应的内部处理异常仍按系统故障上报。
+ */
 export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<HttpResponse> => {
   const {
     runningAppInfo,
@@ -118,7 +136,7 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
   let requestUrl = httpReqUrl;
 
   if (!requestUrl) {
-    return Promise.reject('Http url is empty');
+    return Promise.reject(new UserConfigError('Http url is empty'));
   }
 
   const systemVariables = {
@@ -174,12 +192,21 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
         acc[key] = valueTypeFormat(value, WorkflowIOValueTypeEnum.string);
         return acc;
       }, {});
-    } catch {
-      return Promise.reject('Header 为非法 JSON 格式');
+    } catch (error) {
+      return Promise.reject(
+        new UserConfigError('Header 为非法 JSON 格式', undefined, { cause: error })
+      );
     }
   })();
   const sensitiveHeaders = getSecretValue({
-    storeSecret: headerSecret
+    storeSecret: headerSecret,
+    resolveReference: (value) =>
+      getReferenceVariableValue({
+        value,
+        nodesMap: runtimeNodesMap,
+        variables: allVariables,
+        isReferenceVal: true
+      })
   });
 
   const params = formatHttpProps(httpParams).reduce((acc: Record<string, string>, item) => {
@@ -224,8 +251,10 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
       // Raw text, xml
       const rawBody = replaceStringVariables(httpJsonBody);
       return rawBody.replaceAll(UNDEFINED_SIGN, 'null');
-    } catch {
-      return Promise.reject(`Invalid JSON body: ${httpJsonBody}`);
+    } catch (error) {
+      return Promise.reject(
+        new UserConfigError(`Invalid JSON body: ${httpJsonBody}`, undefined, { cause: error })
+      );
     }
   })();
 
@@ -246,16 +275,17 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
   })();
 
   try {
-    const { formatResponse, rawResponse } = await (async () => {
-      return fetchData({
-        method: httpMethod,
-        url: requestUrl,
-        headers: { ...sensitiveHeaders, ...publicHeaders },
-        body: requestBody,
-        params,
-        timeout: httpTimeout
-      });
-    })();
+    // 只转换请求边界的失败，避免将后续输出处理中的内部异常一起降级。
+    const { formatResponse, rawResponse } = await fetchData({
+      method: httpMethod,
+      url: requestUrl,
+      headers: { ...sensitiveHeaders, ...publicHeaders },
+      body: requestBody,
+      params,
+      timeout: httpTimeout
+    }).catch((error: unknown) => {
+      throw new UserConfigError(getErrText(error), undefined, { cause: error });
+    });
 
     // format output value type
     const results: Record<string, any> = {};
@@ -305,18 +335,27 @@ export const dispatchHttp468Request = async (props: HttpRequestProps): Promise<H
         Object.keys(results).length > 0 ? results : rawResponse
     };
   } catch (error) {
-    logger.warn('HTTP tool request failed', {
-      error,
-      httpReqUrl: requestUrl,
-      ignoreHttpsCertificate: global.systemEnv?.workflowHttpNode?.ignoreHttpsCertificate === true
-    });
+    // 分类包装不改变 HTTP 输出字段，摘要仍从原始异常提取状态码、响应体等信息。
+    const httpError =
+      error instanceof UserConfigError && Object.hasOwn(error, 'cause') ? error.cause : error;
+    const logProperties = {
+      ...getSafeHttpErrorLog(httpError),
+      ignoreHttpsCertificate:
+        getSystemInstanceConfig().security.workflowHttpNode.ignoreHttpsCertificate
+    };
+    // 安全摘要不再携带 error，显式保留 logger 对用户配置错误的降噪与禁止导出策略。
+    if (isUserConfigError(error)) {
+      logger.info('HTTP tool request failed', { ...logProperties, otel: false });
+    } else {
+      logger.warn('HTTP tool request failed', logProperties);
+    }
 
-    const errText = getErrText(error);
-    const errObj = formatHttpError(error);
+    const { rawText, ...errObj } = formatHttpError(httpError);
     return getNodeErrResponse({
-      error: errText,
+      error,
+      errorText: rawText,
       customErr: {
-        [NodeOutputKeyEnum.error]: errText,
+        [NodeOutputKeyEnum.error]: rawText,
         [NodeOutputKeyEnum.httpRawError]: errObj
       },
       responseData: {
@@ -555,7 +594,7 @@ async function fetchData({
   // 都认为是用户的请求，强制 SSRF 检查
   const { data: response } = await axios({
     method,
-    maxContentLength: serviceRequestMaxContentLength,
+    maxContentLength: getServiceRequestMaxContentLength(),
     url,
     headers: {
       ...headers

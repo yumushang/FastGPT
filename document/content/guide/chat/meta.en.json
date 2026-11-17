@@ -1,8 +1,9 @@
 {
-  "title": "Chat Box",
+  "title": "Using Chat",
   "root": false,
   "pages": [
-    "htmlRendering",
+    "html",
+    "!htmlRendering",
     "quoteList"
   ]
 }

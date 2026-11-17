@@ -28,7 +28,7 @@ export class ObVectorCtrl implements VectorControllerType {
         );
       `);
       await this.obClient.query(
-        `CREATE VECTOR INDEX IF NOT EXISTS vector_index ON ${DatasetVectorTableName}(vector) WITH (distance=${OceanBaseIndexConfig.distance}, type=${OceanBaseIndexConfig.type}, m=16, ef_construction=200);`
+        `CREATE VECTOR INDEX IF NOT EXISTS vector_index ON ${DatasetVectorTableName}(vector) WITH (distance=${OceanBaseIndexConfig.distance}, type=${OceanBaseIndexConfig.type}, m=32, ef_construction=256);`
       );
       await this.obClient.query(
         `CREATE INDEX IF NOT EXISTS team_dataset_collection_index ON ${DatasetVectorTableName}(team_id, dataset_id, collection_id);`
@@ -70,6 +70,14 @@ export class ObVectorCtrl implements VectorControllerType {
       insertIds
     };
   };
+  /** OceanBase/SeekDB 共用：只更新当前团队旧向量的时间，不修改向量和归属字段。 */
+  refreshCreateTime: VectorControllerType['refreshCreateTime'] = async ({ teamId, idList }) => {
+    if (idList.length === 0) return;
+    await this.obClient.query(
+      `UPDATE ${DatasetVectorTableName} SET createtime = CURRENT_TIMESTAMP WHERE team_id = ? AND id IN (${idList.map(() => '?').join(',')})`,
+      [String(teamId), ...idList]
+    );
+  };
   delete: VectorControllerType['delete'] = async (props) => {
     const { teamId } = props;
 
@@ -106,8 +114,15 @@ export class ObVectorCtrl implements VectorControllerType {
     });
   };
   embRecall: VectorControllerType['embRecall'] = async (props) => {
-    const { teamId, datasetIds, vector, limit, forbidCollectionIdList, filterCollectionIdList } =
-      props;
+    const {
+      teamId,
+      datasetIds,
+      vector,
+      limit,
+      hnswEfSearch,
+      forbidCollectionIdList,
+      filterCollectionIdList
+    } = props;
 
     // Get forbid collection
     const formatForbidCollectionIdList = (() => {
@@ -147,7 +162,7 @@ export class ObVectorCtrl implements VectorControllerType {
         } & RowDataPacket)[][]
       >(
         `BEGIN;
-          SET ob_hnsw_ef_search = ${global.systemEnv?.hnswEfSearch || 100};
+          SET ob_hnsw_ef_search = ${hnswEfSearch};
           SELECT id, collection_id, ${OceanBaseIndexConfig.distanceFunc}(vector, [${vector}]) AS score
             FROM ${DatasetVectorTableName}
             WHERE team_id='${teamId}'

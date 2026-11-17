@@ -1,3 +1,5 @@
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
+import { NextAPI } from '@/service/middleware/entry';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { jsonRes } from '@fastgpt/service/common/response';
 import { authSystemAdmin } from '@fastgpt/service/support/permission/user/auth';
@@ -38,7 +40,7 @@ const parseUploadError = (error: unknown, lang: string) => {
   return error.message;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const lang = getLocale(req);
   const filepaths: string[] = [];
 
@@ -51,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const result = await multer.resolveMultipleFormData<Record<string, never>>({
       request: req,
-      maxFileSize: global.feConfigs.uploadFileMaxSize,
+      maxFileSize: getSystemInstanceConfig().resource.uploadFileMaxSize,
       allowedExtensions: ['.pkg', '.zip']
     });
 
@@ -88,3 +90,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     multer.clearDiskTempFiles(filepaths);
   }
 }
+
+export default NextAPI(handler);

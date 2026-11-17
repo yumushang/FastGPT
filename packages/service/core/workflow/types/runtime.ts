@@ -1,5 +1,5 @@
 import type { localeType } from '@fastgpt/global/common/i18n/type';
-import type { AppSchemaType } from '@fastgpt/global/core/app/type';
+import type { AppChatConfigType } from '@fastgpt/global/core/app/type';
 import type { ReasoningEffort } from '@fastgpt/global/core/ai/llm/type';
 import type { AiChatQuoteRoleType } from '@fastgpt/global/core/workflow/template/system/aiChat/type';
 import type {
@@ -10,7 +10,6 @@ import type { RuntimeEdgeItemType } from '@fastgpt/global/core/workflow/type/edg
 import type {
   AIChatItemValueItemType,
   ChatFileStoreValue,
-  ChatHistoryItemResType,
   ChatItemMiniType,
   ToolRunResponseItemType,
   UserChatItemValueItemType
@@ -27,6 +26,8 @@ import type {
 } from '@fastgpt/global/core/workflow/runtime/type';
 import type { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import type { WorkflowNodeResponseSinkLike } from '../dispatch/nodeResponseSink';
+import type { WorkflowMemoryState } from '../memory/state';
+import type { WorkflowRuntimeSummaryFields } from './summary';
 
 /*
   1. 输入线分类：普通线(实际上就是从 start 直接过来的分支）和递归线（可以追溯到自身的分支）
@@ -81,6 +82,8 @@ export type ChatDispatchProps = {
     contact: string;
     teamId: string;
     tmbId: string;
+    timezone?: string;
+    externalProvider?: ExternalProviderType;
   };
   uid: string; // Who run this workflow
 
@@ -89,8 +92,9 @@ export type ChatDispatchProps = {
   responseChatItemId: string;
   histories: ChatItemMiniType[];
   variableState: WorkflowVariableStateLike; // global variable state
+  memoryState?: WorkflowMemoryState; // workflow node memories state
   query: UserChatItemValueItemType[]; // trigger query
-  chatConfig: AppSchemaType['chatConfig'];
+  chatConfig?: AppChatConfigType;
   lastInteractive?: WorkflowInteractiveResponseType; // last interactive response
   stream: boolean;
   retainDatasetCite?: boolean;
@@ -105,7 +109,7 @@ export type ChatDispatchProps = {
   responseAllData?: boolean;
   responseDetail?: boolean;
   nodeResponseParentId?: string; // 传递给 child，用于设置 nodeResponse 的 parentId
-  /** 请求级 nodeResponse 接收器；child runtime 共享，节点 adapter 不直接操作数据库。 */
+  /** 当前 workflow 的 response scope；child 创建独立 scope 并共享底层 output。 */
   nodeResponseSink?: WorkflowNodeResponseSinkLike;
 
   // TODO: 移除
@@ -120,6 +124,7 @@ export type ModuleDispatchProps<T> = ChatDispatchProps & {
   params: T;
 
   usagePush: (usages: ChatNodeUsageType[]) => void;
+  nodeSummary: NodeSummaryCollector;
 };
 
 export type SystemVariablesType = {
@@ -131,6 +136,22 @@ export type SystemVariablesType = {
   cTime: string;
 };
 
+/** 当前节点 callback 可向 queue 贡献的运行摘要增量。 */
+export type NodeSummary = Partial<WorkflowRuntimeSummaryFields>;
+
+/** 当前节点执行单元的摘要及其统一增量合并入口。 */
+export type NodeSummaryCollector = Omit<NodeSummary, 'llmInputTokens' | 'llmOutputTokens'> & {
+  llmInputTokens: number;
+  llmOutputTokens: number;
+  mergeNodeSummary: (summary?: NodeSummary) => void;
+};
+
+/**
+ * data/error 分别承载正常分支和错误分支的输出记录，不能用分支选择推断系统异常。
+ * rawError 独立保留原始异常，返回它时必须同时提供 error 输出；只有该字段参与异常分类和日志。
+ * 主动选择错误分支可以只返回 error，原始异常字段存在性兼容 throw undefined。
+ * 原始异常仅在请求运行期传递，详情、SSE 和恢复数据只保存展示文本。
+ */
 export type DispatchNodeResultType<
   T = Record<string, never>,
   ERR = {
@@ -141,8 +162,6 @@ export type DispatchNodeResultType<
   [DispatchNodeResponseKeyEnum.reasoningText]?: string;
   [DispatchNodeResponseKeyEnum.skipHandleId]?: string[]; // skip some edge handle id
   [DispatchNodeResponseKeyEnum.nodeResponse]?: DispatchNodeResponseType; // The node response detail
-  [DispatchNodeResponseKeyEnum.nodeResponses]?: ChatHistoryItemResType[]; // 内部 n 个节点平铺；dispatch/index 不会把自身节点混入这里
-  [DispatchNodeResponseKeyEnum.childrenResponses]?: DispatchNodeResultType[]; // Children node response
   [DispatchNodeResponseKeyEnum.toolResponse]?: ToolRunResponseItemType; // Tool response
   [DispatchNodeResponseKeyEnum.assistantResponses]?: AIChatItemValueItemType[]; // Assistant response(Store to db)
   [DispatchNodeResponseKeyEnum.rewriteHistories]?: ChatItemMiniType[];
@@ -152,11 +171,19 @@ export type DispatchNodeResultType<
   [DispatchNodeResponseKeyEnum.customFeedbacks]?: string[];
 
   data?: T;
-  error?: ERR & { [NodeOutputKeyEnum.errorText]?: string };
 
   /** @deprecated */
   [DispatchNodeResponseKeyEnum.nodeDispatchUsages]?: ChatNodeUsageType[]; // Node total usage
-};
+} & (
+  | {
+      rawError?: never;
+      error?: never;
+    }
+  | {
+      error: ERR & { [NodeOutputKeyEnum.errorText]?: string };
+      rawError?: unknown;
+    }
+);
 
 /* Single node props */
 export type AIChatNodeProps = {

@@ -12,7 +12,14 @@ export enum UserErrEnum {
   verifyCodeTooFrequently = 'verifyCodeTooFrequently',
   invalidAccount = 'invalidAccount',
   accountCancellationPending = 'accountCancellationPending',
-  registrationMethodNotSupported = 'registrationMethodNotSupported'
+  registrationMethodNotSupported = 'registrationMethodNotSupported',
+  passwordChangeAuthorizationInvalid = 'passwordChangeAuthorizationInvalid',
+  newPasswordSameAsOld = 'newPasswordSameAsOld',
+  oldPasswordError = 'oldPasswordError',
+  ssoPasswordUnavailable = 'ssoPasswordUnavailable',
+  verificationChannelUnavailable = 'verificationChannelUnavailable',
+  captchaRenderQueueFull = 'captchaRenderQueueFull',
+  captchaRenderQueueTimeout = 'captchaRenderQueueTimeout'
 }
 const errList = [
   {
@@ -59,6 +66,41 @@ const errList = [
     statusText: UserErrEnum.registrationMethodNotSupported,
     message: i18nT('common:error.registration_method_not_supported'),
     httpStatus: 403
+  },
+  {
+    statusText: UserErrEnum.passwordChangeAuthorizationInvalid,
+    message: 'Password change authorization is invalid',
+    httpStatus: 403
+  },
+  {
+    statusText: UserErrEnum.newPasswordSameAsOld,
+    message: i18nT('common:user.Password has no change'),
+    httpStatus: 400
+  },
+  {
+    statusText: UserErrEnum.ssoPasswordUnavailable,
+    message: i18nT('common:error.sso_password_unavailable'),
+    httpStatus: 403
+  },
+  {
+    statusText: UserErrEnum.verificationChannelUnavailable,
+    message: i18nT('common:error.verification_channel_unavailable'),
+    httpStatus: 403
+  },
+  {
+    statusText: UserErrEnum.oldPasswordError,
+    message: i18nT('common:user.Old password is error'),
+    httpStatus: 400
+  },
+  {
+    statusText: UserErrEnum.captchaRenderQueueFull,
+    message: i18nT('common:error.captcha_queue_full'),
+    httpStatus: 429
+  },
+  {
+    statusText: UserErrEnum.captchaRenderQueueTimeout,
+    message: i18nT('common:error.captcha_queue_timeout'),
+    httpStatus: 503
   }
 ];
 export default errList.reduce((acc, cur, index) => {

@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import type {
   EmbeddingModelConfigType,
-  EmbeddingSystemModelDataType,
+  EmbeddingModelDataType,
   LLMModelConfigType,
-  LLMSystemModelDataType
-} from '@fastgpt/global/core/ai/model.schema';
+  LLMModelDataType
+} from '@fastgpt/global/core/ai/model/schema';
 import {
   ChunkSettingModeEnum,
   DataChunkSplitModeEnum,
@@ -28,16 +28,13 @@ import {
 import type { ChunkSettingsType } from '@fastgpt/global/core/dataset/type';
 
 // Helper: Create mock LLM model
-const createMockLLMModel = (
-  overrides: Partial<LLMModelConfigType> = {}
-): LLMSystemModelDataType => ({
+const createMockLLMModel = (overrides: Partial<LLMModelConfigType> = {}): LLMModelDataType => ({
   type: ModelTypeEnum.llm,
   provider: 'test-provider',
   model: 'test-model',
   name: 'Test Model',
   modelId: '68ad85a7463006c963799a01',
   scope: 'system' as const,
-  isCustom: false,
   config: {
     maxContext: 8000,
     maxResponse: 2000,
@@ -51,14 +48,13 @@ const createMockLLMModel = (
 // Helper: Create mock Embedding model
 const createMockEmbeddingModel = (
   overrides: Partial<EmbeddingModelConfigType> = {}
-): EmbeddingSystemModelDataType => ({
+): EmbeddingModelDataType => ({
   type: ModelTypeEnum.embedding,
   provider: 'test-provider',
   model: 'test-embedding',
   name: 'Test Embedding',
   modelId: '68ad85a7463006c963799a02',
   scope: 'system' as const,
-  isCustom: false,
   config: {
     defaultToken: 512,
     maxToken: 1024,
@@ -280,6 +276,37 @@ describe('computedCollectionChunkSettings', () => {
 
       expect(result.chunkSplitMode).toBe(DataChunkSplitModeEnum.paragraph);
       expect(result.paragraphChunkAIMode).toBe(ParagraphChunkAIModeEnum.forbid);
+    });
+  });
+
+  describe('intelligent chunkSettingMode', () => {
+    // intelligent 不做参数兜底:UI 选智能分块时会完整发送 auto 参数档,chunkSize/indexSize 直接采用请求值
+    // (chunkSize 作为外部分块服务的 chunk_sizes.text,indexSize 用于给分块结果建索引)。
+    it('keeps request-sent chunkSize/indexSize instead of forcing the auto profile', () => {
+      const result = computedCollectionChunkSettings<ChunkSettingsType>({
+        chunkSettingMode: ChunkSettingModeEnum.intelligent,
+        chunkSplitMode: DataChunkSplitModeEnum.paragraph,
+        paragraphChunkDeep: 5,
+        chunkSize: 1000,
+        indexSize: 512,
+        llmModel: defaultLLMModel,
+        vectorModel: defaultVectorModel
+      });
+
+      expect(result.chunkSize).toBe(1000);
+      expect(result.indexSize).toBe(512);
+      expect(result.chunkSplitter).toBeUndefined();
+    });
+
+    it('clamps chunkSize by the LLM max like custom mode', () => {
+      const result = computedCollectionChunkSettings<ChunkSettingsType>({
+        chunkSettingMode: ChunkSettingModeEnum.intelligent,
+        chunkSize: 99999,
+        llmModel: defaultLLMModel,
+        vectorModel: defaultVectorModel
+      });
+
+      expect(result.chunkSize).toBe(getLLMMaxChunkSize(defaultLLMModel));
     });
   });
 

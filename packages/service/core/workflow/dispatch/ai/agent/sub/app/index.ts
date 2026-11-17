@@ -1,16 +1,15 @@
 import type { DispatchSubAppResponse } from '../../type';
-import { authAppByTmbId } from '../../../../../../../support/permission/app/auth';
-import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
-import { getAppVersionById } from '../../../../../../../core/app/version/controller';
+import { createSystemToolResourceContext } from '../../../../../resource/context';
+import { loadChildWorkflowWithResource } from '../../../../../resource/service';
 import { getUserChatInfo } from '../../../../../../../support/user/team/utils';
-import { runWorkflow } from '../../../../../../../core/workflow/dispatch';
+import { runWorkflow, type RunWorkflowProps } from '../../../../../../../core/workflow/dispatch';
 import {
   getWorkflowEntryNodeIds,
   rewriteNodeOutputByHistories,
   storeEdges2RuntimeEdges,
   storeNodes2RuntimeNodes
 } from '@fastgpt/global/core/workflow/runtime/utils';
-import { chats2GPTMessages, chatValue2RuntimePrompt } from '@fastgpt/global/core/chat/adapt';
+import { chatValue2RuntimePrompt } from '@fastgpt/global/core/chat/adapt';
 import {
   FlowNodeInputTypeEnum,
   FlowNodeTypeEnum
@@ -20,8 +19,6 @@ import {
   filterWorkflowToolInputVariables,
   getWorkflowToolInputsFromStoreNodes
 } from '@fastgpt/global/core/app/tool/workflowTool/utils';
-import { appData2FlowNodeIO } from '@fastgpt/global/core/workflow/utils';
-import type { RunWorkflowProps } from '../../../../../../../core/workflow/dispatch';
 import { SystemToolRepo } from '../../../../../../app/tool/systemTool/systemTool.repo';
 import { anyValueDecrypt } from '../../../../../../../common/secret/utils';
 import {
@@ -29,13 +26,17 @@ import {
   getWorkflowFileVariableInputs,
   WorkflowVariableState
 } from '../../../../utils/variables';
-import { getRuntimeNodeResponseSummary } from '../../../../utils';
-import { ChatRoleEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { getWorkflowRuntimeSummary, runtimeSummaryToNodeSummary } from '../../../../utils/summary';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { runChildAppWorkflow } from '../../../../child/runApp';
 import { runWithDerivedWorkflowFileContext } from '../../../../../utils/context';
+import { WorkflowMemoryState } from '../../../../../memory/state';
 import {
   computedAppToolUsage,
+  getAppToolOwnUsage,
   getAppToolOutputError
 } from '../../../../../../app/tool/runtime/utils';
+import { MODERATION_BLOCKED_REPLACE_TEXT } from '@fastgpt/global/core/plugin/moderation/constants';
 
 type Props = Pick<
   RunWorkflowProps,
@@ -58,7 +59,9 @@ type Props = Pick<
   | 'nodeResponseSink'
   | 'nodeResponseParentId'
   | 'variableState'
+  | 'memoryState'
   | 'lastInteractive'
+  | 'query'
 > & {
   app: {
     name: string;
@@ -74,133 +77,40 @@ type Props = Pick<
 };
 
 export const dispatchApp = async (props: Props): Promise<DispatchSubAppResponse> => {
-  const {
-    runningAppInfo,
-    runningUserInfo,
-    app,
-    variableState,
-    customAppVariables,
-    userChatInput,
-    ...data
-  } = props;
+  const { app, customAppVariables, userChatInput, ...data } = props;
+  const { flowUsages, workflowInteractiveResponse, resolvedVariables, text, runtimeSummary } =
+    await runChildAppWorkflow({
+      ...data,
+      lastInteractive: props.lastInteractive,
+      appId: app.id,
+      versionId: app.version,
+      resourceType: 'tool',
+      userChatInput,
+      rawVariables: customAppVariables
+    });
 
-  // Auth the app by tmbId(Not the user, but the workflow user)
-  const { app: appData } = await authAppByTmbId({
-    appId: app.id,
-    tmbId: runningAppInfo.tmbId,
-    per: ReadPermissionVal
-  });
-  const { nodes, edges, chatConfig } = await getAppVersionById({
-    appId: app.id,
-    versionId: app.version,
-    app: appData
-  });
-  const workflowToolVariables = filterWorkflowToolInputVariables({
-    inputs: appData2FlowNodeIO({ chatConfig }).inputs,
-    variables: customAppVariables
-  });
-
-  // Rewrite children app variables
-  const { externalProvider } = await getUserChatInfo(appData.tmbId);
-  const childRunningAppInfo = {
-    sourceType: ChatSourceTypeEnum.app,
-    sourceId: String(appData._id),
-    teamId: String(appData.teamId),
-    tmbId: String(appData.tmbId),
-    name: appData.name,
-    isChildApp: true
-  };
-  const runtimeNodes = rewriteNodeOutputByHistories(
-    storeNodes2RuntimeNodes(nodes, getWorkflowEntryNodeIds(nodes))
-  );
-  const runtimeEdges = storeEdges2RuntimeEdges(edges);
-
-  const {
-    assistantResponses,
-    flowUsages,
-    runtimeNodeResponseSummary,
-    workflowInteractiveResponse
-  } = await runWithDerivedWorkflowFileContext({
-    files: getWorkflowFileVariableInputs({
-      variablesConfig: chatConfig.variables ?? [],
-      inputVariables: workflowToolVariables
-    }),
-    fn: async ({ resolveInputFile }) => {
-      const childrenVariableState = await WorkflowVariableState.create({
-        timezone: data.timezone,
-        runningAppInfo: childRunningAppInfo,
-        chatId: data.chatId,
-        responseChatItemId: data.responseChatItemId,
-        histories: [],
-        uid: data.uid,
-        variablesConfig: chatConfig.variables ?? [],
-        inputVariables: workflowToolVariables,
-        externalVariables: externalProvider?.externalWorkflowVariables,
-        sourceVariableState: variableState,
-        resolveInputFile
-      });
-
-      return runWorkflow({
-        ...data,
-        runningAppInfo: {
-          sourceType: ChatSourceTypeEnum.app,
-          sourceId: String(appData._id),
-          name: appData.name,
-          teamId: String(appData.teamId),
-          tmbId: String(appData.tmbId),
-          isChildApp: true
-        },
-        runningUserInfo,
-        runtimeNodes,
-        runtimeEdges,
-        chatConfig,
-        histories: [],
-        variableState: childrenVariableState,
-        isToolCall: true,
-        query: [
-          {
-            text: {
-              content: userChatInput
-            }
-          }
-        ],
-        stream: false,
-        workflowStreamResponse: undefined
-      });
-    }
-  });
-
-  const { text } = chatValue2RuntimePrompt(assistantResponses);
-  const runtimeSummary = getRuntimeNodeResponseSummary({
-    runtimeNodeResponseSummary
-  });
-
+  // AgentV2 子应用固定关闭 stream；子流程 transcript 不属于父 Agent 的上下文，
+  // 仅通过 response/nodeResponse/usage/interactive 返回，避免 child answer 被重复拼入最终回答。
+  const hasModerationBlock = !!runtimeSummary.hasModerationBlock;
+  const finalText = hasModerationBlock ? MODERATION_BLOCKED_REPLACE_TEXT : text;
   return {
-    response: text,
-    ...(runtimeSummary.hasError
+    response: finalText,
+    ...(!hasModerationBlock && !!runtimeSummary.errorCount
       ? { errorMessage: runtimeSummary.errorText || 'Run workflow failed' }
       : {}),
-    assistantMessages: chats2GPTMessages({
-      messages: [
-        {
-          obj: ChatRoleEnum.AI,
-          value: assistantResponses
-        }
-      ],
-      reserveId: false,
-      reserveTool: true
-    }),
     usages: flowUsages,
+    nodeSummary: runtimeSummaryToNodeSummary(runtimeSummary),
     interactive: workflowInteractiveResponse,
     nodeResponse: {
       moduleType: FlowNodeTypeEnum.appModule,
       moduleName: app.name,
       moduleLogo: app.avatar,
+      totalPoints: 0,
       toolInput: {
         userChatInput,
-        ...workflowToolVariables
+        ...resolvedVariables
       },
-      toolRes: text,
+      toolRes: finalText,
       childResponseCount: runtimeSummary.childResponseCount
     }
   };
@@ -216,59 +126,69 @@ export const dispatchPlugin = async (props: Props): Promise<DispatchSubAppRespon
     userChatInput,
     ...data
   } = props;
+  const memoryState = WorkflowMemoryState.fromWorkflow(props);
   // plugin 子应用不接收普通 userChatInput；这里解构只为了避免透传给 runWorkflow。
   void userChatInput;
 
-  const { nodes, edges, chatConfig, childAppInfo, externalProviderTmbId, billingTool } =
-    await (async () => {
-      if (app.systemToolId) {
-        const systemToolRuntime = await SystemToolRepo.getInstance().getSystemToolWorkflowRuntime({
-          pluginId: app.systemToolId,
-          version: app.version
-        });
-
-        return {
-          nodes: systemToolRuntime.nodes,
-          edges: systemToolRuntime.edges,
-          chatConfig: systemToolRuntime.chatConfig ?? {},
-          childAppInfo: {
-            sourceId: systemToolRuntime.id,
-            teamId: systemToolRuntime.teamId,
-            tmbId: systemToolRuntime.tmbId,
-            name: systemToolRuntime.name
-          },
-          // 系统 Workflow 没有调用者可访问的 App 记录，沿用当前工作流的用户上下文。
-          externalProviderTmbId: systemToolRuntime.tmbId ?? runningAppInfo.tmbId,
-          billingTool: systemToolRuntime
-        };
-      }
-
-      // Personal plugin 必须以当前 workflow user 做 App 权限校验。
-      const { app: appData } = await authAppByTmbId({
-        appId: app.id,
-        tmbId: runningAppInfo.tmbId,
-        per: ReadPermissionVal
-      });
-      const appVersion = await getAppVersionById({
-        appId: app.id,
-        versionId: app.version,
-        app: appData
+  const {
+    nodes,
+    edges,
+    chatConfig,
+    childAppInfo,
+    externalProviderTmbId,
+    billingTool,
+    resourceContext
+  } = await (async () => {
+    if (app.systemToolId) {
+      const systemToolRuntime = await SystemToolRepo.getInstance().getSystemToolWorkflowRuntime({
+        pluginId: app.systemToolId,
+        version: app.version
       });
 
       return {
-        nodes: appVersion.nodes,
-        edges: appVersion.edges,
-        chatConfig: appVersion.chatConfig,
+        nodes: systemToolRuntime.nodes,
+        edges: systemToolRuntime.edges,
+        chatConfig: systemToolRuntime.chatConfig ?? {},
         childAppInfo: {
-          sourceId: String(appData._id),
-          teamId: appData.teamId,
-          tmbId: appData.tmbId,
-          name: appData.name
+          sourceId: systemToolRuntime.id,
+          teamId: systemToolRuntime.teamId,
+          tmbId: systemToolRuntime.tmbId,
+          name: systemToolRuntime.name
         },
-        externalProviderTmbId: appData.tmbId,
-        billingTool: undefined
+        // 系统 Workflow 没有调用者可访问的 App 记录，沿用当前工作流的用户上下文。
+        externalProviderTmbId: systemToolRuntime.tmbId ?? runningAppInfo.tmbId,
+        billingTool: systemToolRuntime,
+        // 系统工具由管理员发布：内部静态资源直接写入快照免鉴权，未命中快照的资源仍按运行人鉴权。
+        resourceContext: createSystemToolResourceContext({
+          nodes: systemToolRuntime.nodes,
+          chatConfig: systemToolRuntime.chatConfig
+        })
       };
-    })();
+    }
+
+    // 个人工具按资源快照或运行人校验 App 权限，并切换到工具自身的 Version 快照。
+    const { appData, childVersion, resourceContext } = await loadChildWorkflowWithResource({
+      appId: app.id,
+      versionId: app.version,
+      tmbId: runningUserInfo.tmbId,
+      type: 'tool'
+    });
+
+    return {
+      nodes: childVersion.nodes,
+      edges: childVersion.edges,
+      chatConfig: childVersion.chatConfig,
+      childAppInfo: {
+        sourceId: String(appData._id),
+        teamId: appData.teamId,
+        tmbId: appData.tmbId,
+        name: appData.name
+      },
+      externalProviderTmbId: appData.tmbId,
+      billingTool: undefined,
+      resourceContext
+    };
+  })();
   const pluginInputs = getWorkflowToolInputsFromStoreNodes(nodes);
   const workflowToolVariables = filterWorkflowToolInputVariables({
     inputs: pluginInputs,
@@ -315,10 +235,12 @@ export const dispatchPlugin = async (props: Props): Promise<DispatchSubAppRespon
   const {
     assistantResponses = [],
     flowUsages,
-    runtimeNodeResponseSummary,
-    workflowInteractiveResponse
+    workflowRuntimeSummary,
+    workflowInteractiveResponse,
+    system_memories
   } = await runWithDerivedWorkflowFileContext({
     files: childFileInputs,
+    resourceContext,
     fn: async ({ resolveInputFile, filterFiles }) => {
       const childrenVariableState = await WorkflowVariableState.create({
         timezone: data.timezone,
@@ -334,81 +256,80 @@ export const dispatchPlugin = async (props: Props): Promise<DispatchSubAppRespon
         resolveInputFile
       });
       const runtimeVariables = childrenVariableState.toRuntimeRecord();
-      const runtimeNodes = storeNodes2RuntimeNodes(nodes, getWorkflowEntryNodeIds(nodes)).map(
-        (node) => {
-          // Update plugin input value
-          if (node.flowNodeType === FlowNodeTypeEnum.pluginInput) {
-            return {
-              ...node,
-              showStatus: false,
-              inputs: node.inputs.map((input) => {
-                const hasExternalValue = Object.prototype.hasOwnProperty.call(
-                  workflowToolVariables,
-                  input.key
-                );
-                let val = hasExternalValue ? workflowToolVariables[input.key] : input.value;
-                val ??= input.defaultValue;
-                if (input.renderTypeList.includes(FlowNodeInputTypeEnum.password)) {
-                  val = anyValueDecrypt(val);
-                } else if (
-                  input.renderTypeList.includes(FlowNodeInputTypeEnum.fileSelect) &&
-                  Array.isArray(val)
-                ) {
-                  val = filterFiles(val);
-                  if (hasExternalValue) {
-                    workflowToolVariables[input.key] = val.map((item: any) =>
-                      typeof item === 'string' ? item : item.url
-                    );
-                  }
-                }
-
-                return {
-                  ...input,
-                  value: val
-                };
-              })
-            };
-          }
+      const restoredRuntimeNodes = rewriteNodeOutputByHistories(
+        storeNodes2RuntimeNodes(nodes, getWorkflowEntryNodeIds(nodes, data.lastInteractive)),
+        data.lastInteractive
+      );
+      const runtimeNodes = restoredRuntimeNodes.map((node) => {
+        // Update plugin input value
+        if (node.flowNodeType === FlowNodeTypeEnum.pluginInput) {
           return {
             ...node,
-            showStatus: false
+            showStatus: false,
+            inputs: node.inputs.map((input) => {
+              const hasExternalValue = Object.prototype.hasOwnProperty.call(
+                workflowToolVariables,
+                input.key
+              );
+              let val = hasExternalValue ? workflowToolVariables[input.key] : input.value;
+              val ??= input.defaultValue;
+              if (input.renderTypeList.includes(FlowNodeInputTypeEnum.password)) {
+                val = anyValueDecrypt(val);
+              } else if (
+                input.renderTypeList.includes(FlowNodeInputTypeEnum.fileSelect) &&
+                Array.isArray(val)
+              ) {
+                val = filterFiles(val);
+                if (hasExternalValue) {
+                  workflowToolVariables[input.key] = val.map((item: any) =>
+                    typeof item === 'string' ? item : item.url
+                  );
+                }
+              }
+
+              return {
+                ...input,
+                value: val
+              };
+            })
           };
         }
-      );
+        return {
+          ...node,
+          showStatus: false
+        };
+      });
+      const childMemoryState = memoryState.fork(`app:${childRunningAppInfo.sourceId}`);
 
       return runWorkflow({
         ...data,
-        runningAppInfo: {
-          sourceType: ChatSourceTypeEnum.app,
-          sourceId: childAppInfo.sourceId,
-          // 如果系统插件有 teamId 和 tmbId，则使用系统插件的 teamId 和 tmbId（管理员指定了插件作为系统插件）
-          name: childAppInfo.name,
-          teamId: childAppInfo.teamId || runningAppInfo.teamId,
-          tmbId: childAppInfo.tmbId || runningAppInfo.tmbId,
-          isChildApp: true
-        },
+        memoryState: childMemoryState,
+        runningAppInfo: childRunningAppInfo,
         runningUserInfo,
         runtimeNodes,
-        runtimeEdges: storeEdges2RuntimeEdges(edges),
+        runtimeEdges: storeEdges2RuntimeEdges(edges, data.lastInteractive),
         chatConfig,
         histories: [],
         variableState: childrenVariableState,
         isToolCall: true,
-        query: serverGetWorkflowToolRunUserQuery({
-          pluginInputs,
-          variables: {
-            ...runtimeVariables,
-            ...workflowToolVariables
-          }
-        }).value,
+        query: data.lastInteractive
+          ? data.query
+          : serverGetWorkflowToolRunUserQuery({
+              pluginInputs,
+              variables: {
+                ...runtimeVariables,
+                ...workflowToolVariables
+              }
+            }).value,
         stream: false,
         workflowStreamResponse: undefined
       });
     }
   });
+  memoryState.merge(system_memories);
 
-  const runtimeSummary = getRuntimeNodeResponseSummary({
-    runtimeNodeResponseSummary
+  const runtimeSummary = getWorkflowRuntimeSummary({
+    workflowRuntimeSummary
   });
   const pluginOutput = runtimeSummary.pluginOutput;
   const pluginOutputError = billingTool
@@ -423,54 +344,76 @@ export const dispatchPlugin = async (props: Props): Promise<DispatchSubAppRespon
           return acc;
         }, {})
     : undefined;
-  const response = filteredPluginOutput
-    ? JSON.stringify(
-        pluginOutputError
-          ? { ...filteredPluginOutput, error: pluginOutputError }
-          : filteredPluginOutput
-      )
-    : workflowInteractiveResponse
-      ? assistantText
-      : 'Run workflow tool failed';
-  const errorMessage = runtimeSummary.hasError
-    ? runtimeSummary.errorText || 'Run workflow tool failed'
-    : !pluginOutput
-      ? 'Run workflow tool failed'
-      : pluginOutputError;
+  const hasModerationBlock = !!runtimeSummary.hasModerationBlock;
+  const response = hasModerationBlock
+    ? MODERATION_BLOCKED_REPLACE_TEXT
+    : filteredPluginOutput
+      ? JSON.stringify(
+          pluginOutputError
+            ? { ...filteredPluginOutput, error: pluginOutputError }
+            : filteredPluginOutput
+        )
+      : workflowInteractiveResponse
+        ? assistantText
+        : 'Run workflow tool failed';
+  const errorMessage = hasModerationBlock
+    ? undefined
+    : !!runtimeSummary.errorCount
+      ? runtimeSummary.errorText || 'Run workflow tool failed'
+      : !pluginOutput
+        ? 'Run workflow tool failed'
+        : pluginOutputError;
+  const usagePoints = billingTool
+    ? await computedAppToolUsage({
+        plugin: billingTool,
+        childrenUsage: flowUsages,
+        error: !!errorMessage
+      })
+    : flowUsages.reduce((sum, usage) => sum + usage.totalPoints, 0);
+  const ownUsagePoints = billingTool
+    ? getAppToolOwnUsage({ plugin: billingTool, error: !!errorMessage })
+    : 0;
+  const childUsagePoints = Math.max(0, usagePoints - ownUsagePoints);
+  const runtimeNodeSummary = runtimeSummaryToNodeSummary(
+    app.systemToolId
+      ? {
+          ...runtimeSummary,
+          // System workflow internals are invisible to the caller and must not affect its
+          // user-facing LLM token summary.
+          llmInputTokens: 0,
+          llmOutputTokens: 0
+        }
+      : runtimeSummary
+  );
+  const nodeSummary = (() => {
+    const summary = { ...runtimeNodeSummary };
+    delete summary.totalPoints;
+    if (childUsagePoints) summary.totalPoints = childUsagePoints;
+    return Object.keys(summary).length > 0 ? summary : undefined;
+  })();
   const usages = billingTool
     ? [
         {
           moduleName: app.name,
-          totalPoints: await computedAppToolUsage({
-            plugin: billingTool,
-            childrenUsage: flowUsages,
-            error: !!errorMessage
-          })
+          totalPoints: usagePoints
         }
       ]
     : flowUsages;
 
+  // AgentV2 插件子流程同样固定关闭 stream，不把 child transcript 透传给父 Agent。
   return {
     response,
     ...(errorMessage ? { errorMessage } : {}),
-    assistantMessages: chats2GPTMessages({
-      messages: [
-        {
-          obj: ChatRoleEnum.AI,
-          value: assistantResponses
-        }
-      ],
-      reserveId: false,
-      reserveTool: true
-    }),
     usages,
+    nodeSummary,
     interactive: workflowInteractiveResponse,
     nodeResponse: {
       moduleType: FlowNodeTypeEnum.pluginModule,
       moduleName: app.name,
       moduleLogo: app.avatar,
+      totalPoints: ownUsagePoints,
       toolInput: workflowToolVariables,
-      toolRes: pluginOutput || {},
+      toolRes: hasModerationBlock ? MODERATION_BLOCKED_REPLACE_TEXT : pluginOutput || {},
       childResponseCount: runtimeSummary.childResponseCount,
       ...(errorMessage ? { errorText: errorMessage } : {})
     }

@@ -1,27 +1,41 @@
+import { loadWorkflowSkillResources } from '../../../../../resource/service';
 import type { AgentInputFile } from '../../adapter/userContext';
 import type { BuiltinSkillSource } from '@fastgpt/global/core/ai/skill/runtime/builtin';
 import type { SelectedAgentSkillItemType } from '@fastgpt/global/core/app/formEdit/type';
 import {
   type DeployedSkillInfo,
-  type DeployedSkillVersion,
+  type DeployedSkillVersion
+} from '../../../../../../ai/sandbox/application/runtime/skill/types';
+import {
   getAgentSkillInfos,
+  injectAgentSkillFilesToSandbox
+} from '../../../../../../ai/sandbox/application/runtime/skill/core';
+import {
   getBuiltinSkillsRootPath,
-  injectAgentSkillFilesToSandbox,
+  syncBuiltinSkillsToSandbox
+} from '../../../../../../ai/sandbox/application/runtime/skill/builtin';
+import {
   injectCurrentInputFiles,
-  prepareAgentSandboxRuntime,
   preparePackageMirrors,
   prepareSandbox,
-  resolveSandboxHome,
-  runAgentSkillVersionEntrypoints,
-  runSandboxEntrypoint,
-  syncBuiltinSkillsToSandbox,
-  withAgentSandboxInitLease,
-  type SandboxClient,
   type SandboxPrepareContext,
   type SandboxPrepareStep
-} from '../../../../../../ai/sandbox/interface/runtime';
+} from '../../../../../../ai/sandbox/application/runtime/prepare';
+import { prepareAgentSandboxRuntime } from '../../../../../../ai/sandbox/application/runtime';
+import { resolveSandboxHome } from '../../../../../../ai/sandbox/application/runtime/home';
+import { runAgentSkillVersionEntrypoints } from '../../../../../../ai/sandbox/application/runtime/skill/entrypoint';
+import {
+  runSandboxEntrypoint,
+  withAgentSandboxInitLease
+} from '../../../../../../ai/sandbox/application/runtime/entrypoint';
+import { type SandboxClient } from '../../../../../../ai/sandbox/application/runtime/client';
+import {
+  buildSandboxInputFileScopeKey,
+  getSandboxInputFileNameAllocation
+} from '../../../../../../ai/sandbox/utils';
+import { getRunningSandboxId } from '../../../../../../ai/sandbox/utils/id';
 import type { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
-import { readWorkflowFileBuffer } from '../../../../../utils/context';
+import { readWorkflowFileBuffer, WorkflowContext } from '../../../../../utils/context';
 
 export type AgentSandboxPrepareContext = SandboxPrepareContext & {
   sandboxClient: SandboxClient;
@@ -37,10 +51,10 @@ type EnsureAgentSandboxRuntimeParams = {
   sourceId: string;
   userId: string;
   chatId: string;
-  teamId: string;
   tmbId: string;
   needSandboxRuntime: boolean;
   sandboxEntrypoint?: string;
+  sandboxEntrypointScope: string;
   skillIds: string[];
   selectedSkills?: SelectedAgentSkillItemType[];
   editSkillId?: string;
@@ -64,10 +78,10 @@ export async function ensureAgentSandboxRuntime({
   sourceId,
   userId,
   chatId,
-  teamId,
   tmbId,
   needSandboxRuntime,
   sandboxEntrypoint,
+  sandboxEntrypointScope,
   skillIds,
   selectedSkills,
   editSkillId,
@@ -80,25 +94,39 @@ export async function ensureAgentSandboxRuntime({
     };
   }
 
-  const sandboxContext = await prepareAgentSandboxRuntime({
+  const readInputFile = (url: string) => readWorkflowFileBuffer({ url });
+  const workflowSandboxContext = WorkflowContext.getStore()?.sandboxContext;
+  const scopeKey = buildSandboxInputFileScopeKey({
     sourceType,
     sourceId,
     userId,
     chatId
   });
-  const readInputFile = (url: string) => readWorkflowFileBuffer({ url });
-  const preparedContext = await withAgentSandboxInitLease({
-    sandboxId: sandboxContext.sandboxClient.getSandboxId(),
-    fn: () => {
+  return withAgentSandboxInitLease({
+    sandboxId: getRunningSandboxId({ sourceType, sourceId, userId }),
+    fn: async () => {
+      const sandboxContext = await prepareAgentSandboxRuntime({
+        sourceType,
+        sourceId,
+        userId,
+        chatId
+      });
+      const inputFileAllocation = getSandboxInputFileNameAllocation({
+        scopeKey,
+        contextOwner: workflowSandboxContext,
+        sandbox: sandboxContext.sandboxClient.provider,
+        workDirectory: sandboxContext.workDirectory
+      });
       const context = {
         ...sandboxContext,
         sandbox: sandboxContext.sandboxClient.provider,
+        inputFileAllocation,
         deployedSkillVersions: [],
         skillInfos: [],
         skillScanDirectories: []
       };
 
-      return editSkillId
+      const preparedContext = await (editSkillId
         ? prepareSandbox(
             context,
             preparePackageMirrors(),
@@ -109,21 +137,25 @@ export async function ensureAgentSandboxRuntime({
         : prepareSandbox(
             context,
             preparePackageMirrors(),
-            injectSelectedSkillFiles({ teamId, tmbId, skillIds, selectedSkills }),
+            injectSelectedSkillFiles({
+              tmbId,
+              skillIds,
+              selectedSkills
+            }),
             injectCurrentInputFiles(currentFiles, readInputFile),
             ...prepareActions,
-            runSandboxEntrypoint({ sandboxEntrypoint }),
+            runSandboxEntrypoint({ sandboxEntrypoint, scope: sandboxEntrypointScope }),
             runSelectedSkillEntrypoints(),
             scanSelectedSkillInfos()
-          );
+          ));
+
+      return {
+        sandboxClient: sandboxContext.sandboxClient,
+        currentWorkingDirectory: sandboxContext.workDirectory,
+        skillInfos: preparedContext.skillInfos
+      };
     }
   });
-
-  return {
-    sandboxClient: sandboxContext.sandboxClient,
-    currentWorkingDirectory: sandboxContext.workDirectory,
-    skillInfos: preparedContext.skillInfos
-  };
 }
 
 /**
@@ -176,22 +208,19 @@ const scanEditDebugSkillInfos = (): AgentSandboxPrepareStep => async (context) =
 
 const injectSelectedSkillFiles =
   ({
-    teamId,
     tmbId,
     skillIds,
     selectedSkills
   }: {
-    teamId: string;
     tmbId: string;
     skillIds: string[];
     selectedSkills?: SelectedAgentSkillItemType[];
   }): AgentSandboxPrepareStep =>
   async (context) => {
+    const skills = await loadWorkflowSkillResources({ skillIds, tmbId });
     const deployedSkillVersions = await injectAgentSkillFilesToSandbox({
       sandbox: context.sandbox,
-      teamId,
-      tmbId,
-      skillIds,
+      skills,
       workDirectory: context.workspaceRoot ?? context.workDirectory
     });
     const selectedSkillMap = new Map(selectedSkills?.map((skill) => [skill.skillId, skill]) || []);

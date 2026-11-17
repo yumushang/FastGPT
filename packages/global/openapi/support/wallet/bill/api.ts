@@ -11,7 +11,7 @@ import {
   SubModeEnum,
   SubTypeEnum
 } from '../../../../support/wallet/sub/constants';
-import { PaginationResponseSchema, PaginationSchema } from '../../../api';
+import { PaginationResponseSchema, createPaginationSchema } from '../../../api';
 import { CouponTypeEnum } from '../../../../support/wallet/sub/coupon/constants';
 
 /* ============================================================================
@@ -87,11 +87,14 @@ export const BillItemSchema = z
 export type BillItemType = z.infer<typeof BillItemSchema>;
 
 // Bill list
-export const BillListQuerySchema = PaginationSchema.extend({
-  type: z.enum(BillTypeEnum).optional().meta({
-    example: BillTypeEnum.standSubPlan,
-    description: '订单类型筛选'
-  })
+export const BillListQuerySchema = createPaginationSchema({
+  type: z
+    .union([z.enum(BillTypeEnum), z.literal('other')])
+    .optional()
+    .meta({
+      example: BillTypeEnum.standSubPlan,
+      description: '订单类型筛选；other 表示套餐订阅、AI 积分套餐、知识库扩容之外的所有类型'
+    })
 }).meta({ description: '订单列表筛选和分页参数' });
 export type GetBillListQueryType = z.infer<typeof BillListQuerySchema>;
 export const BillListResponseSchema = PaginationResponseSchema(BillItemSchema).meta({

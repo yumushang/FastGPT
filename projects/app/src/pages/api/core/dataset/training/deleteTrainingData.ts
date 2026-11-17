@@ -1,3 +1,4 @@
+import { deleteDatasetData } from '@/service/core/dataset/data/data';
 import { ManagePermissionVal } from '@fastgpt/global/support/permission/constant';
 import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
@@ -11,15 +12,19 @@ import {
   DeleteTrainingDataResponseSchema,
   type DeleteTrainingDataResponse
 } from '@fastgpt/global/openapi/core/dataset/training/api';
-import { isDatasetSynonymEnabled } from '@fastgpt/service/core/dataset/synonym/entity';
+import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
+import { DatasetAuditEventEnum } from '@fastgpt/global/core/dataset/audit/constants/event';
+import { DatasetDataIndexStatusEnum } from '@fastgpt/global/core/dataset/data/constants';
+import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 
+/** 删除训练任务；重建任务同时删除原始数据及其索引，首次训练维持原有取消行为。 */
 async function handler(req: ApiRequestProps): Promise<DeleteTrainingDataResponse> {
   const { collectionId, dataId } = parseApiInput({
     req,
     bodySchema: DeleteTrainingDataBodySchema
   }).body;
 
-  const { collection } = await authDatasetCollection({
+  const { collection, teamId, tmbId } = await authDatasetCollection({
     req,
     authToken: true,
     authApiKey: true,
@@ -33,25 +38,74 @@ async function handler(req: ApiRequestProps): Promise<DeleteTrainingDataResponse
     collectionId: collection._id,
     _id: dataId
   };
-  if (!isDatasetSynonymEnabled()) {
-    await MongoDatasetTraining.deleteOne(trainingMatch);
-    return DeleteTrainingDataResponseSchema.parse(undefined);
-  }
-
-  await mongoSessionRun(async (session) => {
+  const deleted = await mongoSessionRun(async (session) => {
     const training = await MongoDatasetTraining.findOne(trainingMatch).session(session);
-    if (training?.dataId && training.synonymVersion) {
+    if (!training) return false;
+
+    // 索引重建
+    // 同义词重建
+    if (
+      [TrainingModeEnum.rebuildIndex, TrainingModeEnum.rebuildSynonym].includes(training.mode) &&
+      training.dataId
+    ) {
+      // 关联数据必须属于已鉴权集合；读取和删除共用事务，避免工作线程完成提交后误用旧索引。
+      const data = await MongoDatasetData.findOne({
+        _id: training.dataId,
+        teamId: collection.teamId,
+        datasetId: collection.datasetId,
+        collectionId: collection._id
+      })
+        .session(session)
+        .lean();
+      if (data) {
+        await deleteDatasetData(
+          {
+            ...data,
+            id: String(data._id)
+          },
+          session
+        );
+      }
+      await MongoDatasetTraining.deleteOne(trainingMatch, { session });
+      return true;
+    }
+
+    // 新建的
+    if (training.dataId) {
       await MongoDatasetData.updateOne(
         {
           _id: training.dataId,
-          synonymRebuildingVersion: training.synonymVersion
+          teamId: collection.teamId,
+          datasetId: collection.datasetId,
+          collectionId: collection._id,
+          indexStatus: DatasetDataIndexStatusEnum.indexing
         },
-        { $unset: { synonymRebuildingVersion: '' } },
+        {
+          $set: {
+            indexStatus: DatasetDataIndexStatusEnum.error,
+            indexErrorMsg: 'Training task deleted'
+          }
+        },
         { session }
       );
     }
+
     await MongoDatasetTraining.deleteOne(trainingMatch, { session });
+    return true;
   });
+
+  // 没有实际删除记录时不写审计，避免重复点击产生空日志。
+  if (deleted) {
+    addAuditLog({
+      tmbId,
+      teamId: String(teamId),
+      event: DatasetAuditEventEnum.DATASET_TRAINING_RECORD_DELETE,
+      params: {
+        datasetName: collection.dataset.name,
+        collectionName: collection.name
+      }
+    });
+  }
 
   return DeleteTrainingDataResponseSchema.parse(undefined);
 }

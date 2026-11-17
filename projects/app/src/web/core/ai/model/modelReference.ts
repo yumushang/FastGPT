@@ -1,59 +1,64 @@
 import type { MyModelItemType } from '@fastgpt/global/openapi/core/ai/model/api';
+import { isEmptyModelValue } from '@fastgpt/global/core/ai/model/reference';
+import { isSystemModel } from '@fastgpt/global/core/ai/model/utils';
 
 type ClientModelReference = {
-  modelId?: string;
-  model?: string;
+  modelId?: string | null;
+  model?: string | null;
+};
+
+type ClientModelCandidate = Pick<MyModelItemType, 'modelId' | 'model'> & {
+  scope?: string;
+  isSystem?: boolean;
+  tmbId?: unknown;
 };
 
 /**
- * 解析同时兼容 modelId 与旧 model 的单个选择值。先全量匹配 modelId，再匹配旧 model，
- * 避免某个模型的旧名称与另一个模型的稳定 ID 相同时产生歧义。
+ * 解析同时兼容 modelId 与旧 model 的单个选择值。先全量匹配 modelId，再在系统模型内匹配旧 model，
+ * 避免某个模型的旧名称与另一个模型的稳定 ID 相同时产生歧义，也不误命中团队模型。
  */
-export const findClientModelByValue = <T extends Pick<MyModelItemType, 'modelId' | 'model'>>({
+export const findClientModelByValue = <T extends ClientModelCandidate>({
   models,
   value
 }: {
   models: T[];
   value?: string;
 }) => {
-  if (value === undefined) return;
+  if (isEmptyModelValue(value)) return;
   return (
-    models.find((item) => item.modelId === value) ?? models.find((item) => item.model === value)
+    models.find((item) => item.modelId === value) ??
+    models.find((item) => isSystemModel(item) && item.model === value)
   );
 };
 
 /**
- * 按双字段模型引用查找客户端模型。只要 modelId 字段存在就禁止降级到旧 model，确保前端
- * 与服务端对空字符串、失效 ID 和 ID/name 冲突采用完全一致的优先级。
+ * 按双字段模型引用查找客户端模型。非空 ID 不降级到旧 model，旧 model 仅匹配系统模型。
  */
-export const findClientModelByReference = <T extends Pick<MyModelItemType, 'modelId' | 'model'>>({
+export const findClientModelByReference = <T extends ClientModelCandidate>({
   models,
   reference
 }: {
   models: T[];
   reference: ClientModelReference;
 }) => {
-  if (reference.modelId !== undefined) {
+  if (!isEmptyModelValue(reference.modelId)) {
     return models.find((item) => item.modelId === reference.modelId);
   }
-  if (reference.model === undefined) return;
-  return models.find((item) => item.model === reference.model);
+  if (isEmptyModelValue(reference.model)) return;
+  return models.find((item) => isSystemModel(item) && item.model === reference.model);
 };
 
 /**
- * 将双字段引用规范化为 modelId。已有 modelId（包括空字符串或失效值）原样保留；只有字段
- * 完全缺失时才允许按旧 model 精确恢复稳定 ID。
+ * 将双字段引用规范化为 modelId。非空 ID（包括失效值）原样保留，未填写时在系统模型内精确解析旧名称。
  */
-export const resolveClientModelReferenceId = <
-  T extends Pick<MyModelItemType, 'modelId' | 'model'>
->({
+export const resolveClientModelReferenceId = <T extends ClientModelCandidate>({
   models,
   reference
 }: {
   models: T[];
   reference: ClientModelReference;
 }) => {
-  if (reference.modelId !== undefined) return reference.modelId;
-  if (reference.model === undefined) return;
-  return models.find((item) => item.model === reference.model)?.modelId;
+  if (!isEmptyModelValue(reference.modelId)) return reference.modelId ?? undefined;
+  if (isEmptyModelValue(reference.model)) return;
+  return models.find((item) => isSystemModel(item) && item.model === reference.model)?.modelId;
 };

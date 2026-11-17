@@ -5,10 +5,10 @@ import type {
 import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
 import type { AgentLoopRuntime } from '../../../../../ai/llm/agentLoop/interface';
 import { getExecuteTool, type ToolDispatchContext } from '../sub/utils';
-import type { WorkflowResponseType } from '../../../type';
+import type { WorkflowResponseType } from '@fastgpt/global/core/workflow/runtime/sse';
 import { createWorkflowAgentLoopToolCatalog } from './toolCatalog';
 import type { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import type { SandboxClient } from '../../../../../ai/sandbox/interface/runtime';
+import type { SandboxClient } from '../../../../../ai/sandbox/application/runtime/client';
 import type { UseUserContextResult } from './userContext';
 import type { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import {
@@ -16,11 +16,15 @@ import {
   getAgentLoopCoreSystemToolInfo
 } from '../../agentLoopCore/interface';
 import { createWorkflowAgentToolProvider } from '../toolProvider';
+import type { AgentLoopCoreToolRunResult } from '../../agentLoopCore/interface';
+import { getDispatchModerationContext } from '../../../utils/runtime';
+import { getWorkflowFileContext } from '../../../../utils/context';
 
 type WorkflowAgentLoopRuntimeContext = ToolDispatchContext & {
   node: {
     nodeId: string;
     flowNodeType: FlowNodeTypeEnum;
+    catchError?: boolean;
   };
   currentFiles: UseUserContextResult['currentFiles'];
   sandboxClient?: SandboxClient;
@@ -50,6 +54,7 @@ export const createWorkflowAgentLoopRuntime = ({
   assistantResponses = [],
   nodeResponses = [],
   appendNodeResponse,
+  onToolResult,
   executeToolFactory = getExecuteTool
 }: {
   context: WorkflowAgentLoopRuntimeContext;
@@ -58,6 +63,7 @@ export const createWorkflowAgentLoopRuntime = ({
   assistantResponses?: AIChatItemValueItemType[];
   nodeResponses?: ChatHistoryItemResType[];
   appendNodeResponse?: (nodeResponse: ChatHistoryItemResType) => void;
+  onToolResult?: (result: AgentLoopCoreToolRunResult<WorkflowInteractiveResponseType>) => void;
   executeToolFactory?: typeof getExecuteTool;
 }): {
   runtime: AgentLoopRuntime<WorkflowInteractiveResponseType>;
@@ -100,6 +106,7 @@ export const createWorkflowAgentLoopRuntime = ({
   // plan/ask/sandbox 仍由 runtime 配置决定是否注入，不混入业务 runtime tools。
   const toolProvider = createWorkflowAgentToolProvider({
     context,
+    onToolResult,
     executeToolFactory
   });
 
@@ -107,11 +114,14 @@ export const createWorkflowAgentLoopRuntime = ({
     artifacts,
     runtime: createAgentLoopCoreNodeRuntime({
       teamId: context.runningUserInfo.teamId,
+      fileContext: getWorkflowFileContext(),
       environment: {
         node: context.node,
         workflowStreamResponse,
-        streamReasoning: context.params.aiChatReasoning !== false,
-        shouldStreamTool: () => true,
+        streamAnswer: context.params.isResponseAnswerText !== false,
+        streamReasoning:
+          context.params.isResponseAnswerText !== false && context.params.aiChatReasoning !== false,
+        shouldStreamTool: () => context.params.isResponseAnswerText !== false,
         nodeResponses: artifacts.nodeResponses,
         appendNodeResponse,
         getToolInfo
@@ -119,6 +129,7 @@ export const createWorkflowAgentLoopRuntime = ({
       llmParams: {
         model: context.modelData,
         reasoningEffort: context.params.aiChatReasoningEffort,
+        maxTokens: context.params.maxToken,
         userKey: context.externalProvider.openaiAccount,
         stream: context.stream,
         useVision: context.params.aiChatVision,
@@ -152,7 +163,9 @@ export const createWorkflowAgentLoopRuntime = ({
       checkIsStopping: context.checkIsStopping,
       toolRuntime: {
         toolProvider,
-        batchToolSize: 5
+        context: getDispatchModerationContext(context),
+        batchToolSize: 5,
+        onToolResult: ({ result }) => onToolResult?.(result)
       },
       usagePush
     }).runtime

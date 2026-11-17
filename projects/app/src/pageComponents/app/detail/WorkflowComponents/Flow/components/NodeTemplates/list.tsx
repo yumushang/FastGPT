@@ -1,4 +1,9 @@
-import React, { useCallback, useMemo } from 'react';
+import CostTooltip from '@/components/core/app/tool/CostTooltip';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { getModelDefault } from '@/web/core/ai/model/modelData';
+import { getNewToolPreviewNode } from '@/web/core/app/api/tool';
+import { nodeTemplate2FlowNode } from '@/web/core/workflow/utils';
+import { applyWorkflowStartInputAutoFill } from '@/web/core/workflow/workflowStartAutoFill';
 import {
   Accordion,
   AccordionButton,
@@ -6,57 +11,63 @@ import {
   AccordionItem,
   AccordionPanel,
   Box,
-  Grid,
   Flex,
+  Grid,
   HStack,
   css
 } from '@chakra-ui/react';
-import { useTranslation } from 'next-i18next';
-import { getClientToolPreviewNode } from '@/web/core/app/api/tool';
-import type {
-  FlowNodeItemType,
-  NodeTemplateListItemType,
-  NodeTemplateListType
-} from '@fastgpt/global/core/workflow/type/node';
-import { TemplateTypeEnum } from './header';
-import { useMemoizedFn } from 'ahooks';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import MyAvatar from '@fastgpt/web/components/common/Avatar';
-import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
-import CostTooltip from '@/components/core/app/tool/CostTooltip';
+import { getErrText } from '@fastgpt/global/common/error/utils';
+import { selectPluginText } from '@fastgpt/global/common/i18n/utils';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { isEmptyModelValue } from '@fastgpt/global/core/ai/model/reference';
+import { getToolIdentityKey, isDebugToolSource } from '@fastgpt/global/core/app/tool/utils';
 import {
+  FlowNodeTemplateTypeEnum,
+  NodeOutputKeyEnum
+} from '@fastgpt/global/core/workflow/constants';
+import {
+  FlowNodeInputTypeEnum,
   FlowNodeTypeEnum,
   isNestedParentNodeType
 } from '@fastgpt/global/core/workflow/node/constant';
-import { getColorSchemaByFlowNodeType } from '@fastgpt/web/core/workflow/utils';
-import { useContextSelector } from 'use-context-selector';
-import { WorkflowBufferDataContext } from '../../../context/workflowInitContext';
-import { workflowSystemNodeTemplateList } from '@fastgpt/web/core/workflow/constants';
-import { sliderWidth } from '../../NodeTemplatesModal';
-import { getErrText } from '@fastgpt/global/common/error/utils';
-import { useWorkflowUtils } from '../../hooks/useUtils';
 import { moduleTemplatesFlat } from '@fastgpt/global/core/workflow/template/constants';
 import {
   buildNodeTemplateContext,
   getNodeContainerCheckError,
   translateNodeContainerCheckError
 } from '@fastgpt/global/core/workflow/template/context';
-import { LoopStartNode } from '@fastgpt/global/core/workflow/template/system/loop/loopStart';
 import { LoopEndNode } from '@fastgpt/global/core/workflow/template/system/loop/loopEnd';
+import { LoopStartNode } from '@fastgpt/global/core/workflow/template/system/loop/loopStart';
 import { LoopRunStartNode } from '@fastgpt/global/core/workflow/template/system/loopRun/loopRunStart';
-import { useReactFlow } from 'reactflow';
-import type { Node } from 'reactflow';
-import { nodeTemplate2FlowNode } from '@/web/core/workflow/utils';
-import { applyWorkflowStartInputAutoFill } from '@/web/core/workflow/workflowStartAutoFill';
-import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { useToast } from '@fastgpt/web/hooks/useToast';
-import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { WorkflowModalContext } from '../../../context/workflowModalContext';
-import { isDebugToolSource, getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import { HttpToolSetNode } from '@fastgpt/global/core/workflow/template/system/httpToolSet';
+import { McpToolSetNode } from '@fastgpt/global/core/workflow/template/system/mcpToolSet';
+import type {
+  FlowNodeItemType,
+  NodeTemplateListItemType,
+  NodeTemplateListType
+} from '@fastgpt/global/core/workflow/type/node';
+import { getSelectedInputRenderType } from '@fastgpt/global/common/workflow/reference';
+import MyAvatar from '@fastgpt/web/components/common/Avatar';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import DebugToolTag from '@fastgpt/web/components/core/plugin/tool/DebugToolTag';
 import SystemToolTag from '@fastgpt/web/components/core/plugin/tool/SystemToolTag';
+import { workflowSystemNodeTemplateList } from '@fastgpt/web/core/workflow/constants';
+import { getColorSchemaByFlowNodeType } from '@fastgpt/web/core/workflow/utils';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { useLocalStorageState, useMemoizedFn } from 'ahooks';
+import { useTranslation } from 'next-i18next';
+import React, { useCallback, useMemo } from 'react';
+import { type Node, useReactFlow } from 'reactflow';
+
+import { useContextSelector } from 'use-context-selector';
+import { WorkflowBufferDataContext } from '../../../context/workflowInitContext';
+import { WorkflowModalContext } from '../../../context/workflowModalContext';
+import { useWorkflowUtils } from '../../hooks/useUtils';
+import { sliderWidth } from '../../NodeTemplatesModal';
+import { TemplateTypeEnum } from './header';
 import { normalizeFlowNodeInputType } from '@fastgpt/global/core/app/formEdit/utils';
+import type { ScrollListType } from '@fastgpt/web/hooks/useScrollPagination';
 
 export type TemplateListProps = {
   onAddNode: ({ newNodes }: { newNodes: Node<FlowNodeItemType>[] }) => void;
@@ -64,7 +75,27 @@ export type TemplateListProps = {
   templates: NodeTemplateListItemType[];
   templateType: TemplateTypeEnum;
   onUpdateParentId: (parentId: string, source?: string) => void;
+  ScrollData?: ScrollListType;
 };
+
+type ToolSetTemplate = Pick<NodeTemplateListItemType, 'id' | 'flowNodeType' | 'templateType'>;
+
+const isLocalToolSetTemplate = (template: ToolSetTemplate) =>
+  template.templateType === FlowNodeTemplateTypeEnum.toolCall &&
+  (template.id === McpToolSetNode.id || template.id === HttpToolSetNode.id);
+
+/** 本地 MCP/HTTP 工具集可直接添加；其他工具集需先选择。 */
+export const canDirectAddToolSet = ({
+  template,
+  isPopover,
+  isToolSelector
+}: {
+  template: ToolSetTemplate;
+  isPopover?: boolean;
+  isToolSelector: boolean;
+}) =>
+  template.flowNodeType === FlowNodeTypeEnum.toolSet &&
+  (isToolSelector || (!isPopover && isLocalToolSetTemplate(template)));
 
 const NodeTemplateListItem = ({
   template,
@@ -82,7 +113,7 @@ const NodeTemplateListItem = ({
   isPopover?: boolean;
   onUpdateParentId: (parentId: string, source?: string) => void;
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { feConfigs } = useSystemStore();
 
   const { screenToFlowPosition } = useReactFlow();
@@ -90,12 +121,11 @@ const NodeTemplateListItem = ({
   const isSystemTool = templateType === TemplateTypeEnum.systemTools;
   const isToolSet = template.flowNodeType === FlowNodeTypeEnum.toolSet;
   const isToolSelector = handleParams?.handleId === NodeOutputKeyEnum.selectedTools;
-  // 工具集（系统工具、团队 HTTP/MCP 工具）只有在工具调用的工具选择器里才允许直接创建节点；
-  // 侧边栏等其他场景点击卡片一律进入工具集内部，选择单个工具。
-  const allowDirectAddToolSet = isToolSet && isToolSelector;
+  const isLocalToolSet = isLocalToolSetTemplate(template);
+  const allowDirectAddToolSet = canDirectAddToolSet({ template, isPopover, isToolSelector });
   const canDragCreateNode =
     !isPopover && (!template.isFolder || isToolSet) && (!isToolSet || allowDirectAddToolSet);
-  const showExpandArrow = template.isFolder || isToolSet;
+  const showExpandArrow = (template.isFolder || isToolSet) && !isLocalToolSet;
   const isDebugTool = isDebugToolSource(template.source);
   const isSystemSource = template.source === 'system';
 
@@ -113,7 +143,7 @@ const NodeTemplateListItem = ({
             />
             <Flex alignItems={'center'} gap={2} ml={3} flex={'1'} minW={0}>
               <Box fontWeight={'bold'} color={'myGray.900'} className="textEllipsis">
-                {template.name}
+                {t(selectPluginText(template.name, i18n.language))}
               </Box>
               {isDebugTool && <DebugToolTag />}
             </Flex>
@@ -122,7 +152,8 @@ const NodeTemplateListItem = ({
             )}
           </Flex>
           <Box mt={2} color={'myGray.500'} maxH={'100px'} overflow={'hidden'}>
-            {template.intro || t('common:core.workflow.Not intro')}
+            {t(selectPluginText(template.intro, i18n.language)) ||
+              t('common:core.workflow.Not intro')}
           </Box>
           {isSystemTool && (
             <CostTooltip
@@ -194,7 +225,7 @@ const NodeTemplateListItem = ({
               fontSize={isPopover ? 'xs' : 'sm'}
               className="textEllipsis"
             >
-              {t(template.name as any)}
+              {t(selectPluginText(template.name, i18n.language))}
             </Box>
             {feConfigs?.enable_team_plugin_upload === true && isSystemSource && <SystemToolTag />}
             {isDebugTool && <DebugToolTag />}
@@ -238,7 +269,8 @@ const NodeTemplateList = ({
   isPopover = false,
   templates,
   templateType,
-  onUpdateParentId
+  onUpdateParentId,
+  ScrollData
 }: TemplateListProps) => {
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
@@ -247,6 +279,9 @@ const NodeTemplateList = ({
   const handleParams = useContextSelector(WorkflowModalContext, (v) => v.handleParams);
   const isToolSelector = handleParams?.handleId === NodeOutputKeyEnum.selectedTools;
   const { getIntersectingNodes } = useReactFlow();
+  const [lastSelectedModelId] = useLocalStorageState<string>('workflow_default_llm_model', {
+    defaultValue: ''
+  });
 
   const handleAddNode = useCallback(
     async ({
@@ -259,6 +294,11 @@ const NodeTemplateList = ({
       try {
         const templateNode = await (async () => {
           try {
+            const baseTemplate = moduleTemplatesFlat.find((item) => item.id === template.id);
+            const isLocalToolSet =
+              template.id === McpToolSetNode.id || template.id === HttpToolSetNode.id;
+            if (isLocalToolSet && baseTemplate) return { ...baseTemplate };
+
             const shouldLoadPreviewNode = [
               FlowNodeTypeEnum.tool,
               FlowNodeTypeEnum.toolSet,
@@ -267,9 +307,8 @@ const NodeTemplateList = ({
             ].includes(template.flowNodeType);
 
             if (shouldLoadPreviewNode) {
-              const node = await getClientToolPreviewNode({
+              const node = await getNewToolPreviewNode({
                 appId: template.id,
-                getLatestVersion: true,
                 source: template.source
               });
               return {
@@ -283,11 +322,9 @@ const NodeTemplateList = ({
               };
             }
 
-            const baseTemplate = moduleTemplatesFlat.find((item) => item.id === template.id);
-            if (!baseTemplate) {
-              throw new Error('baseTemplate not found');
-            }
-            return { ...baseTemplate };
+            if (baseTemplate) return { ...baseTemplate };
+
+            throw new Error('baseTemplate not found');
           } catch (e) {
             toast({
               status: 'error',
@@ -355,16 +392,16 @@ const NodeTemplateList = ({
           .map((input) => ({
             ...input,
             value: input.value ?? input.defaultValue,
-            valueDesc: input.valueDesc ? t(input.valueDesc as any) : undefined,
-            label: t(input.label as any),
-            description: input.description ? t(input.description as any) : undefined,
-            placeholder: input.placeholder ? t(input.placeholder as any) : undefined,
-            debugLabel: input.debugLabel ? t(input.debugLabel as any) : undefined,
-            toolDescription: input.toolDescription ? t(input.toolDescription as any) : undefined,
+            valueDesc: input.valueDesc ? t(input.valueDesc) : undefined,
+            label: t(input.label),
+            description: input.description ? t(input.description) : undefined,
+            placeholder: input.placeholder ? t(input.placeholder) : undefined,
+            debugLabel: input.debugLabel ? t(input.debugLabel) : undefined,
+            toolDescription: input.toolDescription ? t(input.toolDescription) : undefined,
             list: Array.isArray(input.list)
-              ? input.list.map((opt: any) => ({
+              ? input.list.map((opt) => ({
                   ...opt,
-                  label: opt?.label ? t(opt.label as any) : opt?.label
+                  label: opt?.label ? t(opt.label) : opt?.label
                 }))
               : input.list
           }));
@@ -377,15 +414,32 @@ const NodeTemplateList = ({
               })
             : preparedInputs;
 
+        const needsInitialModel =
+          templateNode.flowNodeType !== FlowNodeTypeEnum.datasetSearchNode &&
+          inputsWithAutoFill.some((input) => {
+            const type = getSelectedInputRenderType(input);
+            return (
+              isEmptyModelValue(input.value) &&
+              (type === FlowNodeInputTypeEnum.selectLLMModel ||
+                type === FlowNodeInputTypeEnum.settingLLMModel)
+            );
+          });
+        const initialModel = needsInitialModel
+          ? await getModelDefault({
+              modelType: ModelTypeEnum.llm,
+              businessDefaultModelId: lastSelectedModelId
+            })
+          : undefined;
         const newNode = nodeTemplate2FlowNode({
+          initialModelId: initialModel?.modelId,
           template: {
             ...templateNode,
             name: computedNewNodeName({
-              templateName: t(templateNode.name as any),
+              templateName: t(selectPluginText(templateNode.name, i18n.language)),
               flowNodeType: templateNode.flowNodeType,
               pluginId: templateNode.pluginId
             }),
-            intro: t(templateNode.intro as any),
+            intro: t(selectPluginText(templateNode.intro, i18n.language)),
             inputs: inputsWithAutoFill.map((input) =>
               normalizeFlowNodeInputType(input, {
                 isTool: isToolMode,
@@ -397,9 +451,9 @@ const NodeTemplateList = ({
               .filter((output) => output.deprecated !== true)
               .map((output) => ({
                 ...output,
-                valueDesc: t(output.valueDesc as any),
-                label: t(output.label as any),
-                description: t(output.description as any)
+                valueDesc: t(output.valueDesc ?? ''),
+                label: t(output.label),
+                description: t(output.description ?? '')
               }))
           },
           position,
@@ -454,6 +508,7 @@ const NodeTemplateList = ({
     },
     [
       computedNewNodeName,
+      i18n.language,
       getNodeById,
       getNodes,
       edges,
@@ -461,6 +516,7 @@ const NodeTemplateList = ({
       isToolSelector,
       getIntersectingNodes,
       onAddNode,
+      lastSelectedModelId,
       t,
       toast
     ]
@@ -486,14 +542,11 @@ const NodeTemplateList = ({
         }, {});
 
         templates.forEach((item) => {
-          if (item.flowNodeType === FlowNodeTypeEnum.agent) {
-            return;
-          }
           if (item.templateType && map[item.templateType]) {
             map[item.templateType].list.push({
               ...item,
-              name: t(item.name as any),
-              intro: t(item.intro as any)
+              name: t(selectPluginText(item.name, i18n.language)),
+              intro: t(selectPluginText(item.intro, i18n.language))
             });
           }
         });
@@ -521,8 +574,8 @@ const NodeTemplateList = ({
               label: '',
               list: templates.map((item) => ({
                 ...item,
-                name: t(parseI18nString(item.name, i18n.language)),
-                intro: t(parseI18nString(item.intro || '', i18n.language))
+                name: t(selectPluginText(item.name, i18n.language)),
+                intro: t(selectPluginText(item.intro, i18n.language))
               }))
             }
           ]
@@ -553,7 +606,7 @@ const NodeTemplateList = ({
                   flex={1}
                   color={isPopover ? 'myGray.600' : 'myGray.900'}
                 >
-                  {t(item.label as any)}
+                  {t(item.label)}
                 </Box>
               )}
 
@@ -584,33 +637,52 @@ const NodeTemplateList = ({
     );
   });
 
+  const listContent = (
+    <Accordion defaultIndex={[0]} allowMultiple reduceMotion>
+      {formatTemplatesArrayData.length > 1 ? (
+        <>
+          {formatTemplatesArrayData.map(({ list, label }, index) => (
+            <AccordionItem key={index} border={'none'}>
+              <AccordionButton
+                fontSize={'sm'}
+                fontWeight={'500'}
+                color={'myGray.900'}
+                justifyContent={'space-between'}
+                alignItems={'center'}
+                borderRadius={'md'}
+                px={3}
+              >
+                {t(label)}
+                <AccordionIcon />
+              </AccordionButton>
+              <AccordionPanel py={0}>{renderNodeList(list)}</AccordionPanel>
+            </AccordionItem>
+          ))}
+        </>
+      ) : (
+        <>{renderNodeList(formatTemplatesArrayData?.[0]?.list)}</>
+      )}
+    </Accordion>
+  );
+
+  if (ScrollData) {
+    return (
+      <ScrollData flex={1} minH={0}>
+        <Box flexShrink={0} px={formatTemplatesArrayData.length > 1 ? 2 : 5}>
+          {listContent}
+        </Box>
+      </ScrollData>
+    );
+  }
+
   return (
-    <Box flex={'1 0 0'} overflow={'overlay'} px={formatTemplatesArrayData.length > 1 ? 2 : 5}>
-      <Accordion defaultIndex={[0]} allowMultiple reduceMotion>
-        {formatTemplatesArrayData.length > 1 ? (
-          <>
-            {formatTemplatesArrayData.map(({ list, label }, index) => (
-              <AccordionItem key={index} border={'none'}>
-                <AccordionButton
-                  fontSize={'sm'}
-                  fontWeight={'500'}
-                  color={'myGray.900'}
-                  justifyContent={'space-between'}
-                  alignItems={'center'}
-                  borderRadius={'md'}
-                  px={3}
-                >
-                  {t(label as any)}
-                  <AccordionIcon />
-                </AccordionButton>
-                <AccordionPanel py={0}>{renderNodeList(list)}</AccordionPanel>
-              </AccordionItem>
-            ))}
-          </>
-        ) : (
-          <>{renderNodeList(formatTemplatesArrayData?.[0]?.list)}</>
-        )}
-      </Accordion>
+    <Box
+      flex={'1 0 0'}
+      minH={0}
+      overflow={'overlay'}
+      px={formatTemplatesArrayData.length > 1 ? 2 : 5}
+    >
+      {listContent}
     </Box>
   );
 };

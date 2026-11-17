@@ -1,0 +1,229 @@
+/* v8 ignore file */
+import { ModelScopeEnum, ModelTypeEnum } from '../constants';
+import { ObjectIdSchema } from '../../../common/type/mongo';
+import z from 'zod';
+
+export const ModelPriceTierSchema = z.object({
+  maxInputTokens: z
+    .number()
+    .min(0)
+    .optional()
+    .meta({ description: '本档输入上限，单位 M Tokens；省略表示无限', example: 1 }),
+  inputPrice: z.number().min(0).meta({ description: '每百万输入 Tokens 的积分单价', example: 2 }),
+  outputPrice: z.number().min(0).meta({ description: '每百万输出 Tokens 的积分单价', example: 4 })
+});
+export type ModelPriceTierType = z.infer<typeof ModelPriceTierSchema>;
+
+/** STT 支持独立计价口径；其他类型仍由模型类型确定分母。 */
+export const ModelPricingSchema = z.object({
+  type: z.enum(['duration', 'tokens']).optional().meta({ description: 'STT 计价类型' }),
+  inputPrice: ModelPriceTierSchema.shape.inputPrice.optional(),
+  outputPrice: ModelPriceTierSchema.shape.outputPrice.optional(),
+  tiers: z
+    .array(ModelPriceTierSchema)
+    .max(5)
+    .optional()
+    .meta({ description: 'LLM 阶梯价格，下限从上一档上限推导' }),
+  unitPrice: z.number().min(0).optional().meta({
+    description: '综合单价；Token/TTS 每百万数量，STT 时长模式固定为每 60 秒',
+    example: 2
+  })
+});
+export type ModelPricingType = z.infer<typeof ModelPricingSchema>;
+export const LLMModelPricingSchema = ModelPricingSchema.omit({
+  unitPrice: true,
+  inputPrice: true,
+  outputPrice: true,
+  type: true
+});
+export const UnitModelPricingSchema = ModelPricingSchema.omit({
+  tiers: true,
+  inputPrice: true,
+  outputPrice: true,
+  type: true
+});
+/** STT 价格必须明确声明口径；旧数据由后台迁移补齐。 */
+export const STTModelPricingSchema = z.union([
+  z.object({
+    type: z.literal('duration'),
+    unitPrice: UnitModelPricingSchema.shape.unitPrice.meta({
+      description: '每 60 秒的积分单价',
+      example: 0.2
+    })
+  }),
+  z.object({
+    type: z.literal('tokens'),
+    inputPrice: ModelPricingSchema.shape.inputPrice,
+    outputPrice: ModelPricingSchema.shape.outputPrice
+  })
+]);
+export type STTModelPricingType = z.infer<typeof STTModelPricingSchema>;
+export const PriceTypeSchema = z.object({ pricing: ModelPricingSchema.optional() });
+export type PriceType = z.infer<typeof PriceTypeSchema>;
+
+/**
+ * 模型类型专属配置。公共业务字段保留在 ai_models 顶层，只有不同类型之间存在差异的
+ * 请求能力与默认参数进入 config，避免运行时将插件返回对象整体覆盖数据库配置。
+ */
+export const LLMModelConfigSchema = z.object({
+  maxContext: z.number(),
+  maxResponse: z.number(),
+  quoteMaxToken: z.number(),
+  // null 明确表示模型不支持或未配置温度，允许 API 与数据库保留这一语义。
+  maxTemperature: z.number().nullish(),
+  showTopP: z.boolean().optional(),
+  responseFormatList: z.array(z.string()).optional(),
+  showStopSign: z.boolean().optional(),
+  censor: z.boolean().optional(),
+  vision: z.boolean().optional(),
+  audio: z.boolean().optional(),
+  video: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+  reasoningEffort: z.boolean().optional(),
+  functionCall: z.boolean().optional(),
+  toolChoice: z.boolean().optional(),
+  defaultSystemChatPrompt: z.string().optional(),
+  defaultConfig: z.record(z.string(), z.any()).optional(),
+  fieldMap: z.record(z.string(), z.string()).optional()
+});
+export type LLMModelConfigType = z.infer<typeof LLMModelConfigSchema>;
+
+export const EmbeddingModelConfigSchema = z.object({
+  defaultToken: z.number(),
+  maxToken: z.number(),
+  weight: z.number().default(0),
+  hidden: z.boolean().optional(),
+  vision: z.boolean().optional(),
+  normalization: z.boolean().optional(),
+  batchSize: z.number().optional(),
+  defaultConfig: z.record(z.string(), z.any()).optional(),
+  dbConfig: z.record(z.string(), z.any()).optional(),
+  queryConfig: z.record(z.string(), z.any()).optional()
+});
+export type EmbeddingModelConfigType = z.infer<typeof EmbeddingModelConfigSchema>;
+
+export const RerankModelConfigSchema = z.object({
+  maxToken: z.number().optional(),
+  defaultConfig: z.record(z.string(), z.any()).optional()
+});
+export type RerankModelConfigType = z.infer<typeof RerankModelConfigSchema>;
+
+export const TTSModelConfigSchema = z.object({
+  voices: z.array(z.object({ label: z.string(), value: z.string() }))
+});
+export type TTSModelConfigType = z.infer<typeof TTSModelConfigSchema>;
+
+export const STTModelConfigSchema = z.object({});
+export type STTModelConfigType = z.infer<typeof STTModelConfigSchema>;
+
+const AIModelDocumentBaseSchema = PriceTypeSchema.extend({
+  provider: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  scope: z.nativeEnum(ModelScopeEnum).default(ModelScopeEnum.system),
+  sortOrder: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().meta({
+    description: '同一作用域内的模型展示 rank，数值越小越靠前'
+  }),
+  tmbId: ObjectIdSchema.nullish(),
+  teamId: ObjectIdSchema.nullish(),
+  isActive: z.boolean().optional(),
+  isUpcomingDeprecation: z.boolean().optional().meta({
+    description: '模型是否即将下架',
+    example: true
+  }),
+  requestUrl: z.string().optional(),
+  requestAuth: z.string().optional(),
+  testMode: z.boolean().optional()
+});
+
+export const LLMModelDocumentSchema = AIModelDocumentBaseSchema.extend({
+  pricing: LLMModelPricingSchema.optional().meta({
+    description: 'LLM 每百万 Tokens 阶梯价格；缺省免费',
+    example: { tiers: [{ inputPrice: 2, outputPrice: 4 }] }
+  }),
+  type: z.literal(ModelTypeEnum.llm),
+  config: LLMModelConfigSchema
+});
+
+export const EmbeddingModelDocumentSchema = AIModelDocumentBaseSchema.extend({
+  pricing: UnitModelPricingSchema.optional().meta({
+    description: '每固定计价单位的积分单价；缺省免费',
+    example: { unitPrice: 2 }
+  }),
+  type: z.literal(ModelTypeEnum.embedding),
+  config: EmbeddingModelConfigSchema
+});
+
+export const RerankModelDocumentSchema = AIModelDocumentBaseSchema.extend({
+  pricing: UnitModelPricingSchema.optional().meta({
+    description: '每固定计价单位的积分单价；缺省免费',
+    example: { unitPrice: 2 }
+  }),
+  type: z.literal(ModelTypeEnum.rerank),
+  config: RerankModelConfigSchema
+});
+
+export const TTSModelDocumentSchema = AIModelDocumentBaseSchema.extend({
+  pricing: UnitModelPricingSchema.optional().meta({
+    description: '每固定计价单位的积分单价；缺省免费',
+    example: { unitPrice: 2 }
+  }),
+  type: z.literal(ModelTypeEnum.tts),
+  config: TTSModelConfigSchema
+});
+
+export const STTModelDocumentSchema = AIModelDocumentBaseSchema.extend({
+  pricing: STTModelPricingSchema.optional().meta({
+    description: 'STT 固定按每 60 秒或每百万 Tokens 计价；缺省免费',
+    example: { type: 'duration', unitPrice: 2 }
+  }),
+  type: z.literal(ModelTypeEnum.stt),
+  config: STTModelConfigSchema
+});
+
+/** ai_models 持久化后的标准形态；modelId 由 MongoDB `_id` 提供，不重复存储。 */
+export const AIModelDocumentDataSchema = z.discriminatedUnion('type', [
+  LLMModelDocumentSchema,
+  EmbeddingModelDocumentSchema,
+  TTSModelDocumentSchema,
+  STTModelDocumentSchema,
+  RerankModelDocumentSchema
+]);
+export type AIModelDocumentDataType = z.infer<typeof AIModelDocumentDataSchema>;
+
+/** 运行时模型数据。modelId 来自 MongoDB `_id`，avatar 由 provider 派生。 */
+const RuntimeModelFields = {
+  modelId: z.string(),
+  avatar: z.string().optional()
+};
+
+export const LLMModelDataSchema = LLMModelDocumentSchema.extend(RuntimeModelFields);
+export const EmbeddingModelDataSchema = EmbeddingModelDocumentSchema.extend(RuntimeModelFields);
+export const TTSModelDataSchema = TTSModelDocumentSchema.extend(RuntimeModelFields);
+export const STTModelDataSchema = STTModelDocumentSchema.extend(RuntimeModelFields);
+export const RerankModelDataSchema = RerankModelDocumentSchema.extend(RuntimeModelFields);
+
+export const AIModelDataSchema = z.discriminatedUnion('type', [
+  LLMModelDataSchema,
+  EmbeddingModelDataSchema,
+  TTSModelDataSchema,
+  STTModelDataSchema,
+  RerankModelDataSchema
+]);
+export type AIModelDataType = z.infer<typeof AIModelDataSchema>;
+
+/**
+ * 模型引用只允许稳定 ID 与废弃的系统 model 标识。非空 modelId 必须优先解析，
+ * 不得因 ID 无效而降级使用 model。
+ */
+export type ModelReferenceType = {
+  modelId?: string | null;
+  /** @deprecated 新数据只写 modelId。 */
+  model?: string | null;
+};
+
+export type LLMModelDataType = Extract<AIModelDataType, { type: ModelTypeEnum.llm }>;
+export type EmbeddingModelDataType = Extract<AIModelDataType, { type: ModelTypeEnum.embedding }>;
+export type RerankModelDataType = Extract<AIModelDataType, { type: ModelTypeEnum.rerank }>;
+export type TTSModelDataType = Extract<AIModelDataType, { type: ModelTypeEnum.tts }>;
+export type STTModelDataType = Extract<AIModelDataType, { type: ModelTypeEnum.stt }>;

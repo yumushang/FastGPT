@@ -1,68 +1,66 @@
-import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
+import { isProVersion } from '../../../../../../../common/system/constants';
+import { getErrText } from '@fastgpt/global/common/error/utils';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
+import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
+import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
+import { DatasetSearchModeEnum } from '@fastgpt/global/core/dataset/constants';
+import { formatCollectionFilterMatchParam } from '@fastgpt/global/core/dataset/search/tagFilter';
 import type { SearchDataResponseItemType } from '@fastgpt/global/core/dataset/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import {
-  getEmbeddingModelData,
-  getLLMModelData,
-  getOptionalVlmModelData,
-  getRerankModelData
-} from '../../../../../../ai/model';
-import { createLLMResponse } from '../../../../../../ai/llm/request';
-import { countPromptTokens } from '../../../../../../../common/string/tiktoken/index';
-import { calculateCompressionThresholds } from '../../../../../../ai/llm/compress/constants';
-import { formatModelChars2Points } from '../../../../../../../support/wallet/usage/utils';
-import { i18nT } from '@fastgpt/global/common/i18n/utils';
-import { DatasetSearchModeEnum } from '@fastgpt/global/core/dataset/constants';
-import { MongoDataset } from '../../../../../../dataset/schema';
-import {
-  defaultSearchDatasetData,
-  type DefaultSearchDatasetDataProps
-} from '../../../../../../dataset/search';
-import { getErrText } from '@fastgpt/global/common/error/utils';
-import { getLogger, LogCategories } from '../../../../../../../common/logger';
-import type { DispatchSubAppResponse } from '../../type';
-import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
-import { DatasetSearchToolSchema } from './utils';
-import { parseJsonArgs } from '../../../../../../ai/utils';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
-import type { ChatHistoryItemResType } from '@fastgpt/global/core/chat/type';
+import type { ChatNodeUsageType } from '@fastgpt/global/support/wallet/bill/type';
+import { getLogger, LogCategories } from '../../../../../../../common/logger';
+import { pushTrack } from '../../../../../../../common/middle/tracks/utils';
+import { countPromptTokens } from '../../../../../../../common/string/tiktoken/index';
+import { resolveReadableCollectionIds } from '../../../../../../../support/permission/collection/auth';
+import { formatModelChars2Points } from '../../../../../../../support/wallet/usage/utils';
+import { calculateCompressionThresholds } from '../../../../../../ai/llm/compress/constants';
+import { createLLMResponse } from '../../../../../../ai/llm/request';
+import { getTeamModelHandle } from '../../../../../../ai/model/catalog/service';
+import { parseJsonArgs } from '../../../../../../ai/utils';
+import { defaultSearchDatasetData } from '../../../../../../dataset/search';
+import type { DefaultSearchDatasetDataProps } from '../../../../../../dataset/search/type';
+import { getDatasetSearchVlmModel } from '../../../../../../dataset/search/vlm';
+import { filterDatasetsByTmbId } from '../../../../../../dataset/utils';
 import {
-  createImageCaptionChildNodeResponse,
+  loadWorkflowDatasetResource,
+  loadWorkflowModelResource
+} from '../../../../../resource/service';
+import {
   createChunkSelectionChildNodeResponse,
+  createImageCaptionChildNodeResponse,
   createQueryExtensionChildNodeResponse
 } from '../../../../dataset/nodeResponse';
-import { filterDatasetsByTmbId } from '../../../../../../dataset/utils';
 import { normalizeDatasetSearchInput } from '../../../../dataset/utils';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import { formatDatasetSearchToolResponse } from '../../../../dataset/toolResponse';
+import { createNodeSummary, getNodeSummaryData } from '../../../../utils/summary';
+import type { DispatchSubAppResponse } from '../../type';
+import { DatasetSearchToolSchema } from './utils';
 const logger = getLogger(LogCategories.MODULE.AI.AGENT);
 
 type DatasetSearchParams = {
+  appTeamId?: string;
   teamId: string;
   tmbId: string;
   args: string;
-  llmModel: LLMSystemModelDataType;
+  llmModel: LLMModelDataType;
   userKey?: OpenaiAccountType;
   datasetParams?: AppFormEditFormType['dataset'];
 };
 
 /**
- * 格式化知识库搜索结果为引用文本
+ * 格式化知识库搜索结果为 Agent 工具响应。
+ *
+ * 与简易应用的 dataset search 节点保持同一协议：提示词负责约束模型生成 `[id](CITE)`，
+ * cites 只提供本次检索实际返回的引用内容，避免模型引用不存在的知识块。
  */
 const formatDatasetSearchResponse = (searchResults: SearchDataResponseItemType[]): string => {
   if (searchResults.length === 0) {
     return '未找到相关信息。';
   }
 
-  const chunks = searchResults
-    .map((item, index) => {
-      const sourceName = item.sourceName || `来源${index + 1}`;
-      const content = `${item.q}\n${item.a || ''}`.trim();
-
-      return `【知识片段${index + 1}】\nid: ${item.id}\nsource: ${sourceName}\ncontent: ${content}`;
-    })
-    .join('\n\n');
-
-  return chunks;
+  return JSON.stringify(formatDatasetSearchToolResponse(searchResults), null, 2);
 };
 
 /**
@@ -78,7 +76,7 @@ const selectRelevantChunksByLLM = async ({
 }: {
   query: string;
   chunks: SearchDataResponseItemType[];
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   userKey?: OpenaiAccountType;
   teamId: string;
 }): Promise<
@@ -172,6 +170,7 @@ ${chunkSummaries}
 export const dispatchAgentDatasetSearch = async ({
   args,
   datasetParams,
+  appTeamId,
   teamId,
   tmbId,
   llmModel,
@@ -191,7 +190,7 @@ export const dispatchAgentDatasetSearch = async ({
   }
 
   const queries = toolParams.data.query;
-  const { textQueries, imageQueries } = normalizeDatasetSearchInput(queries);
+  const { textQueries, imageQueries } = await normalizeDatasetSearchInput(queries);
   if (textQueries.length === 0 && imageQueries.length === 0) {
     return {
       response: 'Query is empty'
@@ -204,13 +203,15 @@ export const dispatchAgentDatasetSearch = async ({
     datasetParams
   });
 
+  const nodeSummary = createNodeSummary();
   try {
+    const requestedDatasetIds = datasetParams.datasets.map((item) => item.datasetId);
     const datasetIds = datasetParams.authTmbId
       ? await filterDatasetsByTmbId({
-          datasetIds: datasetParams.datasets.map((item) => item.datasetId),
+          datasetIds: requestedDatasetIds,
           tmbId
         })
-      : datasetParams.datasets.map((item) => item.datasetId);
+      : requestedDatasetIds;
 
     if (datasetIds.length === 0) {
       return {
@@ -218,30 +219,56 @@ export const dispatchAgentDatasetSearch = async ({
       };
     }
 
+    // Collection 级权限可读集合仅对真实成员鉴权生效；authTmbId 未设置时不做 collection 级过滤。
+    const readableCollectionIdList = datasetParams.authTmbId
+      ? await resolveReadableCollectionIds({
+          teamId,
+          datasetIds,
+          tmbId
+        })
+      : undefined;
+
+    const effectiveAppTeamId = appTeamId || teamId;
+    const userInfo = { teamId, tmbId };
+
     // Get vector model
-    const dataset = await MongoDataset.findById(
-      datasetIds[0],
-      'vectorModelId vectorModel vlmModelId vlmModel'
-    ).lean();
-    const vectorModel = getEmbeddingModelData({
-      modelId: dataset?.vectorModelId,
-      model: dataset?.vectorModel
+    const dataset = await loadWorkflowDatasetResource({
+      datasetId: datasetIds[0],
+      datasetIds,
+      tmbId
     });
-    const vlmModelData = getOptionalVlmModelData({
-      modelId: dataset?.vlmModelId,
-      model: dataset?.vlmModel
+    const modelHandle = await getTeamModelHandle({ teamId: effectiveAppTeamId });
+    const vectorModel = modelHandle.getModelData(
+      {
+        modelId: dataset?.vectorModelId,
+        model: dataset?.vectorModel
+      },
+      { type: 'embedding' }
+    );
+    const vlmModelData = await getDatasetSearchVlmModel({
+      teamId: effectiveAppTeamId,
+      datasetIds,
+      modelHandle
     });
-    // Get Rerank Model
     const rerankModelData = datasetParams.usingReRank
-      ? getRerankModelData({
+      ? await loadWorkflowModelResource({
+          appTeamId: effectiveAppTeamId,
+          userInfo,
           modelId: datasetParams.rerankModelId,
-          model: datasetParams.rerankModel
+          model: datasetParams.rerankModel,
+          type: 'rerank',
+          fallbackToDefault: true,
+          modelHandle
         })
       : undefined;
     const extensionModelData = datasetParams.datasetSearchUsingExtensionQuery
-      ? getLLMModelData({
+      ? await loadWorkflowModelResource({
+          appTeamId: effectiveAppTeamId,
+          userInfo,
           modelId: datasetParams.datasetSearchExtensionModelId,
-          model: datasetParams.datasetSearchExtensionModel
+          model: datasetParams.datasetSearchExtensionModel,
+          fallbackToDefault: true,
+          modelHandle
         })
       : undefined;
 
@@ -260,11 +287,19 @@ export const dispatchAgentDatasetSearch = async ({
       usingReRank: datasetParams.usingReRank,
       rerankModel: rerankModelData,
       rerankWeight: datasetParams.rerankWeight ?? 0.5,
+      rerankCandidateNum: datasetParams.rerankCandidateNum,
       datasetSearchUsingExtensionQuery: datasetParams.datasetSearchUsingExtensionQuery ?? false,
       datasetSearchExtensionModel: extensionModelData,
       datasetSearchExtensionBg: datasetParams.datasetSearchExtensionBg,
+      collectionFilterMatch: formatCollectionFilterMatchParam({
+        value: datasetParams.collectionFilterMatch
+      }),
+      readableCollectionIdList,
+      metadataFilterEnabled: isProVersion(),
       userKey
     };
+    // retrievalResults：重排前的候选快照，由检索层在 usingReRank 成立且
+    // RETRIEVAL_RESULTS_LIMIT > 0 时产出；此处只透出，不参与后续选块与提示词拼装。
     const {
       searchRes,
       embeddingTokens,
@@ -272,12 +307,15 @@ export const dispatchAgentDatasetSearch = async ({
       usingSimilarityFilter,
       usingReRank: searchUsingReRank,
       queryExtensionResult,
-      imageCaptionResult
+      imageCaptionResult,
+      retrievalResults
     } = await defaultSearchDatasetData(searchData);
+    pushTrack.datasetSearch({ datasetIds, teamId });
 
     // count bill results
     const usages: ChatNodeUsageType[] = [];
     const childrenResponses: ChatHistoryItemResType[] = [];
+    let childrenResponsePoints = 0;
     let searchResults = searchRes;
 
     // 合并其他的 usages
@@ -297,13 +335,15 @@ export const dispatchAgentDatasetSearch = async ({
           outputTokens: queryExtensionResult.outputTokens
         };
         usages.push(queryExtensionUsage);
+        childrenResponsePoints += queryExtensionUsage.totalPoints;
         childrenResponses.push(
           createQueryExtensionChildNodeResponse({
             requestIds: [queryExtensionResult.requestId],
             usage: queryExtensionUsage,
             modelName: extensionModelData!.name,
             seconds: queryExtensionResult.seconds,
-            query: queryExtensionResult.query
+            query: queryExtensionResult.query,
+            embeddingTokens: queryExtensionResult.embeddingTokens
           })
         );
 
@@ -334,6 +374,7 @@ export const dispatchAgentDatasetSearch = async ({
           outputTokens: imageCaptionResult.outputTokens
         };
         usages.push(imageCaptionUsage);
+        childrenResponsePoints += imageCaptionUsage.totalPoints;
         childrenResponses.push(
           createImageCaptionChildNodeResponse({
             requestIds: imageCaptionResult.requestIds,
@@ -391,6 +432,7 @@ export const dispatchAgentDatasetSearch = async ({
       // 将 AI 分块选择记录为知识库搜索子调用，requestId 跟随 child nodeResponse 展示。
       if (pickResults.usage) {
         usages.push(pickResults.usage);
+        childrenResponsePoints += pickResults.usage.totalPoints;
         childrenResponses.push(
           createChunkSelectionChildNodeResponse({
             requestIds: [pickResults.requestId],
@@ -407,6 +449,8 @@ export const dispatchAgentDatasetSearch = async ({
     const nodeResponse: DispatchSubAppResponse['nodeResponse'] = {
       moduleType: FlowNodeTypeEnum.datasetSearchNode,
       moduleName: i18nT('chat:dataset_search'),
+      totalPoints:
+        usages.reduce((sum, usage) => sum + usage.totalPoints, 0) - childrenResponsePoints,
       datasetQueries: [...textQueries, ...imageQueries],
       embeddingModel: vectorModel.name,
       embeddingTokens,
@@ -426,12 +470,16 @@ export const dispatchAgentDatasetSearch = async ({
       searchUsingReRank,
       ...(childrenResponses.length > 0 ? { childrenResponses } : {}),
       // Results
-      quoteList: searchResults
+      quoteList: searchResults,
+      // 融合候选集快照：检索层仅在重排开启且 RETRIEVAL_RESULTS_LIMIT > 0 时产出。
+      // Agent 原样透出，与原生检索节点保持同一份「召回 vs 重排」对比语义。
+      ...(retrievalResults?.length ? { retrievalResults } : {})
     };
 
     return {
       response: formattedResponse,
       usages: usages,
+      nodeSummary: getNodeSummaryData(nodeSummary),
       nodeResponse
     };
   } catch (error) {
@@ -439,6 +487,7 @@ export const dispatchAgentDatasetSearch = async ({
     const response = `Failed to search dataset: ${getErrText(error)}`;
     return {
       response,
+      nodeSummary: getNodeSummaryData(nodeSummary),
       errorMessage: response
     };
   }

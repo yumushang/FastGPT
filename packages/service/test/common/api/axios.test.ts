@@ -1,10 +1,12 @@
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'http';
 import os from 'os';
 import dns from 'dns/promises';
-import { createProxyAxios } from '../../../common/api/axios';
+import zlib from 'node:zlib';
+import { createProxyAxios, type SafeAxiosRequestConfig } from '../../../common/api/axios';
 import { PRIVATE_URL_TEXT } from '../../../common/system/utils';
-import { serviceEnv } from '../../../env';
+import { getServiceAxiosMaxContentLength } from '../../../common/system/constants';
 
 type AxiosRequestConfig = {
   timeout?: number;
@@ -13,11 +15,12 @@ type AxiosRequestConfig = {
   baseURL?: string;
   httpAgent?: any;
   httpsAgent?: any;
+  maxContentLength?: number;
 };
 
 describe('axios.ts', () => {
-  const mutableServiceEnv = serviceEnv as { CHECK_INTERNAL_IP: boolean };
-  const originalCheckInternalIp = serviceEnv.CHECK_INTERNAL_IP;
+  const originalCheckInternalIp = getTestInstanceConfig().security.checkInternalIp;
+  const originalResponseLimit = getTestInstanceConfig().resource.serviceAxiosMaxContentLength;
   const proxyEnvKeys = [
     'HTTP_PROXY',
     'HTTPS_PROXY',
@@ -41,7 +44,8 @@ describe('axios.ts', () => {
   );
 
   afterEach(() => {
-    mutableServiceEnv.CHECK_INTERNAL_IP = originalCheckInternalIp;
+    getTestInstanceConfig().security.checkInternalIp = originalCheckInternalIp;
+    getTestInstanceConfig().resource.serviceAxiosMaxContentLength = originalResponseLimit;
     vi.restoreAllMocks();
     for (const key of proxyEnvKeys) {
       const value = originalProxyEnv[key];
@@ -59,9 +63,69 @@ describe('axios.ts', () => {
     }
   };
 
+  const listen = (handler: http.RequestListener, host = '127.0.0.1') =>
+    new Promise<http.Server>((resolve) => {
+      const server = http.createServer(handler);
+      server.listen(0, host, () => resolve(server));
+    });
+
+  const closeServer = (server: http.Server) =>
+    new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+
+  const getServerPort = (server: http.Server): number => {
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Invalid test server address');
+    }
+    return address.port;
+  };
+
+  /**
+   * 构造一个非 loopback 的本机访问地址，用于模拟“初始 URL 通过 SSRF 校验”。
+   * CHECK_INTERNAL_IP=false 时私网地址会放行，但 loopback/metadata 仍然恒拦截。
+   */
+  const getReachablePrivateHost = () => {
+    const interfaces = os.networkInterfaces();
+    for (const items of Object.values(interfaces)) {
+      for (const item of items ?? []) {
+        if (item.family === 'IPv4' && !item.internal) {
+          return item.address;
+        }
+      }
+    }
+    return undefined;
+  };
+
   describe('createProxyAxios', () => {
     beforeEach(() => {
       vi.clearAllMocks();
+    });
+
+    it('checks the file domain policy before the first request and every redirect', async () => {
+      clearProxyEnv();
+      getTestInstanceConfig().security.checkInternalIp = false;
+      const adapter = vi.fn(async (config) => ({
+        status: 302,
+        statusText: 'Found',
+        data: '',
+        headers: { location: 'https://blocked.example.com/opaque' },
+        config
+      }));
+      const instance = createProxyAxios({ adapter });
+      const requestConfig: SafeAxiosRequestConfig = {
+        __safeAxios: { validateUrl: (url) => new URL(url).hostname === 'allowed.example.com' }
+      };
+      await expect(
+        instance.head('https://blocked.example.com/opaque', requestConfig)
+      ).rejects.toThrow('Invalid file URL domain');
+      expect(adapter).not.toHaveBeenCalled();
+      vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as any);
+      await expect(
+        instance.head('https://allowed.example.com/opaque', requestConfig)
+      ).rejects.toThrow('Invalid file URL domain');
+      expect(adapter).toHaveBeenCalledTimes(1);
     });
 
     it('应该创建一个带有 ProxyAgent 的 axios 实例', () => {
@@ -217,43 +281,8 @@ describe('axios.ts', () => {
   });
 
   describe('safe axios redirect protection', () => {
-    const listen = (handler: http.RequestListener, host = '127.0.0.1') =>
-      new Promise<http.Server>((resolve) => {
-        const server = http.createServer(handler);
-        server.listen(0, host, () => resolve(server));
-      });
-
-    const closeServer = (server: http.Server) =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-
-    const getServerPort = (server: http.Server): number => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        throw new Error('Invalid test server address');
-      }
-      return address.port;
-    };
-
-    /**
-     * 构造一个非 loopback 的本机访问地址,用于模拟“初始 URL 通过 SSRF 校验”。
-     * CHECK_INTERNAL_IP=false 时私网地址会放行,但 loopback/metadata 仍然恒拦截。
-     */
-    const getReachablePrivateHost = () => {
-      const interfaces = os.networkInterfaces();
-      for (const items of Object.values(interfaces)) {
-        for (const item of items || []) {
-          if (item.family === 'IPv4' && !item.internal) {
-            return item.address;
-          }
-        }
-      }
-      return undefined;
-    };
-
     it('应该逐跳跟随公网重定向', async () => {
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
       const carrierHost = getReachablePrivateHost();
       if (!carrierHost) {
         return;
@@ -288,7 +317,7 @@ describe('axios.ts', () => {
     });
 
     it('应该阻止重定向到 loopback 地址', async () => {
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
       const carrierHost = getReachablePrivateHost();
       if (!carrierHost) {
         return;
@@ -320,7 +349,7 @@ describe('axios.ts', () => {
     });
 
     it('应该限制最大重定向次数', async () => {
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
       const carrierHost = getReachablePrivateHost();
       if (!carrierHost) {
         return;
@@ -349,40 +378,9 @@ describe('axios.ts', () => {
   });
 
   describe('safe axios DNS pinning', () => {
-    const listen = (handler: http.RequestListener, host = '127.0.0.1') =>
-      new Promise<http.Server>((resolve) => {
-        const server = http.createServer(handler);
-        server.listen(0, host, () => resolve(server));
-      });
-
-    const closeServer = (server: http.Server) =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-
-    const getServerPort = (server: http.Server): number => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        throw new Error('Invalid test server address');
-      }
-      return address.port;
-    };
-
-    const getReachablePrivateHost = () => {
-      const interfaces = os.networkInterfaces();
-      for (const items of Object.values(interfaces)) {
-        for (const item of items || []) {
-          if (item.family === 'IPv4' && !item.internal) {
-            return item.address;
-          }
-        }
-      }
-      return undefined;
-    };
-
     it('应该拒绝直连路径中预检后重绑定到 loopback 的地址', async () => {
       clearProxyEnv();
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
       vi.spyOn(dns, 'resolve6').mockRejectedValue(new Error('No AAAA records'));
@@ -407,7 +405,7 @@ describe('axios.ts', () => {
 
     it('应该覆盖直连路径调用方传入的自定义 lookup agent', async () => {
       clearProxyEnv();
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
       const carrierHost = getReachablePrivateHost();
       if (!carrierHost) {
         return;
@@ -452,7 +450,7 @@ describe('axios.ts', () => {
 
     it('应该拒绝重定向下一跳中的 DNS rebinding', async () => {
       clearProxyEnv();
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
       const carrierHost = getReachablePrivateHost();
       if (!carrierHost) {
         return;
@@ -483,7 +481,7 @@ describe('axios.ts', () => {
 
     it('走代理时命中 isInternalAddress 应该直接拒绝', async () => {
       process.env.HTTP_PROXY = 'http://proxy.example:8080';
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       const adapter = vi.fn().mockResolvedValue({
         data: {},
@@ -500,7 +498,7 @@ describe('axios.ts', () => {
 
     it('走代理且 isInternalAddress 返回 false 时应保留代理路径并跳过 pinning lookup', async () => {
       process.env.HTTP_PROXY = 'http://proxy.example:8080';
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       vi.spyOn(dns, 'resolve4').mockRejectedValue(new Error('DNS unavailable'));
       vi.spyOn(dns, 'resolve6').mockRejectedValue(new Error('DNS unavailable'));
@@ -523,7 +521,7 @@ describe('axios.ts', () => {
 
     it('直连路径 DNS lookup 失败时应该失败', async () => {
       clearProxyEnv();
-      mutableServiceEnv.CHECK_INTERNAL_IP = false;
+      getTestInstanceConfig().security.checkInternalIp = false;
 
       vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
       vi.spyOn(dns, 'resolve6').mockRejectedValue(new Error('No AAAA records'));
@@ -543,6 +541,193 @@ describe('axios.ts', () => {
         'DNS lookup failed'
       );
       expect(adapter).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('safe axios response size limit', () => {
+    const mockPublicDns = () => {
+      vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+      vi.spyOn(dns, 'resolve6').mockRejectedValue(new Error('No AAAA records'));
+      vi.spyOn(dns, 'lookup').mockImplementation(
+        async () => [{ address: '8.8.8.8', family: 4 }] as any
+      );
+    };
+
+    const createAdapter = () =>
+      vi.fn(async (config) => ({
+        status: 200,
+        statusText: 'OK',
+        data: {},
+        headers: {},
+        config
+      }));
+
+    it('应该在解压后的响应体超过 maxContentLength 时中止', async () => {
+      clearProxyEnv();
+      getTestInstanceConfig().security.checkInternalIp = false;
+      const carrierHost = getReachablePrivateHost();
+      if (!carrierHost) {
+        return;
+      }
+
+      // 2MB 零字节压缩后只有几 KB，用于模拟 gzip 炸弹。
+      const gzipBody = zlib.gzipSync(Buffer.alloc(2 * 1024 * 1024));
+      const server = await listen((req, res) => {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Type', 'text/plain');
+        res.end(gzipBody);
+      }, '0.0.0.0');
+      const port = getServerPort(server);
+
+      try {
+        const instance = createProxyAxios();
+        await expect(
+          instance.get(`http://${carrierHost}:${port}/bomb`, {
+            responseType: 'text',
+            maxContentLength: 128 * 1024
+          })
+        ).rejects.toThrow(/maxContentLength/i);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('缓冲型响应未显式限制时应该注入默认上限', async () => {
+      clearProxyEnv();
+      mockPublicDns();
+      const adapter = createAdapter();
+      const instance = createProxyAxios({ adapter });
+
+      await instance.get('https://example.com/api');
+
+      expect(adapter).toHaveBeenCalledWith(
+        expect.objectContaining({ maxContentLength: getServiceAxiosMaxContentLength() })
+      );
+    });
+
+    it('已创建的客户端按请求读取更新后的实例上限，并保留零字节语义', async () => {
+      clearProxyEnv();
+      mockPublicDns();
+      const adapter = createAdapter();
+      const instance = createProxyAxios({ adapter });
+
+      for (const limit of [7, 11, 0]) {
+        getTestInstanceConfig().resource.serviceAxiosMaxContentLength = limit;
+        await instance.get('https://example.com/api');
+        expect(adapter).toHaveBeenLastCalledWith(
+          expect.objectContaining({ maxContentLength: limit * 1024 * 1024 })
+        );
+      }
+    });
+
+    it('流式响应未显式限制时应该保留 axios 默认值', async () => {
+      clearProxyEnv();
+      mockPublicDns();
+      const adapter = createAdapter();
+      const instance = createProxyAxios({ adapter });
+
+      await instance.get('https://example.com/file', { responseType: 'stream' });
+
+      expect(adapter).toHaveBeenCalledWith(
+        expect.objectContaining({ responseType: 'stream', maxContentLength: -1 })
+      );
+    });
+
+    it('流式响应应该保留调用方显式指定的上限', async () => {
+      clearProxyEnv();
+      mockPublicDns();
+      const adapter = createAdapter();
+      const instance = createProxyAxios({ adapter });
+
+      await instance.get('https://example.com/file', {
+        responseType: 'stream',
+        maxContentLength: 100 * 1024 * 1024
+      });
+
+      expect(adapter).toHaveBeenCalledWith(
+        expect.objectContaining({ maxContentLength: 100 * 1024 * 1024 })
+      );
+    });
+
+    const createLargeFileServer = async () => {
+      // 模拟渠道附件下载：文件超过共享默认 20 MiB，但未超过 100 MiB 业务配额。
+      const body = Buffer.alloc(25 * 1024 * 1024, 1);
+      const server = await listen((req, res) => {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.end(body);
+      }, '0.0.0.0');
+      return { body, server, port: getServerPort(server) };
+    };
+
+    it('流式响应未显式限制时应该允许读取超过默认上限的业务文件', async () => {
+      clearProxyEnv();
+      getTestInstanceConfig().security.checkInternalIp = false;
+      const carrierHost = getReachablePrivateHost();
+      if (!carrierHost) {
+        return;
+      }
+
+      const { body, server, port } = await createLargeFileServer();
+
+      try {
+        const instance = createProxyAxios();
+        const response = await instance.get(`http://${carrierHost}:${port}/file`, {
+          responseType: 'stream'
+        });
+        let totalBytes = 0;
+        for await (const chunk of response.data as AsyncIterable<Buffer>) {
+          totalBytes += chunk.length;
+        }
+
+        expect(totalBytes).toBe(body.length);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('构造实例时显式传入 maxContentLength: -1 应该保留取消限制的语义', async () => {
+      clearProxyEnv();
+      getTestInstanceConfig().security.checkInternalIp = false;
+      const carrierHost = getReachablePrivateHost();
+      if (!carrierHost) {
+        return;
+      }
+
+      const { body, server, port } = await createLargeFileServer();
+
+      try {
+        const instance = createProxyAxios({ maxContentLength: -1 });
+        const response = await instance.get(`http://${carrierHost}:${port}/file`, {
+          responseType: 'arraybuffer'
+        });
+
+        expect(Buffer.byteLength(response.data)).toBe(body.length);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('单次请求显式传入 maxContentLength: -1 应该保留取消限制的语义', async () => {
+      clearProxyEnv();
+      getTestInstanceConfig().security.checkInternalIp = false;
+      const carrierHost = getReachablePrivateHost();
+      if (!carrierHost) {
+        return;
+      }
+
+      const { body, server, port } = await createLargeFileServer();
+
+      try {
+        const instance = createProxyAxios();
+        const response = await instance.get(`http://${carrierHost}:${port}/file`, {
+          responseType: 'arraybuffer',
+          maxContentLength: -1
+        });
+
+        expect(Buffer.byteLength(response.data)).toBe(body.length);
+      } finally {
+        await closeServer(server);
+      }
     });
   });
 });

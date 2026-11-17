@@ -4,6 +4,34 @@ export enum InformLevelEnum {
   'emergency' = 'emergency'
 }
 
+export enum ModelDeprecationInformChannelEnum {
+  inApp = 'inApp',
+  sms = 'sms',
+  email = 'email'
+}
+
+export enum ModelDeprecationInformRunKindEnum {
+  delivery = 'delivery',
+  retry = 'retry'
+}
+
+export enum ModelDeprecationInformRunStatusEnum {
+  scheduled = 'scheduled',
+  running = 'running',
+  completed = 'completed',
+  failed = 'failed',
+  interrupted = 'interrupted',
+  terminated = 'terminated',
+  skipped = 'skipped'
+}
+
+export enum ModelDeprecationInformFailureStatusEnum {
+  unresolved = 'unresolved',
+  resolved = 'resolved',
+  superseded = 'superseded',
+  notApplicable = 'not_applicable'
+}
+
 export const InformLevelMap = {
   [InformLevelEnum.common]: {
     label: '普通'
@@ -19,12 +47,14 @@ export const InformLevelMap = {
 export enum SendInformTemplateCodeEnum {
   REGISTER = 'REGISTER', // 注册
   RESET_PASSWORD = 'RESET_PASSWORD', // 重置密码
+  CHANGE_PASSWORD = 'CHANGE_PASSWORD', // 修改密码
   BIND_NOTIFICATION = 'BIND_NOTIFICATION', // 绑定通知
   ACCOUNT_CANCELLATION_CODE = 'ACCOUNT_CANCELLATION_CODE', // 账号注销验证码
   ACCOUNT_CANCELLATION_TEAM_SUBMITTED = 'ACCOUNT_CANCELLATION_TEAM_SUBMITTED', // 团队注销通知
   ACCOUNT_CANCELLATION_7D = 'ACCOUNT_CANCELLATION_7D',
   ACCOUNT_CANCELLATION_1D = 'ACCOUNT_CANCELLATION_1D',
   ACCOUNT_CANCELLATION_TODAY = 'ACCOUNT_CANCELLATION_TODAY',
+  LOGIN = 'LOGIN', // 登录二次验证
 
   EXPIRE_SOON = 'EXPIRE_SOON', // 即将过期
   EXPIRED = 'EXPIRED', // 已过期
@@ -39,5 +69,6 @@ export enum SendInformTemplateCodeEnum {
   DATASET_INDEX_THIRTY_PERCENT_REMAIN = 'DATASET_INDEX_THIRTY_PERCENT_REMAIN', // 数据集索引30%剩余
 
   MANAGE_RENAME = 'MANAGE_RENAME', // 管理员重命名
+  MODEL_DEPRECATION = 'MODEL_DEPRECATION', // 模型下架提醒
   CUSTOM = 'CUSTOM' // 自定义
 }

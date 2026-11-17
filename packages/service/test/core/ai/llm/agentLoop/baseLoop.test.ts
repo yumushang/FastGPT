@@ -2,7 +2,7 @@ import {
   ChatCompletionRequestMessageRoleEnum,
   ModelTypeEnum
 } from '@fastgpt/global/core/ai/constants';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import type { AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
 import type { ChatCompletionTool } from '@fastgpt/global/core/ai/llm/type';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,7 +53,6 @@ const modelData = {
   name: 'GPT-4',
   isActive: true,
   scope: 'system' as const,
-  isCustom: false,
   config: {
     maxContext: 128000,
     maxResponse: 4096,
@@ -62,7 +61,7 @@ const modelData = {
     toolChoice: true,
     reasoning: false
   }
-} as LLMSystemModelDataType;
+} as LLMModelDataType;
 
 const searchTool: ChatCompletionTool = {
   type: 'function',
@@ -94,6 +93,93 @@ const calculatorTool: ChatCompletionTool = {
 };
 
 describe('runAgentLoop with mocked createLLMResponse', () => {
+  it('appends a tool continuation after all paired tool results in the original context', async () => {
+    const onUserMessage = vi.fn();
+    const first = toolCall({ id: 'search-1', name: 'search', args: { q: 'original requirement' } });
+    const second = toolCall({ id: 'calculate-1', name: 'calculator' });
+    mockCreateLLMResponseQueue(createLLMResponseMock, [
+      { ...first, toolCalls: [...first.toolCalls!, ...second.toolCalls!] },
+      ({ body }) => {
+        expect(body.messages.map((message) => message.role)).toEqual([
+          'user',
+          'assistant',
+          'tool',
+          'tool',
+          'user'
+        ]);
+        expect(body.messages[0].content).toBe('original requirement');
+        expect(body.messages.at(-1)).toMatchObject({
+          role: 'user',
+          content: 'Review the draft.',
+          hideInUI: true
+        });
+        return text({ content: 'Reviewed.' });
+      }
+    ]);
+    const result = await runAgentLoop({
+      teamId: 'team-1',
+      maxRunAgentTimes: 5,
+      body: {
+        model: modelData,
+        messages: [{ role: 'user', content: 'original requirement' }],
+        tools: [searchTool, calculatorTool]
+      },
+      isAborted: () => false,
+      onRunTool: async ({ call }) => ({
+        response: 'tool result',
+        assistantMessages: [],
+        usages: [],
+        ...(call.id === 'search-1' && { continuationMessage: 'Review the draft.' })
+      }),
+      onRunInteractiveTool: vi.fn(),
+      onUserMessage
+    });
+    expect(result.error).toBeUndefined();
+    expect(onUserMessage).toHaveBeenCalledExactlyOnceWith({
+      content: 'Review the draft.',
+      source: 'server'
+    });
+  });
+
+  it.each(['stop', 'pause', 'abort'] as const)(
+    'does not append a tool continuation after %s',
+    async (exit) => {
+      let aborted = false;
+      const onUserMessage = vi.fn();
+      mockCreateLLMResponseQueue(createLLMResponseMock, [
+        toolCall({ name: 'search', args: { q: 'test' } })
+      ]);
+      const result = await runAgentLoop({
+        teamId: 'team-1',
+        maxRunAgentTimes: 5,
+        body: {
+          model: modelData,
+          messages: [{ role: 'user', content: 'test' }],
+          tools: [searchTool]
+        },
+        isAborted: () => aborted,
+        onRunTool: async () => {
+          aborted = exit === 'abort';
+          return {
+            response: 'stopped',
+            assistantMessages: [],
+            usages: [],
+            continuationMessage: 'Do not send.',
+            ...(exit === 'stop' && { stop: true }),
+            ...(exit === 'pause' && { interactive: { pending: true } })
+          };
+        },
+        onRunInteractiveTool: vi.fn(),
+        onUserMessage
+      });
+      expect(createLLMResponseMock).toHaveBeenCalledTimes(1);
+      expect(onUserMessage).not.toHaveBeenCalled();
+      expect(result.completeMessages).not.toContainEqual(
+        expect.objectContaining({ content: 'Do not send.' })
+      );
+    }
+  );
+
   beforeEach(() => {
     vi.clearAllMocks();
     countGptMessagesTokensMock.mockResolvedValue(100);
@@ -448,6 +534,8 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
     });
 
     const secondLLMCall = createLLMResponseMock.mock.calls[1][0];
+    expect(createLLMResponseMock.mock.calls[0][0].fileContext).toBeDefined();
+    expect(secondLLMCall.fileContext).toBe(createLLMResponseMock.mock.calls[0][0].fileContext);
     expect(secondLLMCall.body.messages).toContainEqual({
       role: 'tool',
       tool_call_id: 'call_search',
@@ -655,7 +743,7 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
     );
   });
 
-  it('keeps child nodeResponseId only inside childrenResponse when a tool call pauses', async () => {
+  it('keeps child nodeResponseId only inside interactive when a tool call pauses', async () => {
     const onRunTool = vi.fn(async () => ({
       response: 'waiting for user selection',
       assistantMessages: [],
@@ -704,15 +792,15 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
     });
 
     expect(createLLMResponseMock).toHaveBeenCalledTimes(1);
-    expect(result.toolChildPause).toEqual(
+    expect(result.pause).toEqual(
       expect.objectContaining({
-        childrenResponse: expect.objectContaining({
+        interactive: expect.objectContaining({
           nodeResponseId: 'child_select_response'
         }),
         toolCallId: 'call_search'
       })
     );
-    expect(result.toolChildPause).not.toEqual(
+    expect(result.pause).not.toEqual(
       expect.objectContaining({
         nodeResponseId: expect.anything()
       })
@@ -918,6 +1006,225 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
     expect(compressToolResponseMock.mock.calls[0][0].reasoningEffort).toBe('high');
   });
 
+  it.each(
+    [false, true].flatMap((previousSuccess) =>
+      [false, true].map((usedUserOpenAIKey) => ({ previousSuccess, usedUserOpenAIKey }))
+    )
+  )(
+    'counts errored request usage: previousSuccess=$previousSuccess, userKey=$usedUserOpenAIKey',
+    async ({ previousSuccess, usedUserOpenAIKey }) => {
+      const error = new Error(
+        'LLM tool call error: no valid tool calls matched the requested tools.'
+      );
+      const onLLMRequestEnd = vi.fn();
+      const onRunTool = vi.fn(async () => ({
+        response: 'search result',
+        assistantMessages: [],
+        usages: []
+      }));
+      mockCreateLLMResponseQueue(createLLMResponseMock, [
+        ...(previousSuccess
+          ? [{ ...toolCall({ id: 'search', name: 'search' }), usedUserOpenAIKey }]
+          : []),
+        {
+          requestId: 'req_error',
+          finishReason: 'tool_calls',
+          error,
+          inputTokens: 40,
+          outputTokens: 8,
+          usedUserOpenAIKey
+        }
+      ]);
+
+      const result = await runAgentLoop({
+        maxRunAgentTimes: 5,
+        body: {
+          model: modelData,
+          stream: true,
+          messages: [{ role: 'user', content: 'search' }],
+          tools: [searchTool]
+        },
+        teamId: 'team_1',
+        isAborted: () => false,
+        onRunTool,
+        onRunInteractiveTool: vi.fn(),
+        onLLMRequestEnd
+      });
+
+      const requestCount = previousSuccess ? 2 : 1;
+      expect(createLLMResponseMock).toHaveBeenCalledTimes(requestCount);
+      expect(onRunTool).toHaveBeenCalledTimes(previousSuccess ? 1 : 0);
+      expect(result.error).toBe(error);
+      expect(result.finish_reason).toBe('tool_calls');
+      expect(result.requestIds).toEqual(
+        previousSuccess ? ['req_search', 'req_error'] : ['req_error']
+      );
+      expect(result.inputTokens).toBe(previousSuccess ? 140 : 40);
+      expect(result.outputTokens).toBe(previousSuccess ? 28 : 8);
+      expect(result.llmTotalPoints).toBe(usedUserOpenAIKey ? 0 : requestCount);
+
+      // 返回汇总与逐次用量事件一致，错误轮只计一次；用户 key 保留 token，积分为零。
+      expect(onLLMRequestEnd).toHaveBeenCalledTimes(requestCount);
+      expect(onLLMRequestEnd).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestId: 'req_error', finishReason: 'tool_calls', error })
+      );
+      const usages = onLLMRequestEnd.mock.calls.map(([event]) => event.usage);
+      expect(usages.reduce((sum, usage) => sum + usage.inputTokens, 0)).toBe(result.inputTokens);
+      expect(usages.reduce((sum, usage) => sum + usage.outputTokens, 0)).toBe(result.outputTokens);
+      expect(usages.reduce((sum, usage) => sum + usage.totalPoints, 0)).toBe(result.llmTotalPoints);
+    }
+  );
+
+  it.each([true, false])(
+    'feeds back all truncated tool calls and lets the model recover: nativeToolChoice=%s',
+    async (nativeToolChoice) => {
+      const onRunTool = vi.fn(async () => ({
+        response: 'Search completed.',
+        assistantMessages: [],
+        usages: []
+      }));
+      const onRunInteractiveTool = vi.fn();
+      const onToolRunStart = vi.fn();
+      const onToolRunEnd = vi.fn();
+      const onLLMRequestEnd = vi.fn();
+      const truncated = toolCall({ name: 'search', args: '{"q":"incomplete' });
+      const parallel = toolCall({ name: 'calculator' });
+      const calls = [...truncated.toolCalls!, ...parallel.toolCalls!];
+      const recovered = toolCall({ id: 'recovered', name: 'search', args: { q: 'short query' } });
+      mockCreateLLMResponseQueue(createLLMResponseMock, [
+        { ...truncated, finishReason: 'length', toolCalls: calls },
+        ({ body }) => {
+          // 下一轮请求前，整批工具只收到未执行说明；原始参数不能到达执行器。
+          expect(onRunTool).not.toHaveBeenCalled();
+          expect(onToolRunStart).not.toHaveBeenCalled();
+          expect(compressToolResponseMock).not.toHaveBeenCalled();
+          expect(body.messages.slice(1)).toEqual([
+            { role: 'assistant', tool_calls: calls },
+            ...calls.map((call) => ({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: expect.stringContaining('Tool not executed:')
+            }))
+          ]);
+          expect(onToolRunEnd).toHaveBeenCalledTimes(2);
+          for (const call of calls) {
+            expect(onToolRunEnd).toHaveBeenCalledWith(
+              expect.objectContaining({
+                call,
+                response: expect.stringContaining('Retry with shorter, complete arguments'),
+                errorMessage: expect.stringContaining('Tool not executed:'),
+                seconds: 0,
+                usages: []
+              })
+            );
+          }
+          return recovered;
+        },
+        text({ requestId: 'req_final', content: 'Done.' })
+      ]);
+
+      const result = await runAgentLoop({
+        maxRunAgentTimes: 5,
+        batchToolSize: 2,
+        teamId: 'team_1',
+        body: {
+          model: {
+            ...modelData,
+            config: { ...modelData.config, toolChoice: nativeToolChoice }
+          },
+          messages: [{ role: 'user', content: 'search and calculate' }],
+          tools: [searchTool, calculatorTool]
+        },
+        isAborted: () => false,
+        onRunTool,
+        onRunInteractiveTool,
+        onToolRunStart,
+        onToolRunEnd,
+        onLLMRequestEnd
+      });
+
+      expect(onRunTool).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ call: recovered.toolCalls![0] })
+      );
+      expect(onRunInteractiveTool).not.toHaveBeenCalled();
+      expect(createLLMResponseMock).toHaveBeenCalledTimes(3);
+      expect(result.error).toBeUndefined();
+      expect(result.finish_reason).toBe('stop');
+      expect(result.inputTokens).toBe(300);
+      expect(result.outputTokens).toBe(70);
+      expect(result.llmTotalPoints).toBe(3);
+      expect(result.requestIds).toEqual(['req_search', 'req_recovered', 'req_final']);
+      expect(result.assistantMessages.at(-1)).toEqual({ role: 'assistant', content: 'Done.' });
+      expect(onLLMRequestEnd).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          error: undefined,
+          requestId: 'req_search',
+          finishReason: 'length',
+          usage: { inputTokens: 100, outputTokens: 20, totalPoints: 1 }
+        })
+      );
+    }
+  );
+
+  it('preserves provider errors on a length-limited tool response', async () => {
+    const error = new Error('Provider failed');
+    const onRunTool = vi.fn();
+    const onToolRunEnd = vi.fn();
+    mockCreateLLMResponseQueue(createLLMResponseMock, [
+      { ...toolCall({ name: 'search' }), finishReason: 'length', error }
+    ]);
+    const result = await runAgentLoop({
+      teamId: 'team_1',
+      maxRunAgentTimes: 5,
+      body: {
+        model: modelData,
+        messages: [{ role: 'user', content: 'search' }],
+        tools: [searchTool]
+      },
+      isAborted: () => false,
+      onRunTool,
+      onRunInteractiveTool: vi.fn(),
+      onToolRunEnd
+    });
+
+    expect(result.error).toBe(error);
+    expect(result.finish_reason).toBe('length');
+    expect(createLLMResponseMock).toHaveBeenCalledTimes(1);
+    expect(onRunTool).not.toHaveBeenCalled();
+    expect(onToolRunEnd).not.toHaveBeenCalled();
+    expect(result.assistantMessages).toEqual([]);
+    expect(result.inputTokens).toBe(100);
+    expect(result.outputTokens).toBe(20);
+    expect(result.llmTotalPoints).toBe(1);
+  });
+
+  it('preserves a text-only answer stopped at the output limit', async () => {
+    mockCreateLLMResponseQueue(createLLMResponseMock, [
+      { ...text({ content: 'Partial answer' }), finishReason: 'length' }
+    ]);
+    const onRunTool = vi.fn();
+    const result = await runAgentLoop({
+      teamId: 'team_1',
+      maxRunAgentTimes: 5,
+      body: {
+        model: modelData,
+        messages: [{ role: 'user', content: 'answer' }],
+        tools: []
+      },
+      isAborted: () => false,
+      onRunTool,
+      onRunInteractiveTool: vi.fn()
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.finish_reason).toBe('length');
+    expect(result.assistantMessages).toEqual([
+      expect.objectContaining({ content: 'Partial answer' })
+    ]);
+    expect(onRunTool).not.toHaveBeenCalled();
+  });
+
   it('keeps requestId and usage when LLM returns empty tool_calls finish', async () => {
     const onLLMRequestEnd = vi.fn();
 
@@ -1035,7 +1342,6 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
 
     expect(onToolRunEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        rawResponse: 'large search result',
         response: 'compressed:large search result',
         seconds: 1.23,
         toolResponseCompress: expect.objectContaining({
@@ -1044,6 +1350,7 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
         })
       })
     );
+    expect(onToolRunEnd.mock.calls[0]?.[0]).not.toHaveProperty('rawResponse');
   });
 
   it('forwards tool call events from createLLMResponse without replaying final tool calls', async () => {
@@ -1259,7 +1566,6 @@ describe('runAgentLoop with mocked createLLMResponse', () => {
     expect(onToolRunEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         call: expect.objectContaining({ id: 'call_search' }),
-        rawResponse: 'Tool error: network failed',
         response: 'Tool error: network failed',
         errorMessage: 'Tool error: network failed'
       })

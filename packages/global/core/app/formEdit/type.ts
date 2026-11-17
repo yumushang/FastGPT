@@ -4,8 +4,7 @@ import { AppChatConfigTypeSchema, AppDatasetSearchParamsTypeSchema } from '../ty
 import { FlowNodeTemplateTypeSchema } from '../../workflow/type/node';
 import { NodeInputKeyEnum } from '../../workflow/constants';
 import { SANDBOX_ENTRYPOINT_MAX_LENGTH } from '../../ai/sandbox/constants';
-
-export type AgentSubAppItemType = object;
+import { AgentToolSchema } from '../tool/type';
 
 /* ===== Agent Skill ===== */
 export const SelectedAgentSkillItemTypeSchema = z.object({
@@ -13,25 +12,27 @@ export const SelectedAgentSkillItemTypeSchema = z.object({
   name: z.string(),
   description: z.string().default(''),
   avatar: z.string().optional(),
-  isDeleted: z.boolean().default(false)
+  /** 资源异常状态码（如 resource_missing, resource_no_permission），正常时为 undefined */
+  error: z.string().optional()
 });
 export type SelectedAgentSkillItemType = z.infer<typeof SelectedAgentSkillItemTypeSchema>;
-export const StoredSelectedAgentSkillItemTypeSchema = SelectedAgentSkillItemTypeSchema.pick({
-  skillId: true
+export const StoredSelectedAgentSkillItemTypeSchema = z.object({
+  skillId: z.string(),
+  name: z.string().optional(),
+  avatar: z.string().optional(),
+  description: z.string().optional()
 });
 export type StoredSelectedAgentSkillItemType = z.infer<
   typeof StoredSelectedAgentSkillItemTypeSchema
 >;
 
 /* ===== Tool ===== */
-const SelectedToolItemBaseSchema = FlowNodeTemplateTypeSchema.extend({
-  configStatus: z.enum(['noConfig', 'waitingForConfig', 'configured', 'invalid']).optional(),
+export const SelectedToolItemTypeSchema = FlowNodeTemplateTypeSchema.extend({
+  /** 工具加载失败时保留持久化输入来源；不冒充可编辑的完整 NodeIO。 */
+  rawInputs: AgentToolSchema.shape.inputs,
   config: z.record(z.string(), z.unknown()).optional()
 });
-
-export const SelectedToolItemTypeSchema = SelectedToolItemBaseSchema;
 export type SelectedToolItemType = z.infer<typeof SelectedToolItemTypeSchema>;
-export type AvailableSelectedToolItemType = SelectedToolItemType;
 
 export const AppFormEditFormV1TypeSchema = z.object({
   aiSettings: z.object({

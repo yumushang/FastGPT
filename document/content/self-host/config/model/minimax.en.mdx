@@ -1,11 +1,11 @@
 ---
 title: MiniMax Integration Example
-description: MiniMax integration example for FastGPT
+description: "Step-by-step guide to integrating MiniMax large language models and speech synthesis models into a self-hosted FastGPT deployment."
 ---
 
 [MiniMax](https://www.minimaxi.com) is an AI technology company that provides high-performance large language model API services. MiniMax's API is compatible with the OpenAI format, making it easy to integrate with FastGPT.
 
-Before reading this guide, make sure you've read the [Model Configuration Guide](./intro.en.mdx).
+Before reading this guide, make sure you've read the [Model Configuration Guide](/en/self-host/config/model/intro).
 
 ## 1. Get an API Key
 
@@ -14,7 +14,7 @@ Before reading this guide, make sure you've read the [Model Configuration Guide]
 
 ## 2. Add Models
 
-The system includes built-in MiniMax models. Simply search for `MiniMax` on the `Model Configuration` page and enable the models you need. If you need additional models, you can [add them manually](./intro.en.mdx#add-a-custom-model).
+The system includes built-in MiniMax models. Simply search for `MiniMax` on the `Model Configuration` page and enable the models you need. If you need additional models, you can [add them manually](/en/self-host/config/model/intro#add-a-custom-model).
 
 ### Built-in Model List
 
@@ -26,13 +26,13 @@ The system includes built-in MiniMax models. Simply search for `MiniMax` on the 
 
 ## 3. Add a Model provider
 
-On the Model providers page, add a new MiniMax channel:
+On the Model providers page, add a new MiniMax provider:
 
 - Protocol type: Select **MiniMax**
-- Proxy URL: `https://api.minimax.io/v1`
+- Proxy URL: `https://api.minimaxi.com/v1` (for keys created on the China Mainland site `platform.minimaxi.com`; use `https://api.minimax.io/v1` for keys created on the international site)
 - Enter your MiniMax API Key
 - Select the models you just enabled
 
 ## 4. Test Models
 
-After configuration, click the test button in the channel list to verify the models are working properly.
+After configuration, click the test button in the provider list to verify that the models work.

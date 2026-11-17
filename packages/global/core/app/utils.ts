@@ -1,11 +1,10 @@
 import type { AppFormEditFormType } from './formEdit/type';
 import { DatasetSearchModeEnum } from '../dataset/constants';
+import { rerankCandidateNumRange } from '../dataset/search/utils';
 import { NodeInputKeyEnum } from '../workflow/constants';
+import { FlowNodeTypeEnum } from '../workflow/node/constant';
 import { type WorkflowTemplateBasicType } from '../workflow/type';
 import { AppTypeEnum } from './constants';
-import appErrList from '../../common/error/code/app';
-import pluginErrList from '../../common/error/code/plugin';
-import { i18nT } from '../../common/i18n/utils';
 
 const deletedPluginErrorList = new Set([
   'plugin.team_not_installed',
@@ -30,9 +29,10 @@ export const getDefaultAppForm = (): AppFormEditFormType => {
       similarity: 0.4,
       limit: 3000,
       searchMode: DatasetSearchModeEnum.embedding,
-      usingReRank: true,
+      usingReRank: false,
       rerankWeight: 0.5,
-      datasetSearchUsingExtensionQuery: true,
+      rerankCandidateNum: rerankCandidateNumRange.default,
+      datasetSearchUsingExtensionQuery: false,
       datasetSearchExtensionBg: '',
       [NodeInputKeyEnum.authTmbId]: false
     },
@@ -49,22 +49,20 @@ export const getAppType = (config?: WorkflowTemplateBasicType | AppFormEditFormT
     return AppTypeEnum.simple;
   }
 
-  if (!('nodes' in config)) return '';
-  if (config.nodes.some((node) => node.flowNodeType === 'workflowStart')) {
+  if (!('nodes' in config) || !Array.isArray(config.nodes)) return '';
+  if (
+    config.nodes.some(
+      (node: { flowNodeType?: string }) => node?.flowNodeType === FlowNodeTypeEnum.workflowStart
+    )
+  ) {
     return AppTypeEnum.workflow;
   }
-  if (config.nodes.some((node) => node.flowNodeType === 'pluginInput')) {
+  if (
+    config.nodes.some(
+      (node: { flowNodeType?: string }) => node?.flowNodeType === FlowNodeTypeEnum.pluginInput
+    )
+  ) {
     return AppTypeEnum.workflowTool;
   }
   return '';
-};
-
-export const formatToolError = (error?: any) => {
-  if (!error || typeof error !== 'string') return;
-
-  if (isToolNotExistError(error)) return i18nT('common:error.tool_not_exist');
-
-  const errorText = appErrList[error]?.message || pluginErrList[error]?.message;
-
-  return errorText || error;
 };

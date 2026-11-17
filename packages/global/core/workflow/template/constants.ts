@@ -1,3 +1,4 @@
+import { workflowBuilderTemplateIds } from './automationMeta';
 import { AiChatModule } from './system/aiChat';
 import { AssignedAnswerModule } from './system/assignedAnswer';
 import { ClassifyQuestionModule } from './system/classifyQuestion/index';
@@ -34,6 +35,8 @@ import { ParallelRunNode } from './system/parallelRun/parallelRun';
 import { ReadFilesNode } from './system/readFiles';
 import { RunToolNode } from './system/runTool';
 import { RunToolSetNode } from './system/runToolSet';
+import { HttpToolSetNode } from './system/httpToolSet';
+import { McpToolSetNode } from './system/mcpToolSet';
 import { CodeNode } from './system/sandbox';
 import { TextEditorNode } from './system/textEditor';
 import { ToolParamsNode } from './system/toolParams';
@@ -50,7 +53,6 @@ const systemNodes: FlowNodeTemplateType[] = [
   ToolCallNode,
   ToolParamsNode,
   StopToolNode,
-  AgentNode,
   ReadFilesNode,
   HttpNode468,
   IfElseNode,
@@ -64,6 +66,9 @@ const systemNodes: FlowNodeTemplateType[] = [
 export const appSystemModuleTemplates: FlowNodeTemplateType[] = [
   WorkflowStart,
   ...systemNodes,
+  McpToolSetNode,
+  HttpToolSetNode,
+  AgentNode,
   CustomFeedbackNode,
   UserSelectNode,
   FormInputNode
@@ -94,3 +99,11 @@ export const moduleTemplatesFlat: FlowNodeTemplateType[] = [
   RunToolSetNode,
   AiQueryExtension
 ];
+
+/** Builder 复用现有系统模板清单，保留已发布的模板标识、顺序及内部容器节点。 */
+export const workflowBuilderSystemTemplates = Object.entries(workflowBuilderTemplateIds).map(
+  ([flowNodeType, templateRef]) => ({
+    templateId: templateRef.slice('builtin:'.length),
+    template: moduleTemplatesFlat.find((template) => template.flowNodeType === flowNodeType)!
+  })
+);

@@ -1,15 +1,64 @@
+import { checkCsrf } from '@fastgpt/next/middle/csrf';
 import { withNextCors } from '@fastgpt/next/middle/cors';
 import type { NextApiRequest, NextApiResponse } from '@fastgpt/next/type';
-import { createApiEntry } from '@fastgpt/service/common/http/entry';
-import { serviceEnv } from '@fastgpt/service/env';
+import { createApiEntry, type ApiHandler } from '@fastgpt/service/common/http/entry';
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
+import { logInstanceConfigRead } from '@fastgpt/service/common/system/migrationCoverageLog';
+import { apiI18n } from '@/service/middleware/i18n';
 
-export const NextAPI = createApiEntry<NextApiRequest, NextApiResponse>({
-  beforeCallback: [
-    (req, res) =>
-      withNextCors({
-        req,
-        res,
-        allowedOrigins: serviceEnv.ALLOWED_ORIGINS?.split(',')
-      })
-  ]
-});
+type NextAPIOptions = {
+  csrf?: boolean;
+  redactQueryParams?: string[];
+};
+
+/**
+ * Next.js API 统一入口：CORS/CSRF 由适配层处理，日志、错误和采集上下文交给共享 HTTP 管线。
+ * 仅请求携带 x-fastgpt-profile: 1 时启用分段性能采集，业务无需注册采集器。
+ */
+export const NextAPI = (
+  ...args: (ApiHandler<any, NextApiRequest, NextApiResponse> | NextAPIOptions)[]
+) => {
+  const lastArg = args[args.length - 1];
+  const options = typeof lastArg === 'object' ? lastArg : {};
+  const handlers = (typeof lastArg === 'object' ? args.slice(0, -1) : args) as ApiHandler<
+    any,
+    NextApiRequest,
+    NextApiResponse
+  >[];
+
+  /**
+   * 按接口声明顺序执行 CORS 和 CSRF。
+   * 跨域白名单与 CSRF 开关以实例配置为唯一权威来源：blockStartup 迁移已把
+   * ALLOWED_ORIGINS / CSRF_ENABLED 回填进 security 域，请求期不再回落 env，
+   * 否则管理员清空白名单/关闭 CSRF 会被 env 初值静默复活（写了不接管）。
+   * 空白名单沿用历史"允许所有来源"语义（withNextCors 回显请求 origin）。
+   */
+  const beforeRequest = async (req: NextApiRequest, res: NextApiResponse) => {
+    const security = getSystemInstanceConfig().security;
+    logInstanceConfigRead({
+      callsite: 'runtime.app.middleware.nextApi.beforeRequest',
+      fields: [
+        { path: 'security.allowedOriginsEnabled', value: security.allowedOriginsEnabled },
+        { path: 'security.allowedOrigins', value: security.allowedOrigins },
+        { path: 'security.csrfEnabled', value: security.csrfEnabled }
+      ]
+    });
+    // 未设置开关的旧 scope 继续沿用非空名单；显式关闭则保留名单但不限制跨域来源。
+    const allowedOrigins =
+      security.allowedOriginsEnabled !== false && security.allowedOrigins.length > 0
+        ? security.allowedOrigins
+        : undefined;
+
+    await withNextCors({ req, res, allowedOrigins });
+
+    if (options.csrf !== false && security.csrfEnabled) {
+      await checkCsrf({ req, res });
+    }
+  };
+
+  return createApiEntry<NextApiRequest, NextApiResponse>({
+    requestI18n: apiI18n,
+    beforeCallback: [beforeRequest],
+    redactQueryParams: options.redactQueryParams
+  })(...handlers);
+};

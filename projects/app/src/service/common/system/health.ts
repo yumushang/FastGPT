@@ -1,12 +1,13 @@
+import { isProVersion } from '@fastgpt/service/common/system/constants';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { SandboxCodeTypeEnum } from '@fastgpt/global/core/workflow/template/system/sandbox/constants';
-import { POST } from '@fastgpt/service/common/api/plusRequest';
+import { postHealth } from '@fastgpt/service/thirdProvider/fastgptPro/api';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
 import { checkRedisHealth } from '@fastgpt/dal/redis';
 import { S3Buckets } from '@fastgpt/service/common/s3/config/constants';
 import { InitialErrorEnum } from '@fastgpt/service/common/system/constants';
 import { loadModelProviders } from '@fastgpt/service/thirdProvider/fastgptPlugin/model';
-import { codeSandbox } from '@fastgpt/service/thirdProvider/codeSandbox';
+import { codeSandbox, isCodeSandboxConfigured } from '@fastgpt/service/thirdProvider/codeSandbox';
 
 export const instrumentationCheck = async () => {
   const logger = getLogger(LogCategories.SYSTEM);
@@ -43,9 +44,9 @@ export const instrumentationCheck = async () => {
   }
 
   // pro
-  if (global.feConfigs?.isPlus) {
+  if (isProVersion()) {
     try {
-      const data = await POST<{ auth: boolean; data: string }>('/health');
+      const data = await postHealth();
       if (!data.auth) {
         throw new Error('PRO_TOKEN is invalid');
       }
@@ -57,16 +58,18 @@ export const instrumentationCheck = async () => {
   }
 
   // sandbox
-  try {
-    await codeSandbox.runCode({
-      codeType: SandboxCodeTypeEnum.py,
-      code: `def main():
+  if (isCodeSandboxConfigured()) {
+    try {
+      await codeSandbox.runCode({
+        codeType: SandboxCodeTypeEnum.py,
+        code: `def main():
     print("Hello, World!")
     return {}`,
-      variables: {}
-    });
-  } catch (error) {
-    logger.warn(`[${InitialErrorEnum.SANDBOX_ERROR}]: ${getErrText(error)}`);
+        variables: {}
+      });
+    } catch (error) {
+      logger.warn(`[${InitialErrorEnum.SANDBOX_ERROR}]: ${getErrText(error)}`);
+    }
   }
 
   logger.info('instrumentation check finish');

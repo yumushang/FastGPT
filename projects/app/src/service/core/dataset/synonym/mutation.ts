@@ -1,32 +1,34 @@
-import type { ApiRequestProps } from '@fastgpt/next/type';
-import path from 'node:path';
-import { Types } from '@fastgpt/service/common/mongo';
-import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
+import { rebuildingDatasetDataMatch } from '@fastgpt/global/core/dataset/data/utils';
 import type { NormalizedSynonymMappingType } from '@fastgpt/global/core/dataset/synonym';
 import {
   DatasetSynonymMutationTypeEnum,
   DatasetSynonymSchemaVersion
 } from '@fastgpt/global/core/dataset/synonym';
 import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
-import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import type { ApiRequestProps } from '@fastgpt/next/type';
+import { Types } from '@fastgpt/service/common/mongo';
+import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
+import { getDatasetModelReference } from '@fastgpt/service/core/dataset/model';
 import {
   MongoDatasetSynonym,
   MongoDatasetSynonymMapping
 } from '@fastgpt/service/core/dataset/synonym/schema';
-import {
-  getDatasetAgentModel,
-  getDatasetEmbeddingModel,
-  getDatasetVlmModel
-} from '@fastgpt/service/core/dataset/model';
-import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
+import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import path from 'node:path';
+
+import { DatasetDataIndexStatusEnum } from '@fastgpt/global/core/dataset/data/constants';
+import { rebuildableDatasetDataMatch } from '@fastgpt/global/core/dataset/data/utils';
 import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
-import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
+import { cleanupUnusedDatasetSynonymMappings } from '@fastgpt/service/core/dataset/synonym/controller';
 import {
   assertDatasetSynonymEnabled,
   invalidateDatasetSynonymMatcherCache
 } from '@fastgpt/service/core/dataset/synonym/entity';
-import { seedDatasetRebuildTasks } from '../queues/rebuild';
+import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
+import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
+import { seedDatasetSynonymRebuildTasks } from '../queues/rebuildSynonym';
 
 const SYNONYM_MAPPING_BATCH_SIZE = 1000;
 
@@ -50,8 +52,13 @@ type DatasetSynonymMutationProps = {
 );
 
 /**
- * 原子切换当前同义词 matcher，并复用模型切换的全量 rebuild 编排重建历史数据。
- * mapping、配置、data 标记和普通 rebuild 种子任务在同一事务中提交。
+ * 原子切换当前同义词 matcher，并创建独立的同义词重建任务。
+ * mapping、配置、data 标记和种子任务在同一事务中提交；保留历史词表供差量比较。
+ *
+ * 管理面边界：路由层只负责入参校验、鉴权和 response schema，本函数承载事务、
+ * 队列忙校验、重建任务种子和 matcher 缓存失效。管理页面由宿主产品实现（agent-builder
+ * UI 已消费这套 API），本仓库只提供 API 契约，避免维护第二份管理实现；独立部署
+ * 需要页面时直接调用 `pages/api/core/dataset/synonym/*` 即可，不需要改引擎。
  */
 export const createDatasetSynonymMutation = async ({
   req,
@@ -75,7 +82,7 @@ export const createDatasetSynonymMutation = async ({
   const [current, existingTraining, existingRebuildingData] = await Promise.all([
     MongoDatasetSynonym.findOne({ teamId, datasetId }).lean(),
     MongoDatasetTraining.exists({ teamId, datasetId }),
-    MongoDatasetData.exists({ teamId, datasetId, rebuilding: true })
+    MongoDatasetData.exists({ teamId, datasetId, ...rebuildingDatasetDataMatch })
   ]);
 
   if (type === DatasetSynonymMutationTypeEnum.delete && !current) {
@@ -98,17 +105,16 @@ export const createDatasetSynonymMutation = async ({
   const fileVersion = (current?.version ?? 0) + 1;
   const now = new Date();
   const normalizedFileName = path.basename(fileName) || 'synonyms.csv';
-  const vectorModelData = getDatasetEmbeddingModel(dataset);
-  const agentModelData = getDatasetAgentModel(dataset);
-  const vlmModelData = getDatasetVlmModel(dataset);
+  const modelHandle = await getTeamModelHandle({ teamId });
+  const vectorModelData = modelHandle.getModelData(getDatasetModelReference(dataset, 'embedding'), {
+    type: 'embedding'
+  });
   const { usageId } = await createTrainingUsage({
     teamId,
     tmbId,
     appName: `${dataset.name}-同义词重建`,
     billSource: UsageSourceEnum.training,
-    vectorModelId: vectorModelData.modelId!,
-    agentModelId: agentModelData.modelId,
-    vllmModelId: vlmModelData?.modelId
+    vectorModelId: vectorModelData.modelId!
   });
 
   const affectedDataCount = await mongoSessionRun(async (session) => {
@@ -202,33 +208,27 @@ export const createDatasetSynonymMutation = async ({
       throw new Error('同义词配置已变化，请刷新页面后重试');
     }
 
-    await MongoDatasetSynonymMapping.deleteMany(
+    // 整轮先标记待重建，未入队的数据也纳入进度；首次索引数据由原任务按最新词表处理。
+    const { modifiedCount: affectedDataCount } = await MongoDatasetData.updateMany(
+      { teamId, datasetId, synonymVersion: { $ne: fileVersion }, ...rebuildableDatasetDataMatch },
       {
-        teamId,
-        datasetId,
-        fileVersion: { $ne: fileVersion }
+        $set: { indexStatus: DatasetDataIndexStatusEnum.rebuildSynonymPending },
+        $unset: { indexErrorMsg: '', synonymRebuildingVersion: '' }
       },
       { session }
     );
-
-    const affectedDataCount = await MongoDatasetData.countDocuments({
-      teamId,
-      datasetId,
-      synonymVersion: { $ne: fileVersion }
-    }).session(session);
     if (affectedDataCount > 0) {
-      await seedDatasetRebuildTasks(
+      await seedDatasetSynonymRebuildTasks(
         {
           teamId,
           tmbId,
           datasetId,
-          billId: String(usageId),
-          vectorModel: vectorModelData,
-          vlmModel: vlmModelData,
-          synonymVersion: fileVersion
+          billId: String(usageId)
         },
         session
       );
+    } else {
+      await cleanupUnusedDatasetSynonymMappings({ teamId, datasetId }, session);
     }
     return affectedDataCount;
   });

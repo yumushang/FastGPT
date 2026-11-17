@@ -1,33 +1,40 @@
-import type { ApiRequestProps } from '@fastgpt/next/type';
-import { NextAPI } from '@/service/middleware/entry';
-import { addDays } from 'date-fns';
-import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
-import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
-import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
-import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
 import {
-  getDatasetAgentModel,
-  getDatasetEmbeddingModel,
-  getDatasetVlmModel
+  assertAppDatasetIndexModelsAvailable,
+  getAssertedDatasetEmbeddingModel
 } from '@fastgpt/service/core/dataset/model';
-import { pushDataListToTrainingQueue } from '@fastgpt/service/core/dataset/training/controller';
+import { getFileUploadLimits } from '@fastgpt/global/common/file/limit';
+import { NextAPI } from '@/service/middleware/entry';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
+import type { ApiRequestProps } from '@fastgpt/next/type';
+import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
+import { getDatasetModelReference } from '@fastgpt/service/core/dataset/model';
+import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
+import { getAuthorizedModelIds } from '@fastgpt/service/support/permission/model/auth';
+import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
+import { addDays } from 'date-fns';
+
+import { datasetImageCollectionFileType } from '@fastgpt/global/common/file/constants';
+import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
-import path from 'node:path';
-import fs from 'node:fs';
-import { getFileS3Key, uploadImage2S3Bucket } from '@fastgpt/service/common/s3/utils';
-import { multer } from '@fastgpt/service/common/file/multer';
 import {
   InsertImagesBodySchema,
   InsertImagesResponseSchema,
   type InsertImagesResponse
 } from '@fastgpt/global/openapi/core/dataset/data/api';
-import { datasetImageCollectionFileType } from '@fastgpt/global/common/file/constants';
-import { parseAllowedExtensions } from '@fastgpt/service/common/s3/utils/uploadConstraints';
-import { i18nT } from '@fastgpt/global/common/i18n/utils';
-import { getDatasetImageIndexCapability } from '@fastgpt/service/core/dataset/utils';
+import { multer } from '@fastgpt/service/common/file/multer';
 import { assertUploadRateLimit } from '@fastgpt/service/common/rateLimit/interface/upload';
+import { decodeMultipartFilename } from '@fastgpt/service/common/s3/filename';
+import { getFileS3Key, uploadImage2S3Bucket } from '@fastgpt/service/common/s3/utils';
+import { parseAllowedExtensions } from '@fastgpt/service/common/s3/utils/uploadConstraints';
+import { validateUploadFile } from '@fastgpt/service/common/s3/validation/upload';
+import { preCreateDatasetDataAndPushToTrainingQueue } from '@fastgpt/service/core/dataset/training/controller';
+import { getDatasetImageIndexCapability } from '@fastgpt/service/core/dataset/utils';
 import { getTeamPlanStatus } from '@fastgpt/service/support/wallet/sub/utils';
+import fs from 'node:fs';
+import path from 'node:path';
 
 async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
   const filepaths: string[] = [];
@@ -35,13 +42,13 @@ async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
   try {
     const result = await multer.resolveMultipleFormData({
       request: req,
-      maxFileSize: global.feConfigs.uploadFileMaxSize,
+      maxFileSize: getSystemInstanceConfig().resource.uploadFileMaxSize,
       allowedExtensions: parseAllowedExtensions(datasetImageCollectionFileType)
     });
     filepaths.push(...result.fileMetadata.map((item) => item.path));
     const { collectionId } = InsertImagesBodySchema.parse(result.data);
 
-    const { collection, teamId, tmbId } = await authDatasetCollection({
+    const { collection, teamId, tmbId, isRoot } = await authDatasetCollection({
       collectionId,
       per: WritePermissionVal,
       req,
@@ -49,9 +56,26 @@ async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
       authApiKey: true
     });
     const dataset = collection.dataset;
-    const vectorModelData = getDatasetEmbeddingModel(dataset);
-    const agentModelData = getDatasetAgentModel(dataset);
-    const vlmModelData = getDatasetVlmModel(dataset);
+    const modelHandle = await getTeamModelHandle({ teamId });
+    const authorizedIds = await getAuthorizedModelIds({
+      actor: { teamId, tmbId, isRoot },
+      handle: modelHandle
+    });
+    const embeddingModels = await assertAppDatasetIndexModelsAvailable({
+      resources: [{ type: 'dataset', id: String(dataset._id) }],
+      teamId,
+      modelHandle,
+      authorizedIds
+    });
+    const vectorModelData = getAssertedDatasetEmbeddingModel(embeddingModels, String(dataset._id));
+    const agentModelData = modelHandle.getModelData(getDatasetModelReference(dataset, 'agent'), {
+      type: 'llm'
+    });
+    const vlmModelData = modelHandle.getModelData(getDatasetModelReference(dataset, 'vlm'), {
+      type: 'llm',
+      vision: true,
+      optional: true
+    });
     const { availableVlmModel, supportVlm, supportImageEmbedding } = getDatasetImageIndexCapability(
       {
         vectorModel: vectorModelData,
@@ -64,25 +88,38 @@ async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
     }
 
     const planStatus = await getTeamPlanStatus({ teamId });
+    const uploadLimits = getFileUploadLimits({
+      teamPlan: planStatus.standard,
+      systemLimit: getSystemInstanceConfig().resource
+    });
     await assertUploadRateLimit({
       identity: String(tmbId),
-      limit: planStatus.standard?.maxUploadFileCount || global.feConfigs.uploadFileMaxAmount,
+      limit: uploadLimits.maxUploadFileCount,
       increment: result.fileMetadata.length
     });
 
     const imageIds = await Promise.all(
-      result.fileMetadata.map(async (file) =>
-        uploadImage2S3Bucket('private', {
-          buffer: await fs.promises.readFile(file.path),
+      result.fileMetadata.map(async (file) => {
+        const buffer = await fs.promises.readFile(file.path);
+        const filename = path.basename(decodeMultipartFilename(file.originalname || file.filename));
+        const { contentType: mimetype, filename: resolvedFilename } = await validateUploadFile({
+          buffer,
+          filename,
+          uploadConstraints: {
+            allowedExtensions: parseAllowedExtensions(datasetImageCollectionFileType)
+          }
+        });
+        return uploadImage2S3Bucket('private', {
+          buffer,
           uploadKey: getFileS3Key.dataset({
             datasetId: dataset._id,
-            filename: path.basename(file.filename)
+            filename: resolvedFilename
           }).fileKey,
-          mimetype: file.mimetype,
-          filename: path.basename(file.filename),
+          mimetype,
+          filename: resolvedFilename,
           expiredTime: addDays(new Date(), 7)
-        })
-      )
+        });
+      })
     );
 
     await mongoSessionRun(async (session) => {
@@ -100,7 +137,7 @@ async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
         return usageId;
       })();
 
-      await pushDataListToTrainingQueue({
+      await preCreateDatasetDataAndPushToTrainingQueue({
         teamId,
         tmbId,
         datasetId: dataset._id,
@@ -108,7 +145,7 @@ async function handler(req: ApiRequestProps): Promise<InsertImagesResponse> {
         agentModel: agentModelData,
         vectorModel: vectorModelData,
         vlmModel: vlmModelData,
-        mode: supportVlm ? TrainingModeEnum.imageParse : TrainingModeEnum.chunk,
+        mode: supportVlm ? TrainingModeEnum.imageParse : TrainingModeEnum.index,
         billId: traingBillId,
         data: imageIds.map((item) => ({
           imageId: item

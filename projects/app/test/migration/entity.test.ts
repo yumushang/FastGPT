@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SystemMigrationStatusEnum } from '@fastgpt/global/migration/constants';
 import {
   claimMigrationLease,
@@ -15,33 +15,23 @@ import {
   saveMigrationFailedRecords,
   saveMigrationProgress
 } from '@/migration/entity';
-import {
-  MongoSystemMigrationFailedRecord,
-  MongoSystemMigrationState
-} from '@/migration/mongoSchema';
+import { MongoSystemMigrationState } from '@/migration/mongoSchema';
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 describe('system migration entity lease', () => {
-  const migrationIdPattern = /^20260903_entity_/;
-
-  beforeEach(async () => {
-    await Promise.all([
-      MongoSystemMigrationState.deleteMany({ _id: migrationIdPattern }),
-      MongoSystemMigrationFailedRecord.deleteMany({ migrationId: migrationIdPattern })
-    ]);
-  });
+  beforeEach(() => vi.restoreAllMocks());
 
   it('creates missing states without overwriting existing status', async () => {
     const migrationId = '20260903_entity_state';
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await MongoSystemMigrationState.updateOne(
       { _id: migrationId },
       { $set: { status: SystemMigrationStatusEnum.failed } }
     );
 
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
 
     const [state] = await getMigrationStates([migrationId]);
     expect(state).toMatchObject({
@@ -52,7 +42,7 @@ describe('system migration entity lease', () => {
 
   it('allows only one concurrent lease winner', async () => {
     const migrationId = '20260903_entity_atomic_claim';
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
 
     const claims = await Promise.all(
       Array.from({ length: 8 }, () =>
@@ -67,62 +57,171 @@ describe('system migration entity lease', () => {
     expect(claims.filter(Boolean)).toHaveLength(1);
   });
 
-  it('claims a failed task only after its holding lease expires', async () => {
-    const migrationId = '20260903_entity_failed_lease_claim';
-    await MongoSystemMigrationState.create({
-      _id: migrationId,
-      status: SystemMigrationStatusEnum.failed,
-      runId: 'failed-run',
-      heartbeatAt: new Date(),
-      leaseExpireAt: new Date(Date.now() + 1_000),
-      lastError: {
-        message: 'migration failed',
-        runId: 'failed-run',
-        createdAt: new Date()
-      }
-    });
-
-    await expect(
-      claimMigrationLease({
+  it('renews and reclaims failed startup work only with explicit opt-in and an expired owner lease', async () => {
+    const migrationId = '20261026_entity_startup';
+    const runId = randomUUID();
+    await ensureMigrationStates([{ id: migrationId }]);
+    await claimMigrationLease({ migrationId, runId, leaseDurationMs: 90_000 });
+    await saveMigrationCheckpoint({ migrationId, runId, checkpoint: { cursor: 1 } });
+    await failMigration({ migrationId, runId, error: { message: 'startup failed' } });
+    expect(
+      await renewMigrationLease({ migrationId, runId, leaseDurationMs: 90_000, allowFailed: true })
+    ).toBe(true);
+    expect(
+      await claimMigrationLease({
         migrationId,
-        runId: randomUUID(),
-        leaseDurationMs: 1_000
+        runId: 'too-early',
+        leaseDurationMs: 90_000,
+        allowFailed: true
       })
-    ).resolves.toBeNull();
-
-    await expect(
-      renewMigrationLease({
-        migrationId,
-        runId: 'failed-run',
-        leaseDurationMs: 500
-      })
-    ).resolves.toBe(true);
-    await delay(100);
-    await expect(
-      claimMigrationLease({
-        migrationId,
-        runId: randomUUID(),
-        leaseDurationMs: 1_000
-      })
-    ).resolves.toBeNull();
-
-    await delay(450);
-    await expect(
-      claimMigrationLease({
-        migrationId,
-        runId: randomUUID(),
-        leaseDurationMs: 1_000
-      })
-    ).resolves.toMatchObject({
-      status: SystemMigrationStatusEnum.running
+    ).toBeNull();
+    await MongoSystemMigrationState.updateOne(
+      { _id: migrationId },
+      { $set: { leaseExpireAt: new Date(0) } }
+    );
+    expect(
+      await renewMigrationLease({ migrationId, runId, leaseDurationMs: 90_000, allowFailed: true })
+    ).toBe(false);
+    expect(
+      await claimMigrationLease({ migrationId, runId: 'not-opted-in', leaseDurationMs: 90_000 })
+    ).toBeNull();
+    const claims = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        claimMigrationLease({
+          migrationId,
+          runId: randomUUID(),
+          leaseDurationMs: 90_000,
+          allowFailed: true
+        })
+      )
+    );
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(claims.find(Boolean)).toMatchObject({
+      status: SystemMigrationStatusEnum.running,
+      checkpoint: { cursor: 1 },
+      lastError: { message: 'startup failed' }
     });
   });
+
+  describe('claimMigrationLease', () => {
+    it.each([1, 90_123])('adds %i milliseconds to Mongo server time', async (leaseDurationMs) => {
+      const migrationId = '20260903_entity_claim_server_time';
+      await ensureMigrationStates([{ id: migrationId }]);
+      // 只观察真实数据库调用，固定兼容表达式，避免高版本测试 Mongo 掩盖兼容性回退。
+      const claim = vi.spyOn(MongoSystemMigrationState, 'findOneAndUpdate');
+
+      const state = await claimMigrationLease({
+        migrationId,
+        runId: randomUUID(),
+        leaseDurationMs
+      });
+
+      expect(claim).toHaveBeenCalledWith(
+        expect.any(Object),
+        [
+          {
+            $set: expect.objectContaining({
+              heartbeatAt: '$$NOW',
+              leaseExpireAt: { $add: ['$$NOW', leaseDurationMs] }
+            })
+          }
+        ],
+        expect.any(Object)
+      );
+      expect(state?.leaseExpireAt).toBeInstanceOf(Date);
+      expect(state?.heartbeatAt).toBeInstanceOf(Date);
+      expect(state!.leaseExpireAt!.getTime() - state!.heartbeatAt!.getTime()).toBe(leaseDurationMs);
+    });
+  });
+
+  describe('renewMigrationLease', () => {
+    it('renews a running lease from Mongo server time without changing ownership', async () => {
+      const migrationId = '20260903_entity_renew_server_time';
+      const runId = randomUUID();
+      const leaseDurationMs = 90_123;
+      await ensureMigrationStates([{ id: migrationId }]);
+      const claimed = await claimMigrationLease({ migrationId, runId, leaseDurationMs: 60_000 });
+      const renew = vi.spyOn(MongoSystemMigrationState, 'updateOne');
+
+      await expect(renewMigrationLease({ migrationId, runId, leaseDurationMs })).resolves.toBe(
+        true
+      );
+
+      expect(renew).toHaveBeenCalledWith(
+        expect.any(Object),
+        [
+          {
+            $set: expect.objectContaining({
+              heartbeatAt: '$$NOW',
+              leaseExpireAt: { $add: ['$$NOW', leaseDurationMs] }
+            })
+          }
+        ],
+        expect.any(Object)
+      );
+      const state = await MongoSystemMigrationState.findById(migrationId).lean();
+      expect(state).toMatchObject({
+        status: SystemMigrationStatusEnum.running,
+        runId,
+        lastStartedAt: claimed!.lastStartedAt
+      });
+      expect(state!.leaseExpireAt!.getTime() - state!.heartbeatAt!.getTime()).toBe(leaseDurationMs);
+      expect(state!.leaseExpireAt!.getTime()).toBeGreaterThan(claimed!.leaseExpireAt!.getTime());
+    });
+
+    it('does not revive an expired lease', async () => {
+      const migrationId = '20260903_entity_expired_renew';
+      const runId = randomUUID();
+      await ensureMigrationStates([{ id: migrationId }]);
+      await claimMigrationLease({ migrationId, runId, leaseDurationMs: 60_000 });
+      await MongoSystemMigrationState.updateOne(
+        { _id: migrationId },
+        { $set: { leaseExpireAt: new Date(0) } }
+      );
+      const expired = await MongoSystemMigrationState.findById(migrationId).lean();
+
+      await expect(
+        renewMigrationLease({ migrationId, runId, leaseDurationMs: 90_000 })
+      ).resolves.toBe(false);
+      await expect(MongoSystemMigrationState.findById(migrationId).lean()).resolves.toEqual(
+        expired
+      );
+    });
+  });
+
+  it.each([new Date(0), new Date(Date.now() + 60_000)])(
+    'never renews or claims a failed task before admin reset (lease %s)',
+    async (leaseExpireAt) => {
+      const migrationId = '20260903_entity_failed_lease_claim';
+      await MongoSystemMigrationState.create({
+        _id: migrationId,
+        status: SystemMigrationStatusEnum.failed,
+        runId: 'failed-run',
+        leaseExpireAt,
+        checkpoint: { cursor: 12 }
+      });
+      await expect(
+        renewMigrationLease({ migrationId, runId: 'failed-run', leaseDurationMs: 1_000 })
+      ).resolves.toBe(false);
+      await expect(
+        claimMigrationLease({ migrationId, runId: randomUUID(), leaseDurationMs: 1_000 })
+      ).resolves.toBeNull();
+
+      expect(await resetFailedMigration(migrationId)).toBe(true);
+      await expect(
+        claimMigrationLease({ migrationId, runId: randomUUID(), leaseDurationMs: 1_000 })
+      ).resolves.toMatchObject({
+        status: SystemMigrationStatusEnum.running,
+        checkpoint: { cursor: 12 }
+      });
+    }
+  );
 
   it('takes over an expired lease and fences every write from the old run', async () => {
     const migrationId = '20260903_entity_expired_takeover';
     const oldRunId = randomUUID();
     const newRunId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
 
     const firstClaim = await claimMigrationLease({
       migrationId,
@@ -179,7 +278,7 @@ describe('system migration entity lease', () => {
   it('updates one progress stage by key without overwriting other stages', async () => {
     const migrationId = '20260903_entity_progress_stages';
     const runId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await claimMigrationLease({ migrationId, runId, leaseDurationMs: 10_000 });
 
     await expect(
@@ -224,7 +323,7 @@ describe('system migration entity lease', () => {
   it('replaces the running task failed-record snapshot with lease fencing', async () => {
     const migrationId = '20260903_entity_live_failed_records';
     const runId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await claimMigrationLease({ migrationId, runId, leaseDurationMs: 10_000 });
     await saveMigrationProgress({
       migrationId,
@@ -293,7 +392,7 @@ describe('system migration entity lease', () => {
   it('preserves an immediately reported failed-record snapshot after an unexpected error', async () => {
     const migrationId = '20260903_entity_preserve_live_failed_records';
     const runId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await claimMigrationLease({ migrationId, runId, leaseDurationMs: 10_000 });
     await saveMigrationProgress({
       migrationId,
@@ -357,7 +456,7 @@ describe('system migration entity lease', () => {
   it('records failed data against each stage even when a stage has not reported progress', async () => {
     const migrationId = '20260903_entity_failed_stages';
     const runId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await claimMigrationLease({ migrationId, runId, leaseDurationMs: 10_000 });
     await saveMigrationProgress({
       migrationId,
@@ -413,7 +512,7 @@ describe('system migration entity lease', () => {
   it('stores failed record details and resets a failed task for checkpoint retry', async () => {
     const migrationId = '20260903_entity_failed_records';
     const runId = randomUUID();
-    await ensureMigrationStates([migrationId]);
+    await ensureMigrationStates([{ id: migrationId }]);
     await claimMigrationLease({
       migrationId,
       runId,

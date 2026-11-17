@@ -9,18 +9,29 @@ import {
   getMultiSelectFilterSummary,
   mergeRememberedFilterOptions,
   syncSelectedFilterValues,
+  syncSelectedFilterValuesForRequest,
   toggleMultiSelectFilterValue,
   toMultiSelectFilterQuery
 } from '../../../../components/common/TagFilter/multiSelectFilterUtils';
-import { getFilterListBoxProps } from '../../../../components/common/TagFilter/styles';
+import {
+  DEFAULT_FILTER_MENU_MAX_W,
+  filterPopoverProps,
+  getFilterListBoxProps
+} from '../../../../components/common/TagFilter/styles';
 
 describe('filter list sizes', () => {
   it('uses preset heights only when the list is scrollable', () => {
     expect(getFilterListBoxProps(true).maxH).toBe('240px');
+    expect(getFilterListBoxProps(true).overflowX).toBe('hidden');
     expect(getFilterListBoxProps(true, 'sm').maxH).toBe('168px');
     expect(getFilterListBoxProps(true, 'md').maxH).toBe('240px');
     expect(getFilterListBoxProps(true, 'lg').maxH).toBe('320px');
     expect(getFilterListBoxProps(false, 'lg').maxH).toBeUndefined();
+  });
+
+  it('provides default popover max width', () => {
+    expect(DEFAULT_FILTER_MENU_MAX_W).toBe('260px');
+    expect(filterPopoverProps.maxW).toBe('260px');
   });
 });
 
@@ -84,7 +95,7 @@ describe('filterSelectOptionsBySearch', () => {
 });
 
 describe('multiSelectFilter helpers', () => {
-  const labels = { all: '全部', unselected: '未选择', selectedSelf: '我创建的' };
+  const labels = { all: '全部', selectedSelf: '我创建的' };
   const options = [
     { value: 'me', label: '张延' },
     { value: 'u2', label: '一二三' }
@@ -99,7 +110,7 @@ describe('multiSelectFilter helpers', () => {
       chip: false
     });
     expect(getMultiSelectFilterSummary({ ...base, mode: 'selected', values: [] })).toEqual({
-      text: '未选择',
+      text: '全部',
       extraCount: 0,
       chip: false
     });
@@ -120,9 +131,9 @@ describe('multiSelectFilter helpers', () => {
   it('toggles from all into selected and maps query values', () => {
     const selected = toggleMultiSelectFilterValue(createMultiSelectFilter(), 'me');
     expect(selected).toEqual({ mode: 'selected', values: ['me'] });
-    expect(toggleMultiSelectFilterValue(selected, 'me')).toEqual({ mode: 'selected', values: [] });
+    expect(toggleMultiSelectFilterValue(selected, 'me')).toEqual({ mode: 'all', values: [] });
     expect(toMultiSelectFilterQuery({ mode: 'all', values: ['me'] })).toBeUndefined();
-    expect(toMultiSelectFilterQuery({ mode: 'selected', values: [] })).toEqual([]);
+    expect(toMultiSelectFilterQuery({ mode: 'selected', values: [] })).toBeUndefined();
     expect(syncSelectedFilterValues({ mode: 'all', values: ['me'] }, ['me'])).toBeNull();
     expect(syncSelectedFilterValues({ mode: 'selected', values: ['me'] }, ['me', 'u2'])).toBeNull();
     expect(
@@ -135,6 +146,46 @@ describe('multiSelectFilter helpers', () => {
       mode: 'all',
       values: []
     });
+  });
+
+  it('only clears persisted values after the matching request and preserves user selections', () => {
+    const value = { mode: 'selected' as const, values: ['me'] };
+
+    expect(
+      syncSelectedFilterValuesForRequest({
+        value,
+        validValues: [],
+        selectedIdsKey: 'me',
+        requestKey: 'me'
+      })
+    ).toEqual({ mode: 'all', values: [] });
+    expect(
+      syncSelectedFilterValuesForRequest({
+        value,
+        validValues: [],
+        selectedIdsKey: 'me',
+        requestKey: 'me',
+        userSelectedIdsKey: 'me'
+      })
+    ).toBeNull();
+    expect(
+      syncSelectedFilterValuesForRequest({
+        value: { mode: 'selected', values: ['latest'] },
+        validValues: [],
+        selectedIdsKey: 'latest',
+        requestKey: 'old',
+        userSelectedIdsKey: 'latest'
+      })
+    ).toBeNull();
+    expect(
+      syncSelectedFilterValuesForRequest({
+        value: { mode: 'selected', values: ['latest'] },
+        validValues: [],
+        selectedIdsKey: 'latest',
+        requestKey: 'latest',
+        userSelectedIdsKey: 'latest'
+      })
+    ).toBeNull();
   });
 
   it('keeps selected options that disappeared from the current list', () => {

@@ -1,38 +1,38 @@
-// 工作流工具函数层
-import React, { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { getWorkflowSandboxCheckData } from '@/web/core/workflow/sandbox';
+import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { getWorkflowModelCheckData } from '@/web/core/workflow/modelData';
+import { storeEdge2RenderEdge, storeNode2FlowNode } from '@/web/core/workflow/utils';
 import { createContext, useContextSelector } from 'use-context-selector';
-import { useReactFlow } from 'reactflow';
+import { useReactFlow, type Node, type Edge } from 'reactflow';
 import { useTranslation } from 'next-i18next';
 import { useToast } from '@fastgpt/web/hooks/useToast';
-import { storeNode2FlowNode, storeEdge2RenderEdge } from '@/web/core/workflow/utils';
 import {
   checkWorkflowBeforeRunOrPublish,
   checkWorkflowNodeIssues
-} from '@/web/core/workflow/workflowCheck';
-import { uiWorkflow2StoreWorkflow } from '../utils';
+} from '@/web/core/workflow/check/check';
+import {
+  canInputBeAgentGenerated,
+  normalizeFlowNodeInputType
+} from '@fastgpt/global/core/app/formEdit/utils';
+import type { AppChatConfigType } from '@fastgpt/global/core/app/type';
+import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import {
   FlowNodeOutputTypeEnum,
   FlowNodeTypeEnum
 } from '@fastgpt/global/core/workflow/node/constant';
-import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { useUserStore } from '@/web/support/user/useUserStore';
-import { WorkflowBufferDataContext } from './workflowInitContext';
-import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import type { StoreEdgeItemType } from '@fastgpt/global/core/workflow/type/edge';
 import type {
   FlowNodeInputItemType,
   FlowNodeOutputItemType
 } from '@fastgpt/global/core/workflow/type/io';
-import type { AppChatConfigType } from '@fastgpt/global/core/app/type';
+import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import { AppContext } from '../../context';
-import { WorkflowSnapshotContext } from './workflowSnapshotContext';
+import { uiWorkflow2StoreWorkflow } from '../utils';
 import { WorkflowActionsContext } from './workflowActionsContext';
-import {
-  canInputBeAgentGenerated,
-  normalizeFlowNodeInputType
-} from '@fastgpt/global/core/app/formEdit/utils';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
+import { WorkflowBufferDataContext } from './workflowInitContext';
+import { WorkflowSnapshotContext } from './workflowSnapshotContext';
+
+// 工作流工具函数层
 
 // 创建 Context
 type WorkflowUtilsContextValue = {
@@ -43,19 +43,20 @@ type WorkflowUtilsContextValue = {
       chatConfig?: AppChatConfigType;
     },
     isInit?: boolean
-  ) => Promise<void>;
+  ) => Promise<number>;
   flowData2StoreData: () =>
     | {
         nodes: StoreNodeItemType[];
         edges: StoreEdgeItemType[];
       }
     | undefined;
-  flowData2StoreDataAndCheck: (hideTip?: boolean) =>
+  flowData2StoreDataAndCheck: (hideTip?: boolean) => Promise<
     | {
         nodes: StoreNodeItemType[];
         edges: StoreEdgeItemType[];
       }
-    | undefined;
+    | undefined
+  >;
   splitToolInputs: (
     inputs: FlowNodeInputItemType[],
     nodeId: string
@@ -124,17 +125,11 @@ export const WorkflowUtilsContext = createContext<WorkflowUtilsContextValue>({
 
 export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => {
   const { t } = useTranslation();
-  const { modelList, llmModelList, loaded: modelsLoaded } = useUserModelLists();
-  const availableModels = modelsLoaded ? modelList : undefined;
   const { toast } = useToast();
   const { fitView } = useReactFlow();
-  const { feConfigs } = useSystemStore();
-  const { teamPlanStatus } = useUserStore();
-  const showSandbox = feConfigs?.show_agent_sandbox;
-  const enableSandbox = !teamPlanStatus?.standard || !!teamPlanStatus?.standard?.enableSandbox;
 
   const { appDetail, setAppDetail } = useContextSelector(AppContext, (v) => v);
-  const { edges, setEdges, setNodes, getNodes, toolNodesMap } = useContextSelector(
+  const { edges, getNodes, replaceWorkflowData, toolNodesMap } = useContextSelector(
     WorkflowBufferDataContext,
     (v) => v
   );
@@ -193,46 +188,27 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
 
   // 转换并验证工作流数据
   const flowData2StoreDataAndCheck = useCallback(
-    (hideTip = false) => {
+    async (hideTip = false) => {
       const nodes = getNodes();
 
-      // Sandbox unavailable check
-      const sandboxUnavailableNode = nodes.find((node) => {
-        if (
-          node.data.flowNodeType === FlowNodeTypeEnum.agent ||
-          node.data.flowNodeType === FlowNodeTypeEnum.toolCall
-        ) {
-          const useAgentSandbox = node.data.inputs.find(
-            (input) => input.key === NodeInputKeyEnum.useAgentSandbox
-          )?.value;
-          return !!useAgentSandbox && (!showSandbox || !enableSandbox);
-        }
-        return false;
-      });
-
-      if (sandboxUnavailableNode) {
-        if (!hideTip) {
-          onUpdateNodeError(sandboxUnavailableNode.data.nodeId, true);
-          fitView({
-            nodes: [sandboxUnavailableNode],
-            padding: 0.3
-          });
-          toast({
-            status: 'warning',
-            title: !showSandbox
-              ? t('skill:sandbox_system_not_configured_toast')
-              : t('app:sandbox_free_not_support')
-          });
-        }
+      const modelData = await getWorkflowModelCheckData({
+        nodes,
+        chatConfig: appDetail.chatConfig,
+        appId: appDetail._id
+      }).catch(() => undefined);
+      if (!modelData) {
+        if (!hideTip) toast({ status: 'error', title: t('common:model_catalog_load_failed') });
         return;
       }
-
-      const { issueMap, hasError, firstErrorNodeId } = checkWorkflowBeforeRunOrPublish({
-        nodes,
-        edges,
-        models: availableModels,
-        t
-      });
+      const { issueMap, hasError, firstErrorNodeId, errorMessages } =
+        checkWorkflowBeforeRunOrPublish({
+          sandbox: getWorkflowSandboxCheckData(),
+          nodes,
+          edges,
+          modelData,
+          chatConfig: appDetail.chatConfig,
+          t
+        });
 
       if (!hasError) {
         onRemoveError();
@@ -261,7 +237,8 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
 
         toast({
           status: 'warning',
-          title: t('common:core.workflow.Check Failed')
+          title: t('common:core.workflow.Check Failed'),
+          description: errorMessages.join('\n')
         });
       }
     },
@@ -273,21 +250,40 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
       fitView,
       t,
       onUpdateNodeError,
-      showSandbox,
-      enableSandbox,
+      appDetail._id,
       appDetail.chatConfig,
-      availableModels,
       toast
     ]
   );
 
   /** 编辑页定时全量扫描，主动发现新增/已修复的节点错误。 */
   useEffect(() => {
-    const runScheduledCheck = () => {
+    let active = true;
+    const runScheduledCheck = async () => {
       const nodes = getNodes();
       if (nodes.length === 0) return;
 
-      const issueMap = checkWorkflowNodeIssues({ nodes, edges, models: availableModels, t });
+      const modelData = await getWorkflowModelCheckData({ nodes, appId: appDetail._id }).catch(
+        () => undefined
+      );
+      // 目录失败保留原校验结果；等待期间用户编辑或离开时不回写旧快照。
+      if (
+        !active ||
+        !modelData ||
+        nodes.some(
+          (node) =>
+            getNodes().find((current) => current.id === node.id)?.data.inputs !== node.data.inputs
+        )
+      )
+        return;
+      const issueMap = checkWorkflowNodeIssues({
+        sandbox: getWorkflowSandboxCheckData(),
+        nodes,
+        edges,
+        modelData,
+        chatConfig: appDetail.chatConfig,
+        t
+      });
       onSyncWorkflowCheckIssues(issueMap);
     };
 
@@ -295,9 +291,10 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
     const timer = window.setInterval(runScheduledCheck, 10_000);
 
     return () => {
+      active = false;
       window.clearInterval(timer);
     };
-  }, [availableModels, edges, getNodes, onSyncWorkflowCheckIssues, t]);
+  }, [appDetail._id, appDetail.chatConfig, edges, getNodes, onSyncWorkflowCheckIssues, t]);
 
   // 4. initData - 初始化工作流数据
   const initData = useCallback(
@@ -326,19 +323,56 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
           storeNode2FlowNode({
             item,
             t,
-            isTool: toolNodeIds.has(item.nodeId),
-            llmModelList
+            isTool: toolNodeIds.has(item.nodeId)
           })
         ) || [];
       const edges = workflow.edges.map((item) => storeEdge2RenderEdge({ edge: item }));
 
+      // 进入编辑器后延迟校验并定位到第一个错误节点；ReactFlow 渲染后再 fitView 才有效。
+      const scheduleEntryCheck = (
+        checkNodes: Node[],
+        checkEdges: Edge[],
+        checkChatConfig?: AppChatConfigType
+      ) => {
+        if (!isInit) return;
+        window.setTimeout(() => {
+          const { issueMap, hasError, firstErrorNodeId } = checkWorkflowBeforeRunOrPublish({
+            sandbox: getWorkflowSandboxCheckData(),
+            nodes: checkNodes,
+            edges: checkEdges,
+            chatConfig: checkChatConfig,
+            t
+          });
+          onSyncWorkflowCheckIssues(issueMap);
+          const firstErrorNode = checkNodes.find((node) => node.data.nodeId === firstErrorNodeId);
+          // 新建空白或初始画布时，起始节点尚未连线属于正常搭建前置状态。
+          // 保留节点底部 issue 待完善气泡提示，但跳过外层强报错大红框及自动 fitView 聚焦，避免初次进入产生压迫感。
+          const isStartNodeIsolatedOnly =
+            firstErrorNode &&
+            [FlowNodeTypeEnum.workflowStart, FlowNodeTypeEnum.pluginInput].includes(
+              firstErrorNode.data.flowNodeType
+            ) &&
+            issueMap[firstErrorNodeId]?.every((issue) => issue.code === 'isolated_node');
+
+          if (hasError && firstErrorNodeId && !isStartNodeIsolatedOnly) {
+            onUpdateNodeError(firstErrorNodeId, true);
+            if (firstErrorNode) {
+              fitView({ nodes: [firstErrorNode], padding: 0.3 });
+            }
+          }
+        }, 300);
+      };
+
       // 有历史记录，直接用历史记录覆盖
       if (isInit && past.length > 0) {
         const firstPast = past[0];
-        setNodes(firstPast.nodes);
-        setEdges(firstPast.edges);
+        const revision = replaceWorkflowData({
+          nodes: firstPast.nodes,
+          edges: firstPast.edges
+        });
         setAppDetail((state) => ({ ...state, chatConfig: firstPast.chatConfig }));
-        return;
+        scheduleEntryCheck(firstPast.nodes, firstPast.edges, firstPast.chatConfig);
+        return revision;
       }
       // 初始化一个历史记录
       if (isInit && past.length === 0) {
@@ -354,11 +388,22 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
       }
 
       // Init memory data
-      setNodes(nodes);
-      setEdges(edges);
+      const revision = replaceWorkflowData({ nodes, edges });
       setAppDetail((state) => ({ ...state, chatConfig: workflow.chatConfig }));
+      scheduleEntryCheck(nodes, edges, workflow.chatConfig);
+      return revision;
     },
-    [appDetail.chatConfig, llmModelList, past, setAppDetail, setEdges, setNodes, setPast, t]
+    [
+      appDetail.chatConfig,
+      past,
+      replaceWorkflowData,
+      setAppDetail,
+      setPast,
+      t,
+      fitView,
+      onSyncWorkflowCheckIssues,
+      onUpdateNodeError
+    ]
   );
 
   const contextValue = useMemo(() => {

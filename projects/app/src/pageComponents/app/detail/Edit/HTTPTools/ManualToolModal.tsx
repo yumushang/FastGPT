@@ -1,3 +1,4 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'next-i18next';
@@ -16,7 +17,6 @@ import {
   Tr,
   Th,
   Td,
-  TableContainer,
   Switch,
   Accordion,
   AccordionItem,
@@ -50,6 +50,7 @@ import HttpInput from '@fastgpt/web/components/common/Input/HttpInput';
 import { putUpdateHttpTool } from '@/web/core/app/api/httpTools';
 import type { HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { HttpToolSetRuntimeConfigSchema } from '@fastgpt/global/core/workflow/type/node';
 import CurlImportModal from './CurlImportModal';
 import type { EditorVariableLabelPickerType } from '@fastgpt/web/components/common/Textarea/PromptEditor/type';
 import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
@@ -194,11 +195,15 @@ const ManualToolModal = ({
         headerSecret: data.headerSecret
       };
 
-      const toolSetNode = appDetail.modules.find(
+      const toolSetNode = appDetail.nodes.find(
         (item) => item.flowNodeType === FlowNodeTypeEnum.toolSet
       );
       const toolSet = toolSetNode?.toolConfig?.httpToolSet;
-      const existingToolList = toolSet && !('toolId' in toolSet) ? toolSet.toolList : [];
+      const runtimeToolSet =
+        toolSet && !('toolId' in toolSet)
+          ? HttpToolSetRuntimeConfigSchema.safeParse(toolSet).data
+          : undefined;
+      const existingToolList = runtimeToolSet?.toolList ?? [];
 
       const updatedToolList = (() => {
         if (isEditMode) {
@@ -645,7 +650,7 @@ const CustomParamsTable = ({
       borderBottom={'none'}
       bg={'white'}
     >
-      <TableContainer overflowY={'visible'} overflowX={'auto'}>
+      <FixedTableContainer flush>
         <Table size={'sm'}>
           <Thead>
             <Tr bg={'myGray.50'} h={8}>
@@ -689,7 +694,7 @@ const CustomParamsTable = ({
             ))}
           </Tbody>
         </Table>
-      </TableContainer>
+      </FixedTableContainer>
     </Box>
   );
 };
@@ -709,7 +714,7 @@ const ParamsTable = ({
 
   return (
     <Box borderRadius={'md'} overflow={'hidden'} borderWidth={'1px'} borderBottom={'none'}>
-      <TableContainer overflowY={'visible'} overflowX={'unset'}>
+      <FixedTableContainer flush>
         <Table size={'sm'}>
           <Thead>
             <Tr bg={'myGray.50'} h={8}>
@@ -775,7 +780,7 @@ const ParamsTable = ({
             ))}
           </Tbody>
         </Table>
-      </TableContainer>
+      </FixedTableContainer>
     </Box>
   );
 };

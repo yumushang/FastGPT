@@ -1,9 +1,10 @@
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
 import type { ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
 import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
-import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { authDatasetCollectionCreate } from '@fastgpt/service/support/permission/dataset/auth';
 import { createCollectionAndInsertData } from '@fastgpt/service/core/dataset/collection/controller';
+import { getDatasetModelAuthContext } from '@fastgpt/service/core/dataset/model';
 import {
   DatasetCollectionDataProcessModeEnum,
   DatasetCollectionTypeEnum
@@ -11,13 +12,16 @@ import {
 import { i18nT } from '@fastgpt/global/common/i18n/utils';
 import { multer } from '@fastgpt/service/common/file/multer';
 import { getS3DatasetSource } from '@fastgpt/service/common/s3/sources/dataset';
-import { CreateTemplateCollectionFormSchema } from '@fastgpt/global/openapi/core/dataset/collection/createApi';
+import {
+  CreateTemplateCollectionFormSchema,
+  type CreateCollectionWithResultResponseType
+} from '@fastgpt/global/openapi/core/dataset/collection/createApi';
 import { checkDatasetIndexLimit } from '@fastgpt/service/support/permission/teamLimit';
 import { parseDatasetImportFile } from '@fastgpt/service/core/dataset/importFile';
 import { decodeMultipartFilename } from '@fastgpt/service/common/s3/filename';
 const logger = getLogger(LogCategories.MODULE.DATASET.COLLECTION);
 
-async function handler(req: ApiRequestProps) {
+async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResultResponseType> {
   const filepaths: string[] = [];
   let fileId: string | undefined;
   let promoted = false;
@@ -25,18 +29,26 @@ async function handler(req: ApiRequestProps) {
   try {
     const result = await multer.resolveFormData({
       request: req,
-      maxFileSize: global.feConfigs.uploadFileMaxSize
+      maxFileSize: getSystemInstanceConfig().resource.uploadFileMaxSize
     });
     filepaths.push(result.fileMetadata.path);
     const filename = decodeMultipartFilename(result.fileMetadata.originalname);
-    const { datasetId, parentId } = CreateTemplateCollectionFormSchema.parse(result.data);
+    const { datasetId, parentId, tags, autoIndexes } = CreateTemplateCollectionFormSchema.parse(
+      result.data
+    );
 
-    const { teamId, tmbId, dataset } = await authDataset({
+    const { teamId, tmbId, isRoot, dataset } = await authDatasetCollectionCreate({
       req,
       authToken: true,
       authApiKey: true,
-      per: WritePermissionVal,
-      datasetId
+      datasetId,
+      parentId
+    });
+    const modelAuthContext = await getDatasetModelAuthContext({
+      dataset,
+      teamId,
+      tmbId,
+      isRoot
     });
 
     // Check dataset limit
@@ -70,9 +82,10 @@ async function handler(req: ApiRequestProps) {
       return Promise.reject(i18nT('dataset:template_file_invalid'));
     });
 
-    await createCollectionAndInsertData({
+    const collectionResult = await createCollectionAndInsertData({
       dataset,
       rawText,
+      modelAuthContext,
       backupParse: true,
       createCollectionParams: {
         teamId,
@@ -82,12 +95,14 @@ async function handler(req: ApiRequestProps) {
         name: filename,
         type: DatasetCollectionTypeEnum.file,
         fileId,
-        trainingType: DatasetCollectionDataProcessModeEnum.template
+        trainingType: DatasetCollectionDataProcessModeEnum.template,
+        autoIndexes,
+        tags
       }
     });
     promoted = true;
 
-    return {};
+    return collectionResult;
   } catch (error) {
     if (fileId && !promoted) {
       await getS3DatasetSource()

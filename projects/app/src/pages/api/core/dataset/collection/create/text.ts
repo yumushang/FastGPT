@@ -1,8 +1,8 @@
-import { authDataset } from '@fastgpt/service/support/permission/dataset/auth';
+import { authDatasetCollectionCreate } from '@fastgpt/service/support/permission/dataset/auth';
 import { createCollectionAndInsertData } from '@fastgpt/service/core/dataset/collection/controller';
+import { getDatasetModelAuthContext } from '@fastgpt/service/core/dataset/model';
 import { DatasetCollectionTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { NextAPI } from '@/service/middleware/entry';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 import { type ApiRequestProps } from '@fastgpt/next/type';
 import { getS3DatasetSource } from '@fastgpt/service/common/s3/sources/dataset';
 import { removeS3TTL } from '@fastgpt/service/common/s3/utils';
@@ -19,12 +19,18 @@ async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResult
     bodySchema: CreateTextCollectionBodySchema
   }).body;
 
-  const { teamId, tmbId, dataset } = await authDataset({
+  const { teamId, tmbId, isRoot, dataset } = await authDatasetCollectionCreate({
     req,
     authToken: true,
     authApiKey: true,
     datasetId: body.datasetId,
-    per: WritePermissionVal
+    parentId: body.parentId
+  });
+  const modelAuthContext = await getDatasetModelAuthContext({
+    dataset,
+    teamId,
+    tmbId,
+    isRoot
   });
 
   // Check dataset limit
@@ -44,6 +50,7 @@ async function handler(req: ApiRequestProps): Promise<CreateCollectionWithResult
 
   const res = await createCollectionAndInsertData({
     dataset,
+    modelAuthContext,
     createCollectionParams: {
       ...body,
       teamId,

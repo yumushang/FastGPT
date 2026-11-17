@@ -4,17 +4,16 @@
  * 只组合工作目录、输入文件、镜像源等 prepare step，不直接操作 Mongo 或 provider 配置。
  */
 import type { ISandbox } from '@fastgpt-sdk/sandbox-adapter';
-import {
-  injectInputFilesToSandbox,
-  type SandboxInputFile,
-  type SandboxInputFileReader
-} from './files';
+import { injectInputFilesToSandbox, type SandboxInputFile } from './files';
+import { type SandboxInputFileReader } from '../file';
 import { prepareSandboxRuntimeMirrors } from './mirrors';
+import type { SandboxInputFileNameAllocation } from '../../utils';
 
 export type SandboxPrepareContext = {
   sandbox: ISandbox;
   workDirectory: string;
   workspaceRoot?: string;
+  inputFileAllocation?: SandboxInputFileNameAllocation;
 };
 
 export type SandboxPrepareStep<Context extends SandboxPrepareContext> = (
@@ -100,7 +99,8 @@ export const injectCurrentInputFiles =
       context.sandbox,
       currentFiles,
       context.workDirectory,
-      readInputFile
+      readInputFile,
+      context.inputFileAllocation
     );
     return context;
   };

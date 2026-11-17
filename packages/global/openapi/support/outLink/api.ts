@@ -1,5 +1,7 @@
 import z from 'zod';
+import { OpenObjectOpenApiMeta } from '../../../common/zod/openapi';
 import { PublishChannelEnum } from '../../../support/outLink/constant';
+import { OutLinkBrandConfigSchema } from '../../../support/outLink/branding';
 import { ObjectIdSchema } from '../../../common/type/mongo';
 
 const OptionalDateSchema = z.preprocess((value) => {
@@ -20,9 +22,15 @@ const OutLinkLimitSchema = z
   })
   .meta({ description: '发布渠道限制配置' });
 
-const OutLinkAppConfigSchema = z.any().optional().meta({
-  description: '第三方平台配置，不同发布渠道结构不同'
-});
+// 各发布渠道（公众号/企微/飞书/钉钉…）配置结构不同，且 type 字段是 app 的同级字段，
+// 无法在 app 上做 discriminatedUnion，这里声明为开放对象。
+const OutLinkAppConfigSchema = z
+  .any()
+  .optional()
+  .meta({
+    ...OpenObjectOpenApiMeta,
+    description: '第三方平台配置，不同发布渠道结构不同'
+  });
 
 export const OutLinkEditSchema = z.object({
   _id: ObjectIdSchema.optional().meta({ description: '发布渠道 ID，更新时必填' }),
@@ -41,7 +49,17 @@ export const OutLinkEditSchema = z.object({
 });
 export type OutLinkEditType = z.infer<typeof OutLinkEditSchema>;
 
+export const ShareOutLinkEditSchema = OutLinkEditSchema.extend({
+  allowAnonymous: z
+    .boolean()
+    .optional()
+    .default(true)
+    .meta({ description: '是否允许免登录访问；省略时默认允许' })
+});
+export type ShareOutLinkEditType = z.infer<typeof ShareOutLinkEditSchema>;
+
 export const OutLinkSchema = z.object({
+  ...OutLinkBrandConfigSchema.shape,
   _id: ObjectIdSchema.meta({ description: '发布渠道 ID' }),
   shareId: z.string().meta({ description: '发布渠道访问 ID' }),
   teamId: ObjectIdSchema.meta({ description: '团队 ID' }),
@@ -67,6 +85,7 @@ export const OutLinkSchema = z.object({
     description: '是否允许下载来源文件'
   }),
   showWholeResponse: z.boolean().optional().default(true).meta({ description: '是否显示完整响应' }),
+  allowAnonymous: z.boolean().optional().meta({ description: '分享链接是否允许免登录访问' }),
   immediateResponse: z.string().optional().meta({ description: '立即回复内容' }),
   defaultResponse: z.string().optional().meta({ description: '默认回复内容' }),
   limit: OutLinkLimitSchema.optional().meta({
@@ -149,12 +168,27 @@ export type OutLinkCountResponseType = z.infer<typeof OutLinkCountResponseSchema
  * Tags: ['发布渠道']
  * ============================================================================ */
 
-export const OutLinkCreateBodySchema = OutLinkEditSchema.omit({
-  _id: true
-}).extend({
-  appId: ObjectIdSchema.meta({ description: '应用 ID' }),
-  type: z.enum(PublishChannelEnum).meta({ description: '发布渠道类型' })
-});
+const NonSharePublishChannelSchema = z.enum([
+  PublishChannelEnum.iframe,
+  PublishChannelEnum.apikey,
+  PublishChannelEnum.feishu,
+  PublishChannelEnum.dingtalk,
+  PublishChannelEnum.wecom,
+  PublishChannelEnum.officialAccount,
+  PublishChannelEnum.wechat,
+  PublishChannelEnum.playground
+]);
+
+export const OutLinkCreateBodySchema = z.discriminatedUnion('type', [
+  ShareOutLinkEditSchema.omit({ _id: true }).extend({
+    appId: ObjectIdSchema.meta({ description: '应用 ID' }),
+    type: z.literal(PublishChannelEnum.share).meta({ description: '分享链接' })
+  }),
+  OutLinkEditSchema.omit({ _id: true }).extend({
+    appId: ObjectIdSchema.meta({ description: '应用 ID' }),
+    type: NonSharePublishChannelSchema.meta({ description: '非分享链接发布渠道' })
+  })
+]);
 export type OutLinkCreateBodyType = z.infer<typeof OutLinkCreateBodySchema>;
 
 export const OutLinkCreateResponseSchema = z.string().meta({
@@ -166,12 +200,21 @@ export type OutLinkCreateResponseType = z.infer<typeof OutLinkCreateResponseSche
  * API: 更新发布渠道
  * Route: PUT /api/support/outLink/update
  * Method: PUT
- * Description: 更新发布渠道配置。
+ * Description: 更新发布渠道配置；省略名称时保留原名称，允许单独更新品牌偏好。
  * Tags: ['发布渠道']
  * ============================================================================ */
 
 export const OutLinkUpdateBodySchema = OutLinkEditSchema.extend({
-  _id: ObjectIdSchema.meta({ description: '发布渠道 ID' })
+  ...OutLinkBrandConfigSchema.shape,
+  _id: ObjectIdSchema.meta({ description: '发布渠道 ID' }),
+  name: OutLinkEditSchema.shape.name.optional().meta({
+    description: '发布渠道名称；省略时保留原名称',
+    example: '公开访问链接'
+  }),
+  allowAnonymous: z
+    .boolean()
+    .optional()
+    .meta({ description: '分享链接是否允许免登录访问；省略时保留现有配置' })
 });
 export type OutLinkUpdateBodyType = z.infer<typeof OutLinkUpdateBodySchema>;
 

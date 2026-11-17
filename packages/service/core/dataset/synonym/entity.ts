@@ -9,10 +9,14 @@ import {
   type DatasetSynonymMatcherMapping
 } from './utils';
 import { MongoDatasetSynonym, MongoDatasetSynonymMapping } from './schema';
+import { getSystemInstanceConfig } from '../../../common/system/systemInstanceConfig/runtime';
+import { logInstanceConfigRead } from '../../../common/system/migrationCoverageLog';
 import { serviceEnv } from '../../../env';
 
+type DatasetSynonymMatcherSnapshot = DatasetSynonymMatcher & { hasMappings: boolean };
+
 const matcherCacheMaxWeight = DatasetSynonymLimits.maxTotalTermCodePoints * 2;
-const matcherCache = new Map<string, { matcher: DatasetSynonymMatcher; weight: number }>();
+const matcherCache = new Map<string, { matcher: DatasetSynonymMatcherSnapshot; weight: number }>();
 let matcherCacheWeight = 0;
 const transformConfigCacheTtl = 5000;
 const transformConfigCacheMaxSize = 1000;
@@ -21,7 +25,10 @@ const transformConfigCache = new Map<
   { expiresAt: number; promise: Promise<DatasetSynonymConfigType | null> }
 >();
 
-/** 判断服务端是否启用知识库同义词能力，默认关闭。 */
+/**
+ * 判断服务端是否启用知识库同义词能力，默认关闭。
+ * 同义词开关暂时留在 ENV（DATASET_SYNONYM_ENABLED），不从实例配置读取。
+ */
 export const isDatasetSynonymEnabled = () => serviceEnv.DATASET_SYNONYM_ENABLED;
 
 /** 阻止关闭状态下的同义词管理操作进入解析、鉴权和数据访问链路。 */
@@ -42,10 +49,10 @@ const getMatcherCacheKey = ({
 }) => `${teamId}:${datasetId}:${fileVersion}`;
 
 /**
- * 合并短时间内同一知识库的转换配置读取，包括未配置结果。
- * 该缓存只生成 embedding 快照；提交前的版本校验始终直查 MongoDB。
+ * 合并短时间内同一知识库的配置读取，包括未配置结果。
+ * 供 embedding 快照与检索装饰判断空词表版本共用；提交前的版本校验始终直查 MongoDB。
  */
-const getCachedDatasetSynonymConfig = ({
+export const getCachedDatasetSynonymConfig = ({
   teamId,
   datasetId
 }: {
@@ -127,7 +134,7 @@ export const getDatasetSynonymMatcher = async ({
   teamId: string;
   datasetId: string;
   fileVersion: number;
-}): Promise<DatasetSynonymMatcher> => {
+}): Promise<DatasetSynonymMatcherSnapshot> => {
   const cacheKey = getMatcherCacheKey({ teamId, datasetId, fileVersion });
   const cached = matcherCache.get(cacheKey);
   if (cached) {
@@ -137,7 +144,11 @@ export const getDatasetSynonymMatcher = async ({
   }
 
   const mappings = await getDatasetSynonymMappings({ teamId, datasetId, fileVersion });
-  const matcher = buildSynonymMatcher(mappings.map(toMatcherMapping));
+  const matcher = {
+    ...buildSynonymMatcher(mappings.map(toMatcherMapping)),
+    // 空版本可能是禁用词表，也可能已被旧代码清理；历史比较不能将它视为可靠快照。
+    hasMappings: mappings.length > 0
+  };
   const weight = mappings.reduce(
     (sum, mapping) =>
       sum +
@@ -188,7 +199,7 @@ export const getDatasetSynonymRuntimeConfig = async ({
   teamId: string;
   datasetId: string;
 }) => {
-  if (!isDatasetSynonymEnabled()) return null;
+  if (!serviceEnv.DATASET_SYNONYM_ENABLED) return null;
 
   const config = await getDatasetSynonymConfig({ teamId, datasetId });
   if (!config) return null;
@@ -213,7 +224,7 @@ export const getDatasetSynonymTransformContext = async ({
   teamId: string;
   datasetId: string;
 }) => {
-  if (!isDatasetSynonymEnabled()) {
+  if (!serviceEnv.DATASET_SYNONYM_ENABLED) {
     return {
       version: 0,
       transformText: (text: string) => text,

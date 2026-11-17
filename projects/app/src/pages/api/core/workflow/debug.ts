@@ -1,3 +1,4 @@
+import { createWorkflowResourceContext } from '@fastgpt/service/core/workflow/resource/context';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
@@ -6,8 +7,8 @@ import { prepareWorkflowFileQuery } from '@fastgpt/service/core/workflow/utils/f
 import { authCert } from '@fastgpt/service/support/permission/auth/common';
 import { getRunningUserInfoByTmbId } from '@fastgpt/service/support/user/team/utils';
 import { NextAPI } from '@/service/middleware/entry';
-import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
-import { WORKFLOW_MAX_RUN_TIMES } from '@fastgpt/service/core/workflow/constants';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { getWorkflowMaxRunTimes } from '@fastgpt/service/core/workflow/constants';
 import { getLastInteractiveValue } from '@fastgpt/global/core/workflow/runtime/utils';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { createChatUsageRecord } from '@fastgpt/service/support/wallet/usage/controller';
@@ -23,6 +24,8 @@ import {
   getWorkflowFinalResponseData
 } from '@/service/core/workflow/nodeResponse';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { prepareAppWorkflowResources } from '@fastgpt/service/core/app/resource/service';
+import { getAppDraftWorkflow } from '@fastgpt/service/core/app/version/controller';
 
 async function handler(req: NextApiRequest, res: NextApiResponse): Promise<WorkflowDebugResponse> {
   const {
@@ -39,13 +42,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<Workf
   } = parseApiInput({ req, bodySchema: WorkflowDebugBodySchema }).body;
 
   /* user auth */
-  const [{ tmbId }, { app }] = await Promise.all([
+  const [{ tmbId, isRoot }, { app }] = await Promise.all([
     authCert({
       req,
       authToken: true
     }),
-    authApp({ req, authToken: true, appId, per: ReadPermissionVal })
+    // 工作流调试会执行用户传入的节点定义（包括代码节点），需要写入权限
+    authApp({ req, authToken: true, appId, per: WritePermissionVal })
   ]);
+  // 兼容未传 chatConfig 的旧客户端；App 主表不再保存工作流配置，默认值从草稿 Version 读取。
+  const workflowChatConfig = chatConfig ?? (await getAppDraftWorkflow(appId, app)).chatConfig;
 
   const interactive = getLastInteractiveValue(history);
   const newUsageId = usageId
@@ -58,7 +64,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<Workf
         source: UsageSourceEnum.fastgpt
       });
   const responseChatItemId = getNanoid();
-  const workflowChatConfig = chatConfig ?? app.chatConfig;
+  const resources = await prepareAppWorkflowResources({
+    appId,
+    nodes,
+    chatConfig: workflowChatConfig,
+    teamId: String(app.teamId),
+    tmbId,
+    isRoot
+  });
+  const resourceContext = createWorkflowResourceContext({
+    resources,
+    teamId: String(app.teamId),
+    isRoot
+  });
   const {
     query: workflowQuery,
     maxFileAmount,
@@ -98,11 +116,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<Workf
     chatConfig: workflowChatConfig,
     histories: history,
     stream: false,
-    maxRunTimes: WORKFLOW_MAX_RUN_TIMES,
+    maxRunTimes: getWorkflowMaxRunTimes(),
     nodeResponseWriteConfig: {
       persistToDb: false,
       retainInMemory: true
-    }
+    },
+    resourceContext
   });
   const nodeResponses = composeDebugNodeResponseMap({
     detailTree: getWorkflowFinalResponseData({

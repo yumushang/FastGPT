@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getMCPToolSetRuntimeNode,
   getMCPToolRuntimeNode,
+  getMCPToolErrorText,
   parsetMcpToolConfig
 } from '@fastgpt/global/core/app/tool/mcpTool/utils';
 import {
@@ -16,6 +17,35 @@ import { AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
 import type { McpToolConfigType } from '@fastgpt/global/core/app/tool/mcpTool/type';
 
 describe('mcpTool utils', () => {
+  describe('getMCPToolErrorText', () => {
+    it.each([
+      { result: {}, expected: undefined },
+      {
+        result: { isError: false, content: [{ type: 'text', text: 'error' }] },
+        expected: undefined
+      },
+      { result: { isError: false, error: 'business value' }, expected: undefined },
+      {
+        result: {
+          isError: true,
+          content: [
+            { type: 'text', text: 'First failure' },
+            { type: 'image' },
+            { type: 'text', text: 'Second failure' }
+          ]
+        },
+        expected: 'First failure\nSecond failure'
+      },
+      { result: { isError: true }, expected: 'MCP tool execution failed' },
+      {
+        result: { isError: true, content: [{ type: 'text', text: '  ' }, { type: 'image' }] },
+        expected: 'MCP tool execution failed'
+      }
+    ])('extracts only protocol errors: $expected', ({ result, expected }) => {
+      expect(getMCPToolErrorText(result)).toBe(expected);
+    });
+  });
+
   describe('getMCPToolSetRuntimeNode', () => {
     it('should create runtime node with required params', () => {
       const toolList: McpToolConfigType[] = [
@@ -87,9 +117,9 @@ describe('mcpTool utils', () => {
       expect(result.avatar).toBe('core/app/type/mcpToolsFill');
       expect(result.intro).toBe('Search for information');
       expect(result.name).toBe('toolsetName/searchTool');
-      expect(result.toolConfig?.mcpTool?.toolId).toBe(
-        `${AppToolSourceEnum.mcp}-toolset-456/searchTool`
-      );
+      expect(result.toolConfig?.mcpTool).toMatchObject({
+        toolId: `${AppToolSourceEnum.mcp}-toolset-456/searchTool`
+      });
       expect(result.inputs[0]).toMatchObject({ defaultToAgentGenerated: true });
     });
 
@@ -147,7 +177,30 @@ describe('mcpTool utils', () => {
         toolsetName: 'toolsetName'
       });
 
-      expect(result.toolConfig?.mcpTool?.toolId).toBe('mcp-parent-123/myTool');
+      expect(result.toolConfig?.mcpTool).toMatchObject({ toolId: 'mcp-parent-123/myTool' });
+    });
+
+    it('should create an inline runtime node without a toolId', () => {
+      const tool: McpToolConfigType = {
+        name: 'search',
+        description: 'Search',
+        inputSchema: { type: 'object', properties: {} }
+      };
+
+      const result = getMCPToolRuntimeNode({
+        tool,
+        nodeId: 'node-inline',
+        toolsetName: 'Local MCP',
+        url: 'https://mcp.example.com',
+        headerSecret: { Authorization: { value: 'token' } }
+      });
+
+      expect(result.toolConfig?.mcpTool).toEqual({
+        ...tool,
+        url: 'https://mcp.example.com',
+        headerSecret: { Authorization: { value: 'token' } }
+      });
+      expect(result.toolConfig?.mcpTool).not.toHaveProperty('toolId');
     });
   });
 

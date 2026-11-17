@@ -21,11 +21,9 @@ import { addAuditLog } from '@fastgpt/service/support/user/audit/util';
 import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
 import { TeamSkillCreatePermissionVal } from '@fastgpt/global/support/permission/user/constant';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
-import { checkCreateFolderDepth } from '@fastgpt/service/common/parentFolder/depth';
-import { MongoAgentSkills } from '@fastgpt/service/core/ai/skill/model/schema';
 
 async function handler(req: ApiRequestProps<CreateSkillFolderBody>) {
-  const { name, description, parentId } = parseApiInput({
+  const { name, description, parentId, inheritPermission } = parseApiInput({
     req,
     bodySchema: CreateSkillFolderBodySchema
   }).body;
@@ -50,8 +48,6 @@ async function handler(req: ApiRequestProps<CreateSkillFolderBody>) {
         per: TeamSkillCreatePermissionVal
       });
 
-  await checkCreateFolderDepth({ parentId, teamId, model: MongoAgentSkills });
-
   // Create the folder within a transaction and copy collaborators from parent
   const folderId = await mongoSessionRun(async (session) => {
     const folder = await createSkillFolder(
@@ -60,7 +56,8 @@ async function handler(req: ApiRequestProps<CreateSkillFolderBody>) {
         description,
         parentId,
         teamId,
-        tmbId
+        tmbId,
+        inheritPermission
       },
       session
     );

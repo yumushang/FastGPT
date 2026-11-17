@@ -4,6 +4,8 @@ import { FlowNodeInputItemTypeSchema } from '../type/io';
 import { AgentToolInputModeEnum } from '../../app/tool/constants';
 import { NodeToolConfigTypeSchema, StoreNodeItemTypeSchema } from '../type/node';
 import { StoreEdgeItemTypeSchema } from '../type/edge';
+import { LanguageSchema } from '../../../common/i18n/type';
+import { AgentToolConfigSchema } from '../../app/tool/config';
 
 /**
  * 当前工作流输入。该类型不包含任何历史字段。
@@ -27,11 +29,14 @@ export type CanonicalAgentToolInputConfig = z.infer<typeof CanonicalAgentToolInp
 /** 当前版本的 Agent 工具；迁移只保留持久化所需字段，工具定义由消费边界加载。 */
 const CanonicalAvailableAgentToolSchema = z.object({
   id: z.string(),
+  name: z.string().optional(),
+  avatar: z.string().optional(),
   version: z.string().optional(),
   source: z.string().optional(),
+  metadataLocale: LanguageSchema.optional(),
   toolConfig: NodeToolConfigTypeSchema.optional(),
   inputs: z.array(CanonicalAgentToolInputConfigSchema).optional(),
-  config: z.record(z.string(), z.unknown())
+  config: AgentToolConfigSchema
 });
 
 /** Agent 工具选择的 canonical 结构。 */

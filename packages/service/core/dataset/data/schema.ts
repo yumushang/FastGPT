@@ -1,5 +1,5 @@
 import { defineIndex, connectionMongo, getMongoModel } from '../../../common/mongo';
-const { Schema, model, models } = connectionMongo;
+const { Schema } = connectionMongo;
 import { type DatasetDataSchemaType } from '@fastgpt/global/core/dataset/type';
 import {
   TeamCollectionName,
@@ -7,7 +7,10 @@ import {
 } from '@fastgpt/global/support/user/team/constant';
 import { DatasetCollectionName } from '../schema';
 import { DatasetColCollectionName } from '../collection/schema';
-import { DatasetDataIndexTypeEnum } from '@fastgpt/global/core/dataset/data/constants';
+import {
+  DatasetDataIndexStatusEnum,
+  DatasetDataIndexTypeEnum
+} from '@fastgpt/global/core/dataset/data/constants';
 import { serviceEnv } from '../../../env';
 
 export const DatasetDataCollectionName = 'dataset_datas';
@@ -83,7 +86,11 @@ const DatasetDataSchema = new Schema({
     type: Number,
     default: 0
   },
-  rebuilding: Boolean,
+  indexStatus: {
+    type: String,
+    enum: Object.values(DatasetDataIndexStatusEnum)
+  },
+  indexErrorMsg: String,
   synonymVersion: Number,
   synonymRebuildingVersion: Number,
 
@@ -109,8 +116,17 @@ defineIndex(DatasetDataSchema, {
 });
 // rebuild data
 defineIndex(DatasetDataSchema, {
-  key: { rebuilding: 1, teamId: 1, datasetId: 1 }
+  key: { indexStatus: 1, teamId: 1, datasetId: 1 }
 });
+// 集合列表统计数量和重建状态时直接读取索引，避免读取 q/a、indexes 等完整文档。
+defineIndex(DatasetDataSchema, {
+  key: { teamId: 1, datasetId: 1, collectionId: 1, indexStatus: 1 }
+});
+
+// 同义词复合索引只在模块加载期按 env 声明（schema 求值早于实例配置加载，无法热生效）；
+// 开关本身暂留 ENV（DATASET_SYNONYM_ENABLED），消费点直读 serviceEnv，Admin 不提供修改入口，
+// 该开关不进入实例配置 Schema 或 registry。
+// 部署仍需 DATASET_SYNONYM_ENABLED=true 并重启，索引才会完整生效。
 if (serviceEnv.DATASET_SYNONYM_ENABLED) {
   defineIndex(DatasetDataSchema, {
     key: { teamId: 1, datasetId: 1, synonymVersion: 1, synonymRebuildingVersion: 1 }
@@ -119,6 +135,12 @@ if (serviceEnv.DATASET_SYNONYM_ENABLED) {
 
 // Cron clear invalid data
 defineIndex(DatasetDataSchema, { key: { updateTime: 1 } });
+
+// FastGPT 旧版重建标记索引已由 indexStatus 索引替代。
+defineIndex(DatasetDataSchema, {
+  key: { rebuilding: 1, teamId: 1, datasetId: 1 },
+  deprecated: true
+});
 
 export const MongoDatasetData = getMongoModel<DatasetDataSchemaType>(
   DatasetDataCollectionName,

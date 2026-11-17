@@ -1,26 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Flex, IconButton } from '@chakra-ui/react';
+import { sortModelSelectorModels } from '@/components/Select/AIModelSelector.utils';
+import { findClientModelByValue } from '@/web/core/ai/model/modelReference';
+import { useModelList } from '@/web/core/ai/model/useModelList';
+import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
+import { Box, Button, Flex, IconButton } from '@chakra-ui/react';
+import { HUGGING_FACE_ICON } from '@fastgpt/global/common/system/constants';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import { Drawer } from 'vaul';
-import { HUGGING_FACE_ICON } from '@fastgpt/global/common/system/constants';
-import type { MyLLMModelItemType } from '@fastgpt/global/openapi/core/ai/model/api';
-import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
+import MyLoading from '@fastgpt/web/components/common/MyLoading';
 import { useTranslation } from 'next-i18next';
-import { findClientModelByValue } from '@/web/core/ai/model/modelReference';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Drawer } from 'vaul';
 
 type Props = {
   isOpen: boolean;
-  modelList: MyLLMModelItemType[];
   value?: string;
   onChange: (model: string) => void;
   onClose: () => void;
 };
 
-const MobileModelSelectorDrawer = ({ isOpen, modelList, value, onChange, onClose }: Props) => {
-  const { i18n } = useTranslation();
+/** 展开时校验候选目录；加载、请求失败和空目录分别展示，失败可在抽屉内重新请求。 */
+const MobileModelSelectorDrawer = ({ isOpen, value, onChange, onClose }: Props) => {
+  const { modelList, loading, error, refresh } = useModelList({
+    enabled: isOpen,
+    modelType: ModelTypeEnum.llm
+  });
+  const { t, i18n } = useTranslation();
   const { getModelProviders, getModelProvider } = useUserModelStore();
-  const availableModelList = useMemo(() => modelList, [modelList]);
+  const availableModelList = useMemo(() => sortModelSelectorModels(modelList), [modelList]);
   const selectedModel = useMemo(
     () => findClientModelByValue({ models: availableModelList, value }),
     [availableModelList, value]
@@ -96,7 +103,29 @@ const MobileModelSelectorDrawer = ({ isOpen, modelList, value, onChange, onClose
               <Drawer.Handle style={{ backgroundColor: 'var(--chakra-colors-myGray-400)' }} />
             </Flex>
 
-            {!activeProvider ? (
+            {loading ? (
+              <Box position="relative" minH="140px" role="status" aria-live="polite">
+                <MyLoading
+                  fixed={false}
+                  size="md"
+                  bg="transparent"
+                  text={t('common:model_loading_label')}
+                />
+              </Box>
+            ) : error ? (
+              <Flex minH="140px" direction="column" align="center" justify="center" gap={3}>
+                <Box role="alert" color="red.500" textAlign="center">
+                  {t('common:model_detail_load_failed')}
+                </Box>
+                <Button variant="whiteBase" onClick={refresh}>
+                  {t('common:refresh')}
+                </Button>
+              </Flex>
+            ) : providerGroups.length === 0 ? (
+              <Flex minH="140px" align="center" justify="center" color="myGray.500" role="status">
+                {t('common:llm_model_not_config')}
+              </Flex>
+            ) : !activeProvider ? (
               <Box pb={4} flex="0 1 auto" minH={0} overflowY="auto">
                 {providerGroups.map((provider) => (
                   <Flex

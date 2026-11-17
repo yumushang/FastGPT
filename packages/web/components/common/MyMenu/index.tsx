@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Menu,
   MenuList,
@@ -16,6 +16,7 @@ import {
 import MyDivider from '../MyDivider';
 import type { IconNameType } from '../Icon/type';
 import { useSystem } from '../../../hooks/useSystem';
+import { useCloseOnFlowNodeDragAreaPointerDown } from '../../../hooks/useCloseOnFlowNodeDragAreaPointerDown';
 import Avatar from '../Avatar';
 import MyTooltip from '../MyTooltip';
 
@@ -44,6 +45,8 @@ export type Props = {
   Button: React.ReactNode;
   buttonBoxProps?: BoxProps;
   menuListProps?: MenuListProps;
+  /** 默认使用 fixed，避免弹窗或滚动容器裁切菜单、撑大滚动范围。 */
+  strategy?: 'absolute' | 'fixed';
   trigger?: 'hover' | 'click';
   size?: MenuSizeType;
 
@@ -205,6 +208,7 @@ const MyMenu = ({
   Button,
   buttonBoxProps,
   menuListProps,
+  strategy = 'fixed',
   menuList,
   placement = 'bottom-start'
 }: Props) => {
@@ -215,28 +219,28 @@ const MyMenu = ({
 
   const formatTrigger = !isPc ? 'click' : trigger;
 
-  const isIgnoreOutsideClickTarget = (event: Event) => {
-    return event.composedPath().some((target) => {
+  const closeOnOutsideClick = useCallback((event: Event) => {
+    const isIgnored = event.composedPath().some((target) => {
       return target instanceof HTMLElement && target.dataset.myMenuIgnoreOutsideClick !== undefined;
     });
-  };
+    if (isIgnored) return;
+    setIsOpen(false);
+  }, []);
 
+  useCloseOnFlowNodeDragAreaPointerDown(ref, closeOnOutsideClick, isOpen);
   useOutsideClick({
     ref: ref,
-    handler: (event) => {
-      if (isIgnoreOutsideClickTarget(event)) return;
-      setIsOpen(false);
-    }
+    handler: closeOnOutsideClick
   });
 
   const computeOffset = useMemo<[number, number]>(() => {
     if (offset) return offset;
-    if (typeof width === 'number') return [-width / 2, 5];
     return [0, 5];
-  }, [offset, width]);
+  }, [offset]);
 
   return (
     <Menu
+      strategy={strategy}
       offset={computeOffset}
       isOpen={isOpen}
       autoSelect={false}
@@ -248,6 +252,7 @@ const MyMenu = ({
     >
       <Box
         ref={ref}
+        w={buttonBoxProps?.w ?? 'fit-content'}
         onMouseEnter={() => {
           if (formatTrigger === 'hover') {
             setIsOpen(true);
@@ -264,6 +269,7 @@ const MyMenu = ({
       >
         <Box
           position={'relative'}
+          w={buttonBoxProps?.w ?? 'fit-content'}
           onClickCapture={(e) => {
             e.stopPropagation();
             if (formatTrigger === 'click') {
@@ -295,6 +301,8 @@ const MyMenu = ({
           minW={isOpen ? `${width}px !important` : '80px'}
           zIndex={100}
           maxW={'300px'}
+          maxH={'45vh'}
+          overflowY={'auto'}
           p={'6px'}
           border={'1px solid #fff'}
           boxShadow={'3'}

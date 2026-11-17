@@ -1,28 +1,30 @@
-import React, { type ReactNode, useCallback, useEffect, useState } from 'react';
+import React, { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { createContext } from 'use-context-selector';
 import { useRouter } from 'next/router';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { getAppDetailById, getMyApps, putAppById } from '@/web/core/app/api';
+import { useScrollPagination, type ScrollListType } from '@fastgpt/web/hooks/useScrollPagination';
+import { batchMoveApps, getAppDetailById, getMyAppsV2, putAppById } from '@/web/core/app/api';
+import type { SelectOneResourceServer } from '@/components/common/folder/SelectOneResource';
 import { type AppDetailType, type AppListItemType } from '@fastgpt/global/core/app/type';
 import { getAppFolderPath } from '@/web/core/app/api/app';
 import {
-  type GetResourceFolderListProps,
   type ParentIdType,
   type ParentTreePathItemType
 } from '@fastgpt/global/common/parentFolder/type';
 import { type UpdateAppBodyType } from '@fastgpt/global/openapi/core/app/common/api';
 import dynamic from 'next/dynamic';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { FolderImgUrl } from '@fastgpt/global/common/file/image/constants';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { useTranslation } from 'next-i18next';
 import { usePersistedFilters } from '@fastgpt/web/hooks/usePersistedFilters';
 import { useUserStore } from '@/web/support/user/useUserStore';
 import { buildFilterStorageKey } from '@/web/common/filter/storageKey';
-import { getTeamMembers } from '@/web/support/user/team/api';
 import { getDashboardAppListScene, resolveDashboardAppListTypes } from './utils/appListTypes';
 import {
   AppListFiltersStoreSchema,
+  buildAppListRequest,
   defaultAppListFilters,
   defaultAppListFiltersStore,
   resolveSceneListType,
@@ -30,14 +32,23 @@ import {
   type AppListFilterType,
   type AppListFilterScene
 } from './filters/utils';
+import {
+  getGridRequestPageSize,
+  useResponsiveGridPageSize
+} from '@fastgpt/web/hooks/useResponsiveGridPageSize';
+
 const MoveModal = dynamic(() => import('@/components/common/folder/MoveModal'));
+import BatchActionBar from '@/components/common/batch/BatchActionBar';
+const BatchDeleteModal = dynamic(() => import('./BatchDeleteModal'));
 
 type AppListContextType = {
   parentId?: string | null;
   appType: AppTypeEnum | 'all';
   myApps: AppListItemType[];
-  loadMyApps: () => Promise<AppListItemType[]>;
+  loadMyApps: (options?: { silent?: boolean; resourceId?: string }) => Promise<void>;
   isFetchingApps: boolean;
+  isEmpty: boolean;
+  ScrollData: ScrollListType;
   folderDetail: AppDetailType | undefined | null;
   paths: ParentTreePathItemType[];
   onUpdateApp: (id: string, data: UpdateAppBodyType) => Promise<any>;
@@ -49,21 +60,41 @@ type AppListContextType = {
   setListFilters: (
     next: AppListFilterType | ((prev: AppListFilterType) => AppListFilterType)
   ) => void;
+  columnCount: number;
+  pageSize: number;
+
+  // 批量管理状态与方法
+  isBatchMode: boolean;
+  setIsBatchMode: React.Dispatch<React.SetStateAction<boolean>>;
+  selectedAppIds: string[];
+  setSelectedAppIds: React.Dispatch<React.SetStateAction<string[]>>;
+  onToggleSelectApp: (id: string) => void;
+  onSelectAllApps: (checked: boolean) => void;
+  isAllSelected: boolean;
+  isIndeterminate: boolean;
+  selectableApps: AppListItemType[];
+  selectedApps: AppListItemType[];
+  isBatchMoving: boolean;
+  setIsBatchMoving: React.Dispatch<React.SetStateAction<boolean>>;
+  isBatchDeleting: boolean;
+  setIsBatchDeleting: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 export const AppListContext = createContext<AppListContextType>({
   parentId: undefined,
   myApps: [],
-  loadMyApps: async function (): Promise<AppListItemType[]> {
+  loadMyApps: async function (): Promise<void> {
     throw new Error('Function not implemented.');
   },
   isFetchingApps: false,
+  isEmpty: false,
+  ScrollData: () => <></>,
   folderDetail: undefined,
   paths: [],
-  onUpdateApp: function (id: string, data: UpdateAppBodyType): Promise<any> {
+  onUpdateApp: function (_id: string, _data: UpdateAppBodyType): Promise<any> {
     throw new Error('Function not implemented.');
   },
-  setMoveAppId: function (value: React.SetStateAction<string | undefined>): void {
+  setMoveAppId: function (_value: React.SetStateAction<string | undefined>): void {
     throw new Error('Function not implemented.');
   },
   appType: 'all',
@@ -71,16 +102,51 @@ export const AppListContext = createContext<AppListContextType>({
     throw new Error('Function not implemented.');
   },
   searchKey: '',
-  setSearchKey: function (value: React.SetStateAction<string>): void {
+  setSearchKey: function (_value: React.SetStateAction<string>): void {
     throw new Error('Function not implemented.');
   },
   listFilters: defaultAppListFilters,
   setListFilters: function (): void {
     throw new Error('Function not implemented.');
+  },
+  columnCount: 1,
+  pageSize: 20,
+
+  isBatchMode: false,
+  setIsBatchMode: function (): void {
+    throw new Error('Function not implemented.');
+  },
+  selectedAppIds: [],
+  setSelectedAppIds: function (): void {
+    throw new Error('Function not implemented.');
+  },
+  onToggleSelectApp: function (): void {
+    throw new Error('Function not implemented.');
+  },
+  onSelectAllApps: function (): void {
+    throw new Error('Function not implemented.');
+  },
+  isAllSelected: false,
+  isIndeterminate: false,
+  selectableApps: [],
+  selectedApps: [],
+  isBatchMoving: false,
+  setIsBatchMoving: function (): void {
+    throw new Error('Function not implemented.');
+  },
+  isBatchDeleting: false,
+  setIsBatchDeleting: function (): void {
+    throw new Error('Function not implemented.');
   }
 });
 
-const AppListContextProvider = ({ children }: { children: ReactNode }) => {
+const AppListContextProvider = ({
+  children,
+  showPaginationTip = true
+}: {
+  children: ReactNode;
+  showPaginationTip?: boolean;
+}) => {
   const { t } = useTranslation();
   const router = useRouter();
   const { parentId = null, type: queryType = 'all' } = router.query as {
@@ -127,41 +193,41 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
   const sort = applyToolbarFilters ? listFilters.sort : undefined;
   const persistedTmbIds =
     applyToolbarFilters && feConfigs.isPlus ? toListTmbIds(listFilters.creator) : undefined;
+  const { columnCount, pageSize } = useResponsiveGridPageSize(
+    parentId ? { base: 1, sm: 2, md: 2, lg: 3 } : { base: 1, sm: 2, md: 2, lg: 3, xl: 4 }
+  );
+  const listParams = {
+    type: resolveDashboardAppListTypes({ pathname: router.pathname, type: appType }),
+    searchKey,
+    sort,
+    tmbIds: persistedTmbIds,
+    withRelatedAppCount: listScene === 'agent' || listScene === 'tool' ? true : undefined
+  };
 
   const {
-    data = [],
-    runAsync: loadMyApps,
-    loading: isFetchingApps
-  } = useRequest(
-    async () => {
-      const formatType = resolveDashboardAppListTypes({
-        pathname: router.pathname,
-        type: appType
-      });
-      const fetchApps = (tmbIds?: string[]) =>
-        getMyApps({
+    data: myApps = [],
+    isLoading: isFetchingApps,
+    isEmpty,
+    ScrollData,
+    fetchData,
+    refreshItems
+  } = useScrollPagination(
+    ({ offset = 0, pageSize = 20 }, cancelToken) =>
+      getMyAppsV2(
+        buildAppListRequest({
+          ...listParams,
           parentId,
-          type: formatType,
-          searchKey,
-          ...(sort ? { sort } : {}),
-          ...(tmbIds !== undefined ? { tmbIds } : {})
-        });
-
-      // 已选创建者先按当前活跃成员校验，避免离职/失效 ID 把列表一直筛空。
-      if (!persistedTmbIds?.length) {
-        return fetchApps(persistedTmbIds);
-      }
-
-      const selectedMembers = await getTeamMembers({
-        tmbIds: persistedTmbIds,
-        status: 'active',
-        offset: 0,
-        pageSize: persistedTmbIds.length
-      });
-      return fetchApps(selectedMembers.list.map((item) => String(item.tmbId)));
-    },
+          offset,
+          pageSize: getGridRequestPageSize(pageSize, offset)
+        }),
+        cancelToken
+      ),
     {
-      manual: false,
+      refreshByIds: {
+        getId: (item) => item._id,
+        api: (appIds, cancelToken) =>
+          getMyAppsV2({ ...listParams, appIds }, cancelToken).then(({ list }) => list)
+      },
       refreshDeps: [
         searchKey,
         parentId,
@@ -170,11 +236,21 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
         persistedTmbIds === undefined ? 'none' : persistedTmbIds.join(','),
         router.pathname,
         feConfigs.isPlus,
-        isPc
+        isPc,
+        pageSize
       ],
+      pageSize,
       throttleWait: 500,
-      refreshOnWindowFocus: true
+      showPaginationTip
     }
+  );
+  /** 列表卡片（含文件夹）按 ID 同步；侧栏权限变更等未指定 ID 的刷新从首屏重新分页。 */
+  const loadMyApps = useCallback(
+    ({ silent = false, resourceId }: { silent?: boolean; resourceId?: string } = {}) => {
+      if (resourceId) return refreshItems([resourceId]);
+      return fetchData({ init: true, silent });
+    },
+    [fetchData, refreshItems]
   );
 
   const { data: paths = [], runAsync: refetchPaths } = useRequest(
@@ -184,21 +260,47 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
       refreshDeps: [parentId]
     }
   );
+  const currentFolderPath = paths.find(({ parentId: pathId }) => pathId === parentId);
+  const canReadCurrentFolder = !parentId || currentFolderPath?.folderAccessMode === 'read';
 
-  const { data: folderDetail, runAsync: refetchFolderDetail } = useRequest(
+  const {
+    data: requestedFolderDetail,
+    error: folderDetailError,
+    loading: isLoadingFolderDetail,
+    runAsync: refetchFolderDetail
+  } = useRequest(
     () => {
       if (parentId) return getAppDetailById(parentId);
       return Promise.resolve(null);
     },
     {
       manual: false,
-      refreshDeps: [parentId]
+      ready: canReadCurrentFolder,
+      refreshDeps: [parentId, currentFolderPath?.folderAccessMode]
     }
   );
+  // 仅真实可读目录请求详情；导航目录只展示路径和子资源，不请求无权读取的目录详情。
+  const folderDetail = (() => {
+    if (!parentId) return null;
+    if (currentFolderPath?.folderAccessMode === 'navigate') return null;
+    if (
+      currentFolderPath?.folderAccessMode !== 'read' ||
+      isLoadingFolderDetail ||
+      folderDetailError ||
+      requestedFolderDetail?._id !== parentId
+    ) {
+      return undefined;
+    }
+    return requestedFolderDetail;
+  })();
 
   const { runAsync: onUpdateApp } = useRequest((id: string, data: UpdateAppBodyType) =>
     putAppById(id, data).then(async (res) => {
-      await Promise.all([refetchFolderDetail(), refetchPaths(), loadMyApps()]);
+      // ready=false 的详情请求会让 ahooks runAsync 返回永不完成的 Promise，导航目录下不能刷新它。
+      const refreshFolderDetail = canReadCurrentFolder
+        ? refetchFolderDetail()
+        : Promise.resolve(null);
+      await Promise.all([refreshFolderDetail, refetchPaths(), loadMyApps()]);
       return res;
     })
   );
@@ -207,28 +309,140 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
   const onMoveApp = useCallback(
     async (parentId: ParentIdType) => {
       if (!moveAppId) return;
-      await onUpdateApp(moveAppId, { parentId });
+      const result = await batchMoveApps({
+        ids: [moveAppId],
+        parentId: parentId ?? null
+      });
+      await loadMyApps();
+      return result;
     },
-    [moveAppId, onUpdateApp]
+    [moveAppId, loadMyApps]
   );
 
-  const getAppFolderList = useCallback(
-    ({ parentId }: GetResourceFolderListProps) => {
+  const getAppFolderList = useCallback<SelectOneResourceServer>(
+    ({ parentId, offset, pageSize }, cancelToken) => {
       const folderType = isAgentPage ? AppTypeEnum.folder : AppTypeEnum.toolFolder;
 
-      return getMyApps({
-        parentId,
-        type: folderType
-      }).then((res) =>
-        res
-          .filter((item) => item.permission.hasWritePer)
-          .map((item) => ({
-            id: item._id,
-            name: item.name
-          }))
+      return getMyAppsV2(
+        {
+          parentId,
+          type: folderType,
+          offset,
+          pageSize,
+          excludeAppId: moveAppId
+        },
+        cancelToken
+      ).then(({ list, total }) => ({
+        total,
+        list: list.map((item) => ({
+          id: item._id,
+          name: item.name,
+          avatar: FolderImgUrl,
+          isFolder: true,
+          disabled: !item.permission.hasManagePer
+        }))
+      }));
+    },
+    [isAgentPage, moveAppId]
+  );
+
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
+  const [isBatchMoving, setIsBatchMoving] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+
+  // 在渲染阶段同步校准状态：当离开批量模式，或目录、搜索、筛选发生变化时立即清空已选项，避免 effect 异步级联渲染与状态错乱
+  const [prevBatchState, setPrevBatchState] = useState({
+    parentId,
+    searchKey,
+    listFilters,
+    isBatchMode
+  });
+
+  if (
+    prevBatchState.parentId !== parentId ||
+    prevBatchState.searchKey !== searchKey ||
+    prevBatchState.listFilters !== listFilters ||
+    prevBatchState.isBatchMode !== isBatchMode
+  ) {
+    setPrevBatchState({
+      parentId,
+      searchKey,
+      listFilters,
+      isBatchMode
+    });
+    if (selectedAppIds.length > 0) {
+      setSelectedAppIds([]);
+    }
+  }
+
+  const handleSetIsBatchMode = useCallback((action: React.SetStateAction<boolean>) => {
+    setIsBatchMode((prev) => {
+      const next = typeof action === 'function' ? action(prev) : action;
+      if (!next) {
+        setSelectedAppIds([]);
+      }
+      return next;
+    });
+  }, []);
+
+  // 可批量操作的资源（必须具有管理权限或为 Owner）
+  const selectableApps = useMemo(
+    () => myApps.filter((app) => Boolean(app.permission?.hasManagePer || app.permission?.isOwner)),
+    [myApps]
+  );
+  const selectableAppIds = useMemo(() => selectableApps.map((a) => a._id), [selectableApps]);
+
+  const selectedApps = useMemo(
+    () => myApps.filter((app) => selectedAppIds.includes(app._id)),
+    [myApps, selectedAppIds]
+  );
+
+  const isAllSelected = useMemo(
+    () =>
+      selectableAppIds.length > 0 && selectableAppIds.every((id) => selectedAppIds.includes(id)),
+    [selectableAppIds, selectedAppIds]
+  );
+
+  const isIndeterminate = useMemo(
+    () => selectedAppIds.length > 0 && !isAllSelected,
+    [selectedAppIds, isAllSelected]
+  );
+
+  const onToggleSelectApp = useCallback(
+    (id: string) => {
+      if (!selectableAppIds.includes(id)) return;
+      setSelectedAppIds((prev) =>
+        prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
       );
     },
-    [isAgentPage]
+    [selectableAppIds]
+  );
+
+  const onSelectAllApps = useCallback(
+    (checked: boolean) => {
+      if (checked) {
+        setSelectedAppIds(selectableAppIds);
+      } else {
+        setSelectedAppIds([]);
+      }
+    },
+    [selectableAppIds]
+  );
+
+  const onBatchMoveApps = useCallback(
+    async (targetParentId: ParentIdType) => {
+      if (selectedAppIds.length === 0) return;
+      const result = await batchMoveApps({
+        ids: selectedAppIds,
+        parentId: targetParentId ?? null
+      });
+      await loadMyApps();
+      setSelectedAppIds(result.failedIds);
+      if (result.failedIds.length === 0) setIsBatchMode(false);
+      return result;
+    },
+    [selectedAppIds, loadMyApps]
   );
 
   useEffect(() => {
@@ -238,10 +452,12 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
   const contextValue: AppListContextType = {
     parentId,
     appType,
-    myApps: data,
+    myApps,
     loadMyApps,
+    ScrollData,
     refetchFolderDetail,
     isFetchingApps,
+    isEmpty,
     folderDetail,
     paths,
     onUpdateApp,
@@ -249,11 +465,38 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
     searchKey,
     setSearchKey,
     listFilters,
-    setListFilters
+    setListFilters,
+    columnCount,
+    pageSize,
+
+    isBatchMode,
+    setIsBatchMode: handleSetIsBatchMode,
+    selectedAppIds,
+    setSelectedAppIds,
+    onToggleSelectApp,
+    onSelectAllApps,
+    isAllSelected,
+    isIndeterminate,
+    selectableApps,
+    selectedApps,
+    isBatchMoving,
+    setIsBatchMoving,
+    isBatchDeleting,
+    setIsBatchDeleting
   };
   return (
     <AppListContext.Provider value={contextValue}>
       {children}
+      {isBatchMode && isPc && (
+        <BatchActionBar
+          isAllSelected={isAllSelected}
+          isIndeterminate={isIndeterminate}
+          selectedCount={selectedAppIds.length}
+          onSelectAll={onSelectAllApps}
+          onBatchMove={() => setIsBatchMoving(true)}
+          onBatchDelete={() => setIsBatchDeleting(true)}
+        />
+      )}
       {!!moveAppId && (
         <MoveModal
           moveResourceId={moveAppId}
@@ -262,6 +505,27 @@ const AppListContextProvider = ({ children }: { children: ReactNode }) => {
           onClose={() => setMoveAppId(undefined)}
           onConfirm={onMoveApp}
           moveHint={t('app:move.hint')}
+        />
+      )}
+      {isBatchMoving && (
+        <MoveModal
+          moveResourceIds={selectedAppIds}
+          server={getAppFolderList}
+          title={t('app:move_app')}
+          onClose={() => setIsBatchMoving(false)}
+          onConfirm={onBatchMoveApps}
+          moveHint={t('app:move.hint')}
+        />
+      )}
+      {isBatchDeleting && selectedApps.length > 0 && (
+        <BatchDeleteModal
+          apps={selectedApps}
+          onClose={() => setIsBatchDeleting(false)}
+          onSuccess={({ failedIds }) => {
+            setSelectedAppIds(failedIds);
+            if (failedIds.length === 0) setIsBatchMode(false);
+            loadMyApps();
+          }}
         />
       )}
     </AppListContext.Provider>

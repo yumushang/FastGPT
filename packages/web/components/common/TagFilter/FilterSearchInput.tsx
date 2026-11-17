@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import { Flex, Input } from '@chakra-ui/react';
 import MyIconButton from '../Icon/button';
 import { shadowLight } from '../../../styles/theme';
@@ -28,47 +28,86 @@ type Props = {
   onChange: (next: string) => void;
 };
 
-/** TagFilter 下拉里 32px 搜索框，有内容时显示清空。 */
-const FilterSearchInput = ({ value, placeholder, onChange }: Props) => (
-  <Flex
-    w={'100%'}
-    h={'32px'}
-    alignItems={'center'}
-    px={1}
-    border={'1px solid'}
-    borderColor={'borderColor.low'}
-    borderRadius={'sm'}
-    _hover={{ borderColor: 'primary.300' }}
-    _focusWithin={{
-      borderColor: 'primary.500',
-      boxShadow: shadowLight,
-      bg: 'white'
-    }}
-  >
-    <Input
-      flex={'1 1 0'}
-      w={0}
-      minW={0}
-      h={'100%'}
+/** TagFilter 下拉里 32px 搜索框，有内容时显示清空，并在中文输入法组合结束后再触发搜索。 */
+const FilterSearchInput = forwardRef<HTMLInputElement, Props>(function FilterSearchInput(
+  { value, placeholder, onChange },
+  ref
+) {
+  const [inputValue, setInputValue] = useState(value);
+  const isComposingRef = useRef(false);
+
+  useEffect(() => {
+    setInputValue(value);
+  }, [value]);
+
+  return (
+    <Flex
+      w={'100%'}
+      h={'32px'}
+      alignItems={'center'}
       px={1}
-      variant={'unstyled'}
-      fontSize={'sm'}
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-    />
-    {!!value && (
-      <MyIconButton
-        icon={'common/closeLight'}
-        flex={'0 0 auto'}
-        position={'relative'}
-        zIndex={1}
-        size={'14px'}
-        hoverColor={'myGray.700'}
-        onClick={() => onChange('')}
+      border={'1px solid'}
+      borderColor={'borderColor.low'}
+      borderRadius={'sm'}
+      _hover={{ borderColor: 'primary.300' }}
+      _focusWithin={{
+        borderColor: 'primary.500',
+        boxShadow: shadowLight,
+        bg: 'white'
+      }}
+      onKeyDown={(e) => {
+        // 组合输入期间按键均交给输入法候选框；非组合状态下方向键和 Escape 交给外层菜单。
+        if (e.nativeEvent.isComposing || !['ArrowDown', 'ArrowUp', 'Escape'].includes(e.key)) {
+          e.stopPropagation();
+        }
+      }}
+    >
+      <Input
+        ref={ref}
+        flex={'1 1 0'}
+        w={0}
+        minW={0}
+        h={'100%'}
+        px={0}
+        variant={'unstyled'}
+        fontSize={'xs'}
+        lineHeight={'16px'}
+        value={inputValue}
+        placeholder={placeholder}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+        }}
+        onCompositionEnd={(e) => {
+          isComposingRef.current = false;
+          const next = e.currentTarget.value;
+          setInputValue(next);
+          onChange(next);
+        }}
+        onChange={(e) => {
+          const next = e.target.value;
+          setInputValue(next);
+          if (!isComposingRef.current) {
+            onChange(next);
+          }
+        }}
       />
-    )}
-  </Flex>
-);
+      {!!inputValue && (
+        <MyIconButton
+          icon={'common/closeLight'}
+          flex={'0 0 auto'}
+          position={'relative'}
+          zIndex={1}
+          size={'14px'}
+          hoverColor={'myGray.700'}
+          onClick={() => {
+            isComposingRef.current = false;
+            setInputValue('');
+            onChange('');
+          }}
+        />
+      )}
+    </Flex>
+  );
+});
 
 export default FilterSearchInput;

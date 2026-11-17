@@ -1,26 +1,35 @@
+import {
+  assertAppDatasetIndexModelsAvailable,
+  getAssertedDatasetEmbeddingModel,
+  getDatasetModelReference
+} from '@fastgpt/service/core/dataset/model';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
 /* push data to training queue */
-import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
-import { checkDatasetIndexLimit } from '@fastgpt/service/support/permission/teamLimit';
-import { predictDataLimitLength } from '@fastgpt/global/core/dataset/utils';
-import { pushDataListToTrainingQueue } from '@fastgpt/service/core/dataset/training/controller';
 import { NextAPI } from '@/service/middleware/entry';
-import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
-import { getTrainingModeByCollection } from '@fastgpt/service/core/dataset/collection/utils';
-import { getDatasetImageIndexCapability } from '@fastgpt/service/core/dataset/utils';
-import type { ApiRequestProps } from '@fastgpt/next/type';
+import { TrainingModeEnum } from '@fastgpt/global/core/dataset/constants';
+import { predictDataLimitLength } from '@fastgpt/global/core/dataset/utils';
 import {
   PushDataBodySchema,
   type PushDataResponseType
 } from '@fastgpt/global/openapi/core/dataset/data/api';
+import { WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 import { UsageSourceEnum } from '@fastgpt/global/support/wallet/usage/constants';
+import type { ApiRequestProps } from '@fastgpt/next/type';
+import { getTrainingModeByCollection } from '@fastgpt/service/core/dataset/collection/utils';
 import {
-  getDatasetAgentModel,
-  getDatasetEmbeddingModel,
-  getDatasetVlmModel
-} from '@fastgpt/service/core/dataset/model';
-import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
+  preCreateDatasetDataAndPushToTrainingQueue,
+  pushDataListToTrainingQueue
+} from '@fastgpt/service/core/dataset/training/controller';
+import { getDatasetImageIndexCapability } from '@fastgpt/service/core/dataset/utils';
+import { authDatasetCollection } from '@fastgpt/service/support/permission/dataset/auth';
+import { getAuthorizedModelIds } from '@fastgpt/service/support/permission/model/auth';
+import { checkDatasetIndexLimit } from '@fastgpt/service/support/permission/teamLimit';
+
+import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
+import { isAuthorizedDatasetFileS3Key } from '@fastgpt/service/common/s3/sources/dataset/key';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
+import { createTrainingUsage } from '@fastgpt/service/support/wallet/usage/controller';
 
 async function handler(req: ApiRequestProps): Promise<PushDataResponseType> {
   const body = parseApiInput({ req, bodySchema: PushDataBodySchema }).body;
@@ -30,19 +39,42 @@ async function handler(req: ApiRequestProps): Promise<PushDataResponseType> {
   const { collectionId, billId, data } = body;
 
   // 凭证校验
-  const { teamId, tmbId, collection } = await authDatasetCollection({
+  const { teamId, tmbId, isRoot, collection } = await authDatasetCollection({
     req,
     authToken: true,
     authApiKey: true,
     collectionId,
     per: WritePermissionVal
   });
-  const vectorModelData = getDatasetEmbeddingModel(collection.dataset);
-  const agentModelData = getDatasetAgentModel(collection.dataset);
-  const vlmModelData = getDatasetVlmModel(collection.dataset);
+  const modelHandle = await getTeamModelHandle({ teamId });
+  const authorizedIds = await getAuthorizedModelIds({
+    actor: { teamId, tmbId, isRoot },
+    handle: modelHandle
+  });
+  const embeddingModels = await assertAppDatasetIndexModelsAvailable({
+    resources: [{ type: 'dataset', id: String(collection.datasetId) }],
+    teamId,
+    modelHandle,
+    authorizedIds
+  });
+  const vectorModelData = getAssertedDatasetEmbeddingModel(
+    embeddingModels,
+    String(collection.datasetId)
+  );
+  const agentModelData = modelHandle.getModelData(
+    getDatasetModelReference(collection.dataset, 'agent'),
+    { type: 'llm' }
+  );
+  const vlmModelData = modelHandle.getModelData(
+    getDatasetModelReference(collection.dataset, 'vlm'),
+    { type: 'llm', vision: true, optional: true }
+  );
 
   const mode = getTrainingModeByCollection({
     ...collection,
+    ...(body.trainingType && { trainingType: body.trainingType }),
+    ...(body.autoIndexes !== undefined && { autoIndexes: body.autoIndexes }),
+    ...(body.imageIndex !== undefined && { imageIndex: body.imageIndex }),
     supportImageIndex: getDatasetImageIndexCapability({
       vectorModel: vectorModelData,
       vlmModel: vlmModelData
@@ -54,6 +86,16 @@ async function handler(req: ApiRequestProps): Promise<PushDataResponseType> {
     teamId,
     insertLen: predictDataLimitLength(mode, data)
   });
+
+  // imageId 一旦提供，就必须归属于当前已鉴权 collection 的 dataset，避免其他来源的 key 进入训练队列
+  const hasInvalidImageKey = data.some(
+    ({ imageId }) =>
+      imageId !== undefined &&
+      !isAuthorizedDatasetFileS3Key({ key: imageId, datasetId: collection.datasetId })
+  );
+  if (hasInvalidImageKey) {
+    return Promise.reject(CommonErrEnum.unAuthFileKey);
+  }
 
   return mongoSessionRun(async (session) => {
     const traingUsageId = await (async () => {
@@ -71,7 +113,22 @@ async function handler(req: ApiRequestProps): Promise<PushDataResponseType> {
       return newUsageId;
     })();
 
-    return pushDataListToTrainingQueue({
+    if (mode === TrainingModeEnum.qa) {
+      return pushDataListToTrainingQueue({
+        ...body,
+        session,
+        billId: traingUsageId,
+        mode,
+        teamId,
+        tmbId,
+        datasetId: collection.datasetId,
+        vectorModel: vectorModelData,
+        agentModel: agentModelData,
+        vlmModel: vlmModelData
+      });
+    }
+
+    return preCreateDatasetDataAndPushToTrainingQueue({
       ...body,
       session,
       billId: traingUsageId,

@@ -28,18 +28,6 @@ const getActiveRunFilter = ({ migrationId, runId }: ActiveRunProps) => ({
   }
 });
 
-/** failed 仅供阻塞任务继续 heartbeat；非阻塞失败会由 runner 主动停止续租。 */
-const getOwnedLeaseFilter = ({ migrationId, runId }: ActiveRunProps) => ({
-  _id: migrationId,
-  status: {
-    $in: [SystemMigrationStatusEnum.running, SystemMigrationStatusEnum.failed]
-  },
-  runId,
-  $expr: {
-    $gt: ['$leaseExpireAt', '$$NOW']
-  }
-});
-
 /** 复用调用方事务；普通 runner 调用则创建事务，保证状态和错误明细同步提交。 */
 const runWithMigrationSession = <T>(
   session: ClientSession | undefined,
@@ -78,18 +66,21 @@ const replaceMigrationFailedRecordDocuments = async ({
 };
 
 /** 幂等创建当前静态注册表对应的状态文档，已存在的运行状态不会被覆盖。 */
-export const ensureMigrationStates = async (migrationIds: string[], session?: ClientSession) => {
-  if (migrationIds.length === 0) return;
+export const ensureMigrationStates = async (
+  migrations: readonly { id: string; manual?: boolean }[],
+  session?: ClientSession
+) => {
+  if (migrations.length === 0) return;
 
   const now = new Date();
   await MongoSystemMigrationState.bulkWrite(
-    migrationIds.map((migrationId) => ({
+    migrations.map(({ id: migrationId, manual }) => ({
       updateOne: {
         filter: { _id: migrationId },
         update: {
           $setOnInsert: {
             _id: migrationId,
-            status: SystemMigrationStatusEnum.pending,
+            status: manual ? SystemMigrationStatusEnum.waiting : SystemMigrationStatusEnum.pending,
             createdAt: now,
             updatedAt: now
           }
@@ -101,7 +92,7 @@ export const ensureMigrationStates = async (migrationIds: string[], session?: Cl
   );
 };
 
-/** 从主库读取注册表状态；执行顺序和 readiness 不能使用可能延迟的 secondary。 */
+/** 从主库读取注册表状态；执行顺序和依赖判断不能使用可能延迟的 secondary。 */
 export const getMigrationStates = async (
   migrationIds: string[]
 ): Promise<SystemMigrationStateSchemaType[]> => {
@@ -164,18 +155,24 @@ export const getMigrationServerTime = async (): Promise<Date> => {
 };
 
 /**
- * 原子获取 pending 或 lease 已过期的 running/failed 任务。
+ * 原子获取 pending 或 lease 已过期的 running 任务。
+ * 启动链允许在失败持有者重启、lease 过期后接管 failed；后台任务仍需管理员重置。
  * 所有 lease 时间由 MongoDB 的 $$NOW 生成，避免多节点宿主机时钟偏差。
  */
 export const claimMigrationLease = async (
   {
     migrationId,
     runId,
-    leaseDurationMs
+    leaseDurationMs,
+    allowFailed = false,
+    allowSucceeded = false
   }: {
     migrationId: string;
     runId: string;
     leaseDurationMs: number;
+    allowFailed?: boolean;
+    /** resumable 任务：succeeded 也视为可领取，用于声明集合增长后补写新成员。 */
+    allowSucceeded?: boolean;
   },
   session?: ClientSession
 ): Promise<SystemMigrationStateSchemaType | null> => {
@@ -186,13 +183,15 @@ export const claimMigrationLease = async (
       $or: [
         { status: SystemMigrationStatusEnum.pending },
         {
-          status: {
-            $in: [SystemMigrationStatusEnum.running, SystemMigrationStatusEnum.failed]
-          },
+          status: allowFailed
+            ? { $in: [SystemMigrationStatusEnum.running, SystemMigrationStatusEnum.failed] }
+            : SystemMigrationStatusEnum.running,
           $expr: {
             $lte: [{ $ifNull: ['$leaseExpireAt', new Date(0)] }, '$$NOW']
           }
-        }
+        },
+        // 只放行 succeeded 重新执行；running 分支仍要求 lease 过期，避免抢走正在执行者的 runId。
+        ...(allowSucceeded ? [{ status: SystemMigrationStatusEnum.succeeded }] : [])
       ]
     },
     [
@@ -206,12 +205,8 @@ export const claimMigrationLease = async (
           // 新一轮执行开始后，旧成功结果不再代表本轮状态。
           result: '$$REMOVE',
           leaseExpireAt: {
-            // 使用 Mongo 服务端时间，避免不同容器宿主机的时钟偏差影响抢占判断。
-            $dateAdd: {
-              startDate: '$$NOW',
-              unit: 'millisecond',
-              amount: leaseDurationMs
-            }
+            // 日期加毫秒使用 $add 兼容 MongoDB 4.4，并保留服务端时间避免宿主机时钟偏差。
+            $add: ['$$NOW', leaseDurationMs]
           },
           updatedAt: '$$NOW'
         }
@@ -221,29 +216,33 @@ export const claimMigrationLease = async (
   ).lean();
 };
 
-/** 仅允许当前仍有效的 runId 续租，过期执行器不能把自己重新续活。 */
+/** 仅当前有效 runId 可续租；启动链失败后继续持有 lease，直到 owner 停止或失权。 */
 export const renewMigrationLease = async (
   {
     migrationId,
     runId,
-    leaseDurationMs
+    leaseDurationMs,
+    allowFailed = false
   }: ActiveRunProps & {
     leaseDurationMs: number;
+    allowFailed?: boolean;
   },
   session?: ClientSession
 ): Promise<boolean> => {
   const result = await MongoSystemMigrationState.updateOne(
-    getOwnedLeaseFilter({ migrationId, runId }),
+    {
+      ...getActiveRunFilter({ migrationId, runId }),
+      ...(allowFailed
+        ? { status: { $in: [SystemMigrationStatusEnum.running, SystemMigrationStatusEnum.failed] } }
+        : {})
+    },
     [
       {
         $set: {
           heartbeatAt: '$$NOW',
           leaseExpireAt: {
-            $dateAdd: {
-              startDate: '$$NOW',
-              unit: 'millisecond',
-              amount: leaseDurationMs
-            }
+            // 与抢锁使用同一服务端时间语义，避免引入 MongoDB 5.0 才支持的 $dateAdd。
+            $add: ['$$NOW', leaseDurationMs]
           },
           updatedAt: '$$NOW'
         }
@@ -416,7 +415,7 @@ export const completeMigration = async (
 
 /**
  * 当前 lease 持有者写入最近错误；只有显式携带 failedRecords 才替换错误快照。
- * 阻塞类型是否继续续租由 runner 决定。
+ * 后台 failed 等待管理员重试；启动链 failed 由 Runner 持续续租，修复后重启恢复。
  */
 export const failMigration = async (
   {
@@ -524,7 +523,7 @@ export const failMigration = async (
 
 /**
  * 管理员确认修复后解除失败任务的旧 lease，使其重新进入竞争。
- * checkpoint、progress 和错误信息全部保留，恢复语义与阻塞任务重启后的 lease 接管一致。
+ * checkpoint、progress 和错误信息全部保留，恢复语义与 running 任务的过期 lease 接管一致。
  */
 export const resetFailedMigration = async (
   migrationId: string,
@@ -547,6 +546,16 @@ export const resetFailedMigration = async (
         leaseExpireAt: ''
       }
     },
+    { session }
+  );
+  return result.modifiedCount === 1;
+};
+
+/** 原子接受首次手动执行请求；重复请求或已经开始的任务不会重新入队。 */
+export const enqueueManualMigration = async (migrationId: string, session?: ClientSession) => {
+  const result = await MongoSystemMigrationState.updateOne(
+    { _id: migrationId, status: SystemMigrationStatusEnum.waiting },
+    { $set: { status: SystemMigrationStatusEnum.pending }, $currentDate: { updatedAt: true } },
     { session }
   );
   return result.modifiedCount === 1;

@@ -1,0 +1,245 @@
+import { getSystemInstanceConfig } from '../../../../common/system/systemInstanceConfig/runtime';
+import { randomBytes } from 'node:crypto';
+import { UserErrEnum } from '@fastgpt/global/common/error/code/user';
+import { UserError } from '@fastgpt/global/common/error/utils';
+import { hashStr } from '@fastgpt/global/common/string/tools';
+import { TmpDataEnum, TmpDataExpireTime } from '@fastgpt/global/support/tmpData/constants';
+import { UserStatusEnum } from '@fastgpt/global/support/user/constant';
+import { mongoSessionRun } from '../../../../common/mongo/sessionRun';
+import { type ClientSession } from '../../../../common/mongo';
+import { MongoTmpData } from '../../../tmpData/schema';
+import { MongoUser } from '../../schema';
+import {
+  isPasswordAvailableForUsername,
+  isSsoPasswordPolicyEnabled,
+  isSsoUsername
+} from '@fastgpt/global/support/user/account/password/utils';
+import { getSsoConfigured } from '../../../../common/system/sso';
+
+export const PASSWORD_CHANGE_SESSION_TTL_SECONDS = 5 * 60;
+
+type PasswordChangeSessionData = {
+  userId: string;
+  loginSessionId: string;
+};
+
+/** 仅在密码策略开启时读取 Pro 接入状态，避免无关账号操作依赖 Pro 可用性。 */
+export const isSsoPasswordDisabled = async () => {
+  if (getSystemInstanceConfig().auth.sso.disablePasswordForSsoUsers !== true) return false;
+  return isSsoPasswordPolicyEnabled({
+    enabled: await getSsoConfigured(),
+    disablePasswordForSsoUsers: true
+  });
+};
+
+/** 使用共享账号分类规则判断持久化 username 是否属于当前 SSO 环境。 */
+export const isSsoUserByUsername = async (username: string) => {
+  if (!isSsoUsername(username, { enabled: true })) return false;
+  return isSsoUsername(username, { enabled: await getSsoConfigured() });
+};
+
+/** 非 SSO 用户和未开启策略的部署无需访问 Pro；能力未知时拒绝受影响账号的密码操作。 */
+export const getUserPasswordAvailability = async (username: string) => {
+  if (getSystemInstanceConfig().auth.sso.disablePasswordForSsoUsers !== true) return true;
+  if (!isSsoUsername(username, { enabled: true })) return true;
+
+  return isPasswordAvailableForUsername(username, {
+    enabled: await getSsoConfigured(),
+    disablePasswordForSsoUsers: true
+  });
+};
+
+/** 在密码比对或最终写入前拒绝受限 SSO 用户。 */
+export const assertUserPasswordAvailable = async (username: string) => {
+  if (!(await getUserPasswordAvailability(username))) {
+    throw new UserError(UserErrEnum.ssoPasswordUnavailable);
+  }
+};
+
+type PasswordChangeSession = {
+  sessionId: string;
+  expiredAt: string;
+};
+
+const getPasswordChangeSessionDataId = (sessionId: string) =>
+  `${TmpDataEnum.PasswordChangeSession}--${hashStr(sessionId)}`;
+
+/** 创建绑定当前用户和当前登录 Session 的一次性改密 Session，原始值只返回给前端。 */
+export const createPasswordChangeSession = async ({
+  userId,
+  loginSessionId,
+  session
+}: PasswordChangeSessionData & { session?: ClientSession }): Promise<PasswordChangeSession> => {
+  const sessionId = randomBytes(32).toString('base64url');
+  const expiredAt = new Date(Date.now() + TmpDataExpireTime[TmpDataEnum.PasswordChangeSession]);
+
+  await MongoTmpData.create(
+    [
+      {
+        dataId: getPasswordChangeSessionDataId(sessionId),
+        data: { userId, loginSessionId },
+        expireAt: expiredAt
+      }
+    ],
+    { session }
+  );
+
+  return { sessionId, expiredAt: expiredAt.toISOString() };
+};
+
+/**
+ * 在同一 Mongo 事务中校验并消费一次性改密 Session，再更新密码。
+ * 只有密码更新和凭证删除都成功，事务才会提交，避免凭证被提前消费或重复使用。
+ */
+export const updatePassword = async ({
+  sessionId,
+  userId,
+  loginSessionId,
+  newPassword
+}: PasswordChangeSessionData & {
+  sessionId: string;
+  newPassword: string;
+}) =>
+  mongoSessionRun(async (session) => {
+    const dataId = getPasswordChangeSessionDataId(sessionId);
+    const record = await MongoTmpData.findOne({
+      dataId,
+      expireAt: { $gt: new Date() },
+      'data.userId': userId,
+      'data.loginSessionId': loginSessionId
+    })
+      .session(session)
+      .lean();
+
+    if (!record) throw new UserError(UserErrEnum.passwordChangeAuthorizationInvalid);
+
+    await assertNewPasswordDiffersFromCurrent({ userId, newPassword, session });
+
+    const updateResult = await MongoUser.updateOne(
+      // 改密成功可完成 inactive 账号激活，但绝不能把管理员禁用的账号重新启用。
+      { _id: userId, status: { $ne: UserStatusEnum.forbidden } },
+      {
+        $set: {
+          password: newPassword,
+          passwordUpdateTime: new Date(),
+          status: UserStatusEnum.active
+        }
+      },
+      { session }
+    );
+    if (updateResult.matchedCount !== 1) throw new Error('Failed to update password');
+
+    const deleted = await MongoTmpData.deleteOne(
+      {
+        dataId,
+        expireAt: { $gt: new Date() },
+        'data.userId': userId,
+        'data.loginSessionId': loginSessionId
+      },
+      { session }
+    );
+    if (deleted.deletedCount !== 1) {
+      throw new UserError(UserErrEnum.passwordChangeAuthorizationInvalid);
+    }
+  });
+
+/**
+ * 开源版 root 改密：在同一 Mongo 事务中校验旧密码（若已设置密码）并更新 root 密码。
+ * 旧密码校验与写入放在同一事务内，避免校验后、写入前被并发改密绕过。
+ */
+export const updateRootPassword = async ({
+  userId,
+  oldPassword,
+  newPassword
+}: {
+  userId: string;
+  oldPassword?: string;
+  newPassword: string;
+}) =>
+  mongoSessionRun(async (session) => {
+    if (oldPassword !== undefined) {
+      await assertOldPasswordMatches({ userId, oldPassword, session });
+    }
+
+    await assertNewPasswordDiffersFromCurrent({ userId, newPassword, session });
+
+    const updateResult = await MongoUser.updateOne(
+      {
+        _id: userId,
+        username: 'root',
+        status: { $ne: UserStatusEnum.forbidden }
+      },
+      {
+        $set: {
+          password: newPassword,
+          passwordUpdateTime: new Date(),
+          status: UserStatusEnum.active
+        }
+      },
+      { session }
+    );
+    if (updateResult.matchedCount !== 1) throw new Error('Failed to update password');
+  });
+
+/** 未激活账号首次设置密码；仅此路径无需旧密码，并在成功后标记账号已激活。 */
+export const activateAccount = async ({
+  userId,
+  newPassword
+}: {
+  userId: string;
+  newPassword: string;
+}) =>
+  mongoSessionRun(async (session) => {
+    const isActivationPending = await MongoUser.exists({
+      _id: userId,
+      status: UserStatusEnum.inactive
+    }).session(session);
+    if (!isActivationPending) {
+      throw new UserError(UserErrEnum.passwordChangeAuthorizationInvalid);
+    }
+
+    await assertNewPasswordDiffersFromCurrent({ userId, newPassword, session });
+
+    const updateResult = await MongoUser.updateOne(
+      { _id: userId, status: UserStatusEnum.inactive },
+      {
+        $set: {
+          password: newPassword,
+          passwordUpdateTime: new Date(),
+          status: UserStatusEnum.active
+        }
+      },
+      { session }
+    );
+    if (updateResult.matchedCount !== 1) throw new Error('Failed to update password');
+  });
+
+/** 拒绝与持久化密码不匹配的旧密码；Schema setter 负责把单层摘要对齐为存储格式。 */
+export const assertOldPasswordMatches = async ({
+  userId,
+  oldPassword,
+  session
+}: {
+  userId: string;
+  oldPassword: string;
+  session?: ClientSession;
+}) => {
+  const query = MongoUser.exists({ _id: userId, password: oldPassword });
+  if (session) query.session(session);
+  if (!(await query)) throw new UserError(UserErrEnum.oldPasswordError);
+};
+
+/** 拒绝将当前持久化密码再次设置为新密码。Schema setter 负责沿用现有双层哈希协议。 */
+export const assertNewPasswordDiffersFromCurrent = async ({
+  userId,
+  newPassword,
+  session
+}: {
+  userId: string;
+  newPassword: string;
+  session?: ClientSession;
+}) => {
+  const query = MongoUser.exists({ _id: userId, password: newPassword });
+  if (session) query.session(session);
+  if (await query) throw new UserError(UserErrEnum.newPasswordSameAsOld);
+};

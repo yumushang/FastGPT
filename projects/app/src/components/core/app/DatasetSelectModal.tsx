@@ -17,25 +17,28 @@ import { ChevronRightIcon, CloseIcon } from '@chakra-ui/icons';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import type { SelectedDatasetType } from '@fastgpt/global/core/workflow/type/io';
 import type { DatasetListItemType } from '@fastgpt/global/core/dataset/type';
-import type { ParentTreePathItemType } from '@fastgpt/global/common/parentFolder/type';
+import type {
+  ParentIdType,
+  ParentTreePathItemType
+} from '@fastgpt/global/common/parentFolder/type';
 import { useToast } from '@fastgpt/web/hooks/useToast';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { DatasetTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import { useTranslation } from 'next-i18next';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
-import { useDatasetSelect } from '@/components/core/dataset/SelectModal';
+import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import FolderPath from '@/components/common/folder/Path';
 import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import QuickCreateDatasetModal from '@/pageComponents/app/detail/components/QuickCreateDatasetModal';
 import { useUserStore } from '@/web/support/user/useUserStore';
 import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import { getAllDatasets, getDatasetPaths } from '@/web/core/dataset/api';
 
 type SelectableDatasetListItem = DatasetListItemType & {
   vectorModel: NonNullable<DatasetListItemType['vectorModel']>;
 };
 
-/** 只有非目录且向量模型仍启用的知识库才能新增到应用配置。 */
 const isSelectableDataset = (item: DatasetListItemType): item is SelectableDatasetListItem =>
   item.type !== DatasetTypeEnum.folder && item.vectorModel?.isActive === true;
 
@@ -54,29 +57,46 @@ export const DatasetSelectModal = ({
   // Current selected datasets, initialized with defaultSelectedDatasets
   const [selectedDatasets, setSelectedDatasets] =
     useState<SelectedDatasetType[]>(defaultSelectedDatasets);
-  // 已删除知识库只在弹窗确认时被写回移除；关闭弹窗不影响外部配置。
+  // 异常/删除知识库只在弹窗确认时被写回移除；关闭弹窗不影响外部配置。
   const availableSelectedDatasets = useMemo(
-    () => selectedDatasets.filter((dataset) => !dataset.isDeleted),
+    () => selectedDatasets.filter((dataset) => !dataset.error),
     [selectedDatasets]
   );
   const hasDeletedSelectedDatasets = availableSelectedDatasets.length !== selectedDatasets.length;
   const { toast } = useToast();
   const { userInfo } = useUserStore();
 
-  // Use server-side search, following the logic of the dataset list page
+  const [parentId, setParentId] = useState<ParentIdType>('');
+  const [searchKey, setSearchKey] = useState('');
   const {
-    paths,
-    parentId,
-    setParentId,
-    searchKey,
-    setSearchKey,
-    datasets,
-    isFetching,
-    loadDatasets
-  } = useDatasetSelect();
+    data = {
+      datasets: [],
+      paths: []
+    },
+    loading: isFetching,
+    runAsync: loadDatasets
+  } = useRequest(
+    async () => {
+      const result = await Promise.all([
+        getAllDatasets({ parentId, searchKey }),
+        searchKey.trim()
+          ? Promise.resolve([])
+          : getDatasetPaths({ sourceId: parentId, type: 'current' })
+      ]);
+      return {
+        datasets: result[0],
+        paths: result[1]
+      };
+    },
+    {
+      manual: false,
+      refreshDeps: [parentId, searchKey]
+    }
+  );
+  const { datasets, paths } = data;
 
   // The vector model of the first selected dataset
-  const activeVectorModel = availableSelectedDatasets[0]?.vectorModel?.model;
+  const activeVectorModelId = availableSelectedDatasets[0]?.vectorModel?.modelId;
 
   // Check if a dataset is selected
   const isDatasetSelected = useCallback(
@@ -89,20 +109,20 @@ export const DatasetSelectModal = ({
   // Check if a dataset is disabled (vector model mismatch)
   const isDatasetDisabled = (item: DatasetListItemType) => {
     if (!isSelectableDataset(item)) return true;
-    return !!activeVectorModel && activeVectorModel !== item.vectorModel.model;
+    return !!activeVectorModelId && activeVectorModelId !== item.vectorModel.modelId;
   };
 
   // Cache compatible datasets by vector model to avoid repeated filtering
   const compatibleDatasetsByModel = useMemo(() => {
     const visibleDatasets = datasets.filter(isSelectableDataset);
 
-    const targetModel = activeVectorModel || visibleDatasets[0]?.vectorModel?.model;
-    if (!targetModel) {
+    const targetModelId = activeVectorModelId ?? visibleDatasets[0]?.vectorModel?.modelId;
+    if (!targetModelId) {
       return [];
     }
 
-    return visibleDatasets.filter((item) => item.vectorModel.model === targetModel);
-  }, [datasets, activeVectorModel]);
+    return visibleDatasets.filter((item) => item.vectorModel.modelId === targetModelId);
+  }, [datasets, activeVectorModelId]);
 
   // Check if all compatible datasets are selected
   const isAllSelected = useMemo(() => {
@@ -113,15 +133,17 @@ export const DatasetSelectModal = ({
     const selectedDatasetIds = new Set(
       availableSelectedDatasets.map((dataset) => dataset.datasetId)
     );
-    return compatibleDatasetsByModel.every((item) => selectedDatasetIds.has(item._id));
+    return compatibleDatasetsByModel.every((item: DatasetListItemType) =>
+      selectedDatasetIds.has(item._id)
+    );
   }, [availableSelectedDatasets, compatibleDatasetsByModel]);
 
   const onSelect = (item: DatasetListItemType, checked: boolean) => {
     if (checked) {
       if (!isSelectableDataset(item)) {
         return toast({
-          status: 'warning',
-          title: t('dataset:index_model_unavailable')
+          status: 'error',
+          title: t('app:dataset.Missing_index_model_select_tip')
         });
       }
       if (isDatasetDisabled(item)) {
@@ -136,8 +158,7 @@ export const DatasetSelectModal = ({
           datasetId: item._id,
           avatar: item.avatar,
           name: item.name,
-          vectorModel: item.vectorModel,
-          isDeleted: false
+          vectorModel: item.vectorModel
         }
       ]);
     } else {
@@ -284,7 +305,7 @@ export const DatasetSelectModal = ({
                       <EmptyTip text={t('common:folder.empty')} />
                     )}
                     {datasets.map((item: DatasetListItemType) => (
-                      <Box key={item._id} userSelect={'none'}>
+                      <Box key={item._id} userSelect="none">
                         <Flex
                           align="center"
                           pr={2}
@@ -345,15 +366,27 @@ export const DatasetSelectModal = ({
                                 {item.name}
                               </Box>
                             </MyTooltip>
-                            <Box fontSize="xs" color="myGray.500" className="textEllipsis">
+                            <Box
+                              fontSize="xs"
+                              color={
+                                item.type !== DatasetTypeEnum.folder && !isSelectableDataset(item)
+                                  ? 'red.500'
+                                  : 'myGray.500'
+                              }
+                              className="textEllipsis"
+                            >
                               {item.type === DatasetTypeEnum.folder ? (
                                 <>{t('common:Folder')}</>
                               ) : (
                                 <>
                                   {t('app:Index')}:{' '}
-                                  {item.vectorModel?.isActive
-                                    ? item.vectorModel.name
-                                    : t('dataset:index_model_unavailable')}
+                                  {isSelectableDataset(item) ? (
+                                    item.vectorModel.name
+                                  ) : (
+                                    <Box as="span" color="red.500" fontWeight="500">
+                                      {t('app:dataset.Missing_index_model')}
+                                    </Box>
+                                  )}
                                 </>
                               )}
                             </Box>
@@ -378,16 +411,13 @@ export const DatasetSelectModal = ({
                         onChange={(e) => {
                           if (e.target.checked) {
                             const compatibleDatasets = compatibleDatasetsByModel.filter(
-                              (dataset) => {
-                                return !isDatasetSelected(dataset._id);
-                              }
+                              (dataset) => !isDatasetSelected(dataset._id)
                             );
                             const newSelections = compatibleDatasets.map((item) => ({
                               datasetId: item._id,
                               avatar: item.avatar,
                               name: item.name,
-                              vectorModel: item.vectorModel,
-                              isDeleted: false
+                              vectorModel: item.vectorModel
                             }));
                             setSelectedDatasets((prev) => [...prev, ...newSelections]);
                           } else {

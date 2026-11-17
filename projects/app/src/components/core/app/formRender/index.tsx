@@ -1,23 +1,24 @@
-import React, { useMemo, useState } from 'react';
-import { Box, Input, Switch, Flex, IconButton } from '@chakra-ui/react';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import type { InputRenderProps } from './type';
-import { InputTypeEnum } from './constant';
-import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
+import React from 'react';
+import { Box, Switch } from '@chakra-ui/react';
+import { getSecretPlainValue, getSecretCipherValue } from '@fastgpt/global/common/secret/utils';
+import { formatTime2YMDHMS, formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { SelectedDatasetType } from '@fastgpt/global/core/workflow/type/io';
 import MyNumberInput from '@fastgpt/web/components/common/Input/NumberInput';
 import MySelect from '@fastgpt/web/components/common/MySelect';
 import MultipleSelect from '@fastgpt/web/components/common/MySelect/MultipleSelect';
 import JSONEditor from '@fastgpt/web/components/common/Textarea/JsonEditor';
-import AIModelSelector from '../../../Select/AIModelSelector';
-import TimeInput from './TimeInput';
-import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
-import { isSecretValue } from '@fastgpt/global/common/secret/utils';
-import FileSelector from '../FileSelector/index';
-import { formatTime2YMDHMS, formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
+import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
 import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
-import type { SelectedDatasetType } from '@fastgpt/global/core/workflow/type/io';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import { useMemo } from 'react';
+import AIModelSelector from '../../../Select/AIModelSelector';
+import FileSelector from '../FileSelector/index';
+import { InputTypeEnum } from './constant';
+import TimeInput from './TimeInput';
+import SecretValueInput from '@/components/common/secret/SecretValueInput';
+import type { InputRenderProps } from './type';
 import { getFileSelectRenderProps } from './utils';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
 const InputRender = (props: InputRenderProps) => {
   const {
@@ -28,13 +29,10 @@ const InputRender = (props: InputRenderProps) => {
     isDisabled,
     isInvalid,
     placeholder,
-    bg = 'white',
-    modelList
+    bg = 'white'
   } = props;
 
   const { t } = useSafeTranslation();
-  // Password
-  const [isPasswordEditing, setIsPasswordEditing] = useState(false);
 
   const multipleSelectList = useMemo(() => {
     if (inputType !== InputTypeEnum.multipleSelect) return [];
@@ -42,13 +40,6 @@ const InputRender = (props: InputRenderProps) => {
       props.list ?? props.enums?.map((item) => ({ label: item.value, value: item.value })) ?? []
     );
   }, [inputType, props.list, props.enums]);
-
-  const isSelectAll = useMemo(() => {
-    if (inputType !== InputTypeEnum.multipleSelect) return false;
-    if (!Array.isArray(value) || multipleSelectList.length === 0) return false;
-    const valueSet = new Set(value);
-    return multipleSelectList.every((item) => valueSet.has(item.value));
-  }, [inputType, value, multipleSelectList]);
 
   const commonProps = useMemoEnhance(
     () => ({
@@ -98,58 +89,13 @@ const InputRender = (props: InputRenderProps) => {
   }
 
   if (inputType === InputTypeEnum.password) {
-    const isPasswordConfigured = isSecretValue(value);
-    const val = typeof value === 'object' && value !== null ? value.value : '';
-
-    return !isPasswordConfigured || isPasswordEditing ? (
-      <Input
+    return (
+      <SecretValueInput
         {...commonProps}
-        onChange={(e) => {
-          const val = e.target.value;
-          onChange?.({
-            value: val,
-            secret: ''
-          });
-        }}
-        value={val}
-        type="password"
-        autoFocus={isPasswordEditing}
-        onBlur={() => setIsPasswordEditing(false)}
-        autoComplete="new-password"
-        data-form-type="other"
-        data-lpignore="true"
+        value={getSecretPlainValue(value) ?? ''}
+        isConfigured={!!getSecretCipherValue(value)}
+        onChange={(value) => onChange?.({ value })}
       />
-    ) : (
-      <Flex alignItems="center" gap={2}>
-        <Flex
-          flex={1}
-          borderRadius={'6px'}
-          border={'0.5px solid'}
-          borderColor={'primary.200'}
-          bg={'primary.50'}
-          h={9}
-          px={3}
-          alignItems={'center'}
-          gap={1}
-          opacity={isDisabled ? 0.6 : 1}
-        >
-          <MyIcon name="checkCircle" w={'16px'} color={'primary.600'} />
-          <Box fontSize={'sm'} fontWeight={'medium'} color={'primary.600'}>
-            {t('common:had_auth_value')}
-          </Box>
-        </Flex>
-        {!isDisabled && (
-          <IconButton
-            aria-label="Edit password"
-            icon={<MyIcon name="edit" w={'16px'} />}
-            size="sm"
-            variant="ghost"
-            color={'myGray.500'}
-            _hover={{ color: 'primary.600' }}
-            onClick={() => setIsPasswordEditing(true)}
-          />
-        )}
-      </Flex>
     );
   }
 
@@ -185,7 +131,15 @@ const InputRender = (props: InputRenderProps) => {
       description:
         typeof item.description === 'string' ? t(item.description as any) : item.description
     }));
-    return <MySelect {...commonProps} list={list} h={10} menuPlacement={props.menuPlacement} />;
+    return (
+      <MySelect
+        {...commonProps}
+        list={list}
+        h={10}
+        isSearch={list.length > 10}
+        menuPlacement={props.menuPlacement}
+      />
+    );
   }
 
   if (inputType === InputTypeEnum.multipleSelect) {
@@ -196,7 +150,8 @@ const InputRender = (props: InputRenderProps) => {
         list={multipleSelectList}
         value={value}
         onSelect={(e) => onChange?.(e)}
-        isSelectAll={isSelectAll}
+        isSearch={multipleSelectList.length > 10}
+        showSelectAll={multipleSelectList.length >= 5}
         itemWrap
       />
     );
@@ -211,15 +166,8 @@ const InputRender = (props: InputRenderProps) => {
       <AIModelSelector
         {...commonProps}
         modelType={ModelTypeEnum.llm}
+        appId={props.appId}
         outLinkAuthData={props.outLinkAuthData}
-        {...(modelList
-          ? {
-              list: modelList.map((item) => ({
-                value: item.modelId ?? item.model,
-                label: item.name
-              }))
-            }
-          : {})}
       />
     );
   }
@@ -243,6 +191,7 @@ const InputRender = (props: InputRenderProps) => {
         canLocalUpload={fileSelectProps.canLocalUpload}
         canUrlUpload={fileSelectProps.canUrlUpload}
         onFileErrorChange={props.onFileErrorChange}
+        retainPreviewUrl={props.retainPreviewUrl}
       />
     );
   }

@@ -28,6 +28,9 @@ type ResourceModel = Model<any>;
 /** 读取团队内某类资源的完整 ACL，供列表和运行时工具复用。 */
 export const getResourcePermissionsByTeam = resourcePermissionRepo.findByTeam;
 
+/** 查询指定资源的 ACL，用于只格式化分页结果中的当前页资源。 */
+export const getResourcePermissionsByResourceIds = resourcePermissionRepo.findByResourceIds;
+
 /** 查询成员拥有指定有效权限的资源标识，支持 resourceId 和 resourceName 两类资源。 */
 export const findResourceKeysByCollaboratorsPermission =
   resourcePermissionRepo.findResourceKeysByCollaboratorsPermission;
@@ -136,19 +139,25 @@ export const createResourcePermissions = async ({
   resource,
   resourceType,
   tmbId,
+  parentResourceType,
+  parentResourceId,
   session
 }: {
   resource: SyncChildrenPermissionResourceType;
   resourceType: PerResourceTypeEnum;
   tmbId: string;
+  /** 跨类型父级覆盖（根 collection → dataset）。缺省时父级 = resource.parentId（同类型）。 */
+  parentResourceType?: PerResourceTypeEnum;
+  parentResourceId?: string;
   session: ClientSession;
 }) => {
   const parentCollaborators =
-    resource.parentId && shouldInheritResourcePermission(resource.inheritPermission)
+    (parentResourceId ?? resource.parentId) &&
+    shouldInheritResourcePermission(resource.inheritPermission)
       ? await resourcePermissionRepo.findByResource({
           teamId: resource.teamId,
-          resourceType,
-          resourceId: String(resource.parentId),
+          resourceType: parentResourceType ?? resourceType,
+          resourceId: String(parentResourceId ?? resource.parentId),
           session
         })
       : [];
@@ -170,6 +179,7 @@ export const createResourcePermissions = async ({
 /**
  * 按资源树传播父级 ACL。只处理启用继承的分支，
  * 这样取消继承的节点及其独立子树都不会被父级更新覆盖。
+ * `stopResourceIds` 用于批量移动：停止节点已有按自身新父级算出的 ACL，不能沿用祖先的传播结果覆盖它。
  */
 export const syncResourceTreePermissions = async ({
   resource,
@@ -177,6 +187,7 @@ export const syncResourceTreePermissions = async ({
   resourceType,
   oldParentCollaborators,
   newParentCollaborators,
+  stopResourceIds,
   session
 }: {
   resource: SyncChildrenPermissionResourceType;
@@ -184,6 +195,8 @@ export const syncResourceTreePermissions = async ({
   resourceType: PerResourceTypeEnum;
   oldParentCollaborators: CollaboratorItemType[];
   newParentCollaborators: CollaboratorItemType[];
+  /** 停在这些节点之前：它们会由调用方使用各自的新快照单独同步。 */
+  stopResourceIds?: Set<string>;
   session: ClientSession;
 }) => {
   const oldInheritedCollaborators = toInheritedCollaborators(oldParentCollaborators);
@@ -227,6 +240,22 @@ export const syncResourceTreePermissions = async ({
     return;
   }
 
+  // Collection 的 parentId 索引以 datasetId 为前缀；固定根的范围并复用于每层查询。
+  // 兼容未携带 datasetId 的旧调用方，避免后续每层跨知识库定位 parentId。
+  const collectionScope = await (async () => {
+    if (resourceType !== PerResourceTypeEnum.collection) return {};
+    const datasetId =
+      resource.datasetId ??
+      (
+        await resourceModel
+          .findOne({ _id: resource._id, teamId: resource.teamId }, 'datasetId')
+          .lean<{ datasetId?: string } | null>()
+          .session(session)
+      )?.datasetId;
+    if (!datasetId) throw new Error('Collection dataset not found');
+    return { datasetId };
+  })();
+
   const allDescendantIds: string[] = [];
   const descendantNodes: SyncChildrenPermissionResourceType[] = [];
   let pendingParentIds = [String(resource._id)];
@@ -235,13 +264,16 @@ export const syncResourceTreePermissions = async ({
   while (pendingParentIds.length > 0) {
     const children = await resourceModel
       .find(
-        { teamId: resource.teamId, parentId: { $in: pendingParentIds } },
+        { teamId: resource.teamId, ...collectionScope, parentId: { $in: pendingParentIds } },
         '_id parentId inheritPermission'
       )
       .lean<SyncChildrenPermissionResourceType[]>()
       .session(session);
-    const inheritingChildren = children.filter((child) =>
-      shouldInheritResourcePermission(child.inheritPermission)
+    // 被 stop 的节点不加入下一层 frontier，因此其整个分支都交由调用方的独立同步计划处理。
+    const inheritingChildren = children.filter(
+      (child) =>
+        shouldInheritResourcePermission(child.inheritPermission) &&
+        !stopResourceIds?.has(String(child._id))
     );
 
     descendantNodes.push(...inheritingChildren);
@@ -381,10 +413,11 @@ export const updateResourceCollaborators = async ({
   parentCollaborators?: CollaboratorItemType[];
   session: ClientSession;
 }) => {
+  // 冲突判断放宽为「有父级」：根 collection（parentId 空）传入 dataset 父级 clbs 时同样可触发
   if (
     parentCollaborators &&
     shouldInheritResourcePermission(resource.inheritPermission) &&
-    resource.parentId &&
+    (resource.parentId || parentCollaborators.length > 0) &&
     checkRoleUpdateConflict({
       parentClbs: parentCollaborators,
       newChildClbs: newCollaborators
@@ -417,6 +450,7 @@ export const moveResourcePermissions = async ({
   resourceModel,
   resourceType,
   newParentCollaborators,
+  oldParentCollaborators: oldParentCollaboratorsOverride,
   session
 }: {
   resource: SyncChildrenPermissionResourceType;
@@ -424,17 +458,20 @@ export const moveResourcePermissions = async ({
   resourceModel: ResourceModel;
   resourceType: PerResourceTypeEnum;
   newParentCollaborators: CollaboratorItemType[];
+  /** 旧父级快照覆盖（'从根移动'：根 collection 旧父级 = dataset，缺省时内部按 resource.parentId 读取）。 */
+  oldParentCollaborators?: CollaboratorItemType[];
   session: ClientSession;
 }) => {
   const [oldParentCollaborators, oldResourceCollaborators] = await Promise.all([
-    resource.parentId
-      ? resourcePermissionRepo.findByResource({
-          teamId: resource.teamId,
-          resourceType,
-          resourceId: String(resource.parentId),
-          session
-        })
-      : [],
+    oldParentCollaboratorsOverride ??
+      (resource.parentId
+        ? resourcePermissionRepo.findByResource({
+            teamId: resource.teamId,
+            resourceType,
+            resourceId: String(resource.parentId),
+            session
+          })
+        : []),
     resourcePermissionRepo.findByResource({
       teamId: resource.teamId,
       resourceType,
@@ -473,22 +510,28 @@ export const resumeResourcePermissionInheritance = async ({
   resource,
   resourceModel,
   resourceType,
+  parentResourceType,
+  parentResourceId,
   session
 }: {
   resource: SyncChildrenPermissionResourceType;
   resourceModel: ResourceModel;
   resourceType: PerResourceTypeEnum;
+  /** 跨类型父级覆盖（根 collection → dataset）。缺省时父级 = resource.parentId（同类型）。 */
+  parentResourceType?: PerResourceTypeEnum;
+  parentResourceId?: string;
   session?: ClientSession;
 }) => {
   const fn = async (activeSession: ClientSession) => {
-    const parentCollaborators = resource.parentId
-      ? await resourcePermissionRepo.findByResource({
-          teamId: resource.teamId,
-          resourceType,
-          resourceId: String(resource.parentId),
-          session: activeSession
-        })
-      : [];
+    const parentCollaborators =
+      (parentResourceId ?? resource.parentId)
+        ? await resourcePermissionRepo.findByResource({
+            teamId: resource.teamId,
+            resourceType: parentResourceType ?? resourceType,
+            resourceId: String(parentResourceId ?? resource.parentId),
+            session: activeSession
+          })
+        : [];
     const oldResourceCollaborators = await resourcePermissionRepo.findByResource({
       teamId: resource.teamId,
       resourceType,

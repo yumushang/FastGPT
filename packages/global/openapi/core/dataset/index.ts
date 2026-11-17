@@ -4,20 +4,32 @@ import { SystemOpenApiTagMap } from '../../tag';
 import { DatasetDataPath } from './data';
 import { DatasetCollectionPath } from './collection';
 import { ApiDatasetPath } from './apiDataset';
+import { DatasetTagPath } from './tag';
 import { DatasetFilePath } from './file';
 import { DatasetTrainingPath } from './training';
 import { DatasetSynonymPath } from './synonym';
+import { DatasetBatchPath } from './batch';
+import { DatasetSearchPath } from './search';
 import {
   CreateDatasetBodySchema,
   CreateDatasetWithFilesBodySchema,
   DeleteDatasetQuerySchema,
   GetDatasetDetailQuerySchema,
+  GetDatasetDetailResponseSchema,
   GetDatasetListBodySchema,
+  GetDatasetListResponseSchema,
+  GetDatasetListV2BodySchema,
+  GetDatasetListV2ResponseSchema,
   GetDatasetPathsQuerySchema,
   UpdateDatasetBodySchema,
   ResumeDatasetInheritPermissionBodySchema,
+  EnableCollectionPermissionBodySchema,
+  EnableCollectionPermissionResponseSchema,
+  DisableCollectionPermissionBodySchema,
+  DisableCollectionPermissionResponseSchema,
   CreateDatasetFolderBodySchema,
   SearchDatasetTestBodySchema,
+  SearchDatasetTestResponseSchema,
   ExportDatasetQuerySchema,
   GetDatasetPermissionQuerySchema,
   ChangeDatasetOwnerBodySchema,
@@ -89,8 +101,10 @@ export const DatasetPath: OpenAPIPath = {
   },
   '/core/dataset/list': {
     post: {
+      deprecated: true,
       summary: '获取知识库列表',
-      description: '获取当前用户有权限访问的知识库列表,支持按类型和关键词筛选',
+      description:
+        '已弃用，请使用 POST /core/dataset/listV2。旧接口保留兼容，返回当前用户有权限访问的知识库数组，支持按类型和关键词筛选；V2 返回分页结构 { list, total }',
       tags: [DevApiTagsMap.datasetCommon, SystemOpenApiTagMap.dataset],
       requestBody: {
         content: {
@@ -101,7 +115,37 @@ export const DatasetPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '成功返回知识库列表'
+          description: '成功返回知识库列表',
+          content: {
+            'application/json': {
+              schema: GetDatasetListResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+  '/core/dataset/listV2': {
+    post: {
+      summary: '获取知识库列表 V2',
+      description:
+        '分页获取或按 datasetIds 精确查询当前用户有权限访问的知识库；提供 datasetIds 时优先按 ID 查询，解析时过滤 parentId 和分页参数，保留公共筛选字段',
+      tags: [DevApiTagsMap.datasetCommon, SystemOpenApiTagMap.dataset],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: GetDatasetListV2BodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功返回知识库列表',
+          content: {
+            'application/json': {
+              schema: GetDatasetListV2ResponseSchema
+            }
+          }
         }
       }
     }
@@ -131,7 +175,12 @@ export const DatasetPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '成功返回知识库详情'
+          description: '成功返回知识库详情（不包含创建时间）',
+          content: {
+            'application/json': {
+              schema: GetDatasetDetailResponseSchema
+            }
+          }
         }
       }
     }
@@ -242,7 +291,7 @@ export const DatasetPath: OpenAPIPath = {
     put: {
       summary: '更新知识库',
       description: '更新知识库信息、配置或移动知识库到其他目录',
-      tags: [DevApiTagsMap.datasetCommon],
+      tags: [DevApiTagsMap.datasetCommon, SystemOpenApiTagMap.dataset],
       requestBody: {
         content: {
           'application/json': {
@@ -276,12 +325,66 @@ export const DatasetPath: OpenAPIPath = {
       }
     }
   },
+  '/core/dataset/enableCollectionPermission': {
+    post: {
+      summary: '启用知识库的文件级权限',
+      description:
+        '开启该知识库的文件/文件夹级权限：物化全部文件/文件夹的权限快照后置位开关。开启后可为单个文件/文件夹单独配置协作者；未单独配置的仍继承知识库权限。需要知识库管理权限',
+      tags: [DevApiTagsMap.datasetCommon],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: EnableCollectionPermissionBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功启用文件级权限',
+          content: {
+            'application/json': {
+              schema: EnableCollectionPermissionResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
+  '/core/dataset/disableCollectionPermission': {
+    post: {
+      summary: '关闭知识库的文件级权限',
+      description:
+        '关闭该知识库的文件/文件夹级权限：删除全部文件/文件夹的协作者配置并重置为继承态，随后关闭开关。该操作不可恢复，需要知识库管理权限',
+      tags: [DevApiTagsMap.datasetCommon],
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: DisableCollectionPermissionBodySchema
+          }
+        }
+      },
+      responses: {
+        200: {
+          description: '成功关闭文件级权限',
+          content: {
+            'application/json': {
+              schema: DisableCollectionPermissionResponseSchema
+            }
+          }
+        }
+      }
+    }
+  },
   '/core/dataset/searchTest': {
     post: {
       summary: '搜索测试',
-      description:
-        '对知识库执行搜索测试，支持多种搜索模式、重排序、问题扩展和临时图片 key 检索。图片检索需先调用 /core/dataset/file/presignSearchTestImage 获取预签名上传 URL 和 temp/${teamId}/... key',
-      tags: [DevApiTagsMap.datasetCommon, SystemOpenApiTagMap.datasetOther],
+      description: `对单个知识库执行文本、图片或图文检索，返回命中片段、实际检索配置和耗时。支持 API Key 或登录态鉴权，需要知识库读取权限，结果仅包含当前调用者可读的集合。
+
+- 输入格式：选择“文本检索”或“图片检索”；至少提供非空白的 \`text\` 或一张 \`queryImageUrls\` 图片，也可以两者同时传入。
+- 图片上传：先调用 \`/core/dataset/file/presignSearchTestImage\`，按返回的预签名信息上传图片，再将 \`temp/\${teamId}/...\` key 传入 \`queryImageUrls\`。最多 10 张，仅接受当前团队的临时 key，不支持公网 URL、dataset key 或 chat key。
+- 检索配置：支持向量、全文和混合检索，以及文本重排序和问题扩展；纯图片输入不执行文本扩展。
+- \`limit\` 是召回内容的 token 预算，并非结果条数；默认 5000，超过 20000 时按 20000 处理。`,
+      tags: [DevApiTagsMap.datasetCommon],
       requestBody: {
         content: {
           'application/json': {
@@ -291,7 +394,12 @@ export const DatasetPath: OpenAPIPath = {
       },
       responses: {
         200: {
-          description: '成功返回搜索结果列表及耗时信息'
+          description: '成功返回搜索结果列表、实际检索配置及耗时信息',
+          content: {
+            'application/json': {
+              schema: SearchDatasetTestResponseSchema
+            }
+          }
         }
       }
     }
@@ -299,7 +407,7 @@ export const DatasetPath: OpenAPIPath = {
   '/core/dataset/exportAll': {
     get: {
       summary: '导出知识库全部数据',
-      description: '以流式 CSV 格式导出知识库及其所有子知识库的数据',
+      description: '以流式 CSV 格式导出单个知识库的数据；目录不支持导出',
       tags: [DevApiTagsMap.datasetCommon],
       requestParams: {
         query: ExportDatasetQuerySchema
@@ -330,7 +438,10 @@ export const DatasetPath: OpenAPIPath = {
   ...DatasetCollectionPath,
   ...DatasetDataPath,
   ...ApiDatasetPath,
+  ...DatasetTagPath,
   ...DatasetFilePath,
   ...DatasetTrainingPath,
-  ...DatasetSynonymPath
+  ...DatasetSynonymPath,
+  ...DatasetBatchPath,
+  ...DatasetSearchPath
 };

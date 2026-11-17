@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ApiRequestProps } from '@fastgpt/next/type';
 import { PluginStatusEnum } from '@fastgpt/global/core/plugin/type';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { WorkflowStart } from '@fastgpt/global/core/workflow/template/system/workflowStart';
 
 const mocks = vi.hoisted(() => ({
   authCert: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getSystemToolDetail: vi.fn(),
   getSystemToolDisplayInfo: vi.fn(),
   getSystemToolDisplayInfoWithChildIcons: vi.fn(),
+  getClientToolPreviewNode: vi.fn(),
   getInstance: vi.fn(),
   getTeamPluginPolicyMap: vi.fn(),
   assertTeamPluginSourceAccess: vi.fn(),
@@ -47,10 +49,15 @@ vi.mock('@fastgpt/service/core/plugin/teamPluginPolicy', async (importOriginal) 
   assertTeamPluginSourceAccess: mocks.assertTeamPluginSourceAccess
 }));
 
+vi.mock('@fastgpt/service/core/app/tool/utils/client', () => ({
+  getClientToolPreviewNode: mocks.getClientToolPreviewNode
+}));
+
 import {
   handler,
   type GetSystemPluginTemplatesBody
 } from '@/pages/api/core/app/tool/getSystemToolTemplates';
+import { getAuthorizedSystemToolTemplateCatalog } from '@fastgpt/service/core/app/tool/systemTool/capability';
 
 describe('get system tool templates handler', () => {
   beforeEach(() => {
@@ -76,6 +83,13 @@ describe('get system tool templates handler', () => {
       enabled: false,
       plugins: []
     });
+    mocks.getClientToolPreviewNode.mockImplementation(
+      async ({ appId, source }: { appId: string; source: string }) => ({
+        ...structuredClone(WorkflowStart),
+        id: appId,
+        source
+      })
+    );
   });
 
   it('filters root system tools by searchKey', async () => {
@@ -118,10 +132,6 @@ describe('get system tool templates handler', () => {
     } as ApiRequestProps<GetSystemPluginTemplatesBody>);
 
     expect(result.map((item) => item.id)).toEqual(['weather']);
-    expect(result[0]).toMatchObject({
-      isTool: true,
-      flowNodeType: FlowNodeTypeEnum.tool
-    });
     expect(mocks.getSystemToolList).toHaveBeenCalledWith({
       lang: 'zh',
       op: 'or',
@@ -130,10 +140,38 @@ describe('get system tool templates handler', () => {
     });
   });
 
+  it.each([
+    { lang: 'zh-CN', searchKey: '天气', expected: ['weather'] },
+    { lang: 'zh-CN', searchKey: 'Weather', expected: [] },
+    { lang: 'en', searchKey: 'weather', expected: ['weather'] }
+  ])(
+    'filters localized tool metadata in $lang for $searchKey',
+    async ({ lang, searchKey, expected }) => {
+      mocks.getLocale.mockReturnValue(lang);
+      mocks.getSystemToolList.mockResolvedValue([
+        {
+          id: 'weather',
+          source: 'system',
+          name: { en: 'Weather', 'zh-CN': '气象' },
+          intro: { en: 'Forecast lookup', 'zh-CN': '天气预报' },
+          isToolSet: false,
+          status: PluginStatusEnum.Normal
+        }
+      ]);
+
+      const result = await handler({
+        body: { searchKey }
+      } as ApiRequestProps<GetSystemPluginTemplatesBody>);
+
+      expect(result.map((item) => item.id)).toEqual(expected);
+    }
+  );
+
   it('marks top-level system toolsets as tools while preserving toolset type', async () => {
     mocks.getSystemToolList.mockResolvedValue([
       {
         id: 'toolset',
+        source: 'system',
         name: 'Toolset',
         intro: '',
         toolDescription: '',
@@ -151,6 +189,90 @@ describe('get system tool templates handler', () => {
       id: 'toolset',
       isTool: true,
       flowNodeType: FlowNodeTypeEnum.toolSet
+    });
+  });
+
+  it('builds a request-scoped catalog from only the current user visible tools', async () => {
+    mocks.getSystemToolList.mockResolvedValue([
+      {
+        id: 'systemTool-weather',
+        source: 'system',
+        name: 'Weather',
+        intro: '',
+        toolDescription: '',
+        isToolSet: false,
+        status: PluginStatusEnum.Normal,
+        tags: []
+      },
+      {
+        id: 'systemTool-suite',
+        source: 'team-1',
+        name: 'Team suite',
+        intro: '',
+        toolDescription: '',
+        isToolSet: true,
+        status: PluginStatusEnum.Normal,
+        tags: []
+      },
+      {
+        id: 'systemTool-hidden',
+        source: 'system',
+        name: 'Hidden',
+        intro: '',
+        toolDescription: '',
+        isToolSet: false,
+        status: PluginStatusEnum.Normal,
+        tags: [],
+        hideTags: ['hidden-user']
+      }
+    ]);
+    mocks.getSystemToolDisplayInfoWithChildIcons.mockResolvedValue({
+      id: 'systemTool-suite',
+      source: 'team-1',
+      name: 'Team suite',
+      intro: '',
+      avatar: '',
+      status: PluginStatusEnum.Normal,
+      children: [
+        {
+          id: 'search',
+          name: 'Search',
+          status: PluginStatusEnum.Normal,
+          description: '',
+          currentCost: 0,
+          systemKeyCost: 0
+        },
+        {
+          id: 'offline',
+          name: 'Offline',
+          status: PluginStatusEnum.Offline,
+          description: '',
+          currentCost: 0,
+          systemKeyCost: 0
+        }
+      ],
+      hasTokenFee: false
+    });
+
+    const result = await getAuthorizedSystemToolTemplateCatalog({
+      teamId: 'team-1',
+      tmbId: 'tmb-1',
+      isRoot: false,
+      lang: 'zh'
+    });
+
+    expect(result.map(({ toolId, source }) => ({ toolId, source }))).toEqual([
+      { toolId: 'systemTool-weather', source: 'system' },
+      { toolId: 'systemTool-suite', source: 'team-1' },
+      { toolId: 'systemTool-suite/search', source: 'team-1' }
+    ]);
+    expect(mocks.getClientToolPreviewNode).toHaveBeenCalledTimes(3);
+    expect(mocks.getClientToolPreviewNode).toHaveBeenCalledWith({
+      appId: 'systemTool-suite/search',
+      teamId: 'team-1',
+      source: 'team-1',
+      getLatestVersion: true,
+      lang: 'zh'
     });
   });
 
@@ -285,9 +407,7 @@ describe('get system tool templates handler', () => {
       avatar: 'plus-icon',
       currentCost: 2,
       systemKeyCost: 0.5,
-      hasTokenFee: true,
-      isTool: true,
-      flowNodeType: FlowNodeTypeEnum.tool
+      hasTokenFee: true
     });
     expect(mocks.getSystemToolDisplayInfoWithChildIcons).toHaveBeenCalledWith({
       pluginId: 'toolset',

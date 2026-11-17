@@ -1,3 +1,4 @@
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
 import { exit } from 'process';
 import {
   runBackgroundInitializationStep,
@@ -18,7 +19,7 @@ export async function registerNodeInstrumentation() {
       { systemStartCb },
       { initGlobalVariables, getInitConfig, initSystemPluginTags, initAppTemplateTypes },
       { initVectorStore },
-      { initRootUser },
+      { initSystemUser },
       { startMongoWatch },
       { startCron },
       { startTrainingQueue },
@@ -36,21 +37,23 @@ export async function registerNodeInstrumentation() {
       { configureRedisRuntime, registerRedisRuntimeShutdown },
       { serviceEnv },
       { InitialErrorEnum },
-      { validateAgentSandboxProxyEnv },
+      { validateAgentSandboxProxyConfig },
       { getReadableSystemResourceInfo },
-      { startSystemMigrationRunner }
+      { startSystemMigrationRunner },
+      { startBusinessAfterSystemMigrations },
+      { onDatasetVectorCounted }
     ] = await Promise.all([
       import('@fastgpt/service/common/mongo/init'),
       import('@fastgpt/service/common/mongo/index'),
       import('@fastgpt/service/common/system/tools'),
       import('@/service/common/system'),
       import('@fastgpt/service/common/vectorDB/controller'),
-      import('@/service/mongo'),
+      import('@fastgpt/service/support/user/systemUser'),
       import('@/service/common/system/volumnMongoWatch'),
       import('@/service/common/system/cron'),
       import('@/service/core/dataset/training/utils'),
       import('@fastgpt/service/worker/preload'),
-      import('@fastgpt/service/core/ai/config/utils'),
+      import('@fastgpt/service/core/ai/model/catalog/service'),
       import('@fastgpt/service/common/middle/tracks/processor'),
       import('@/service/common/bullmq'),
       import('@fastgpt/service/common/s3'),
@@ -63,13 +66,16 @@ export async function registerNodeInstrumentation() {
       import('@fastgpt/dal/redis/runtime'),
       import('@fastgpt/service/env'),
       import('@fastgpt/service/common/system/constants'),
-      import('@fastgpt/service/env.util'),
+      import('@fastgpt/service/core/ai/sandbox/config'),
       import('@fastgpt/service/common/system/resource'),
-      import('@/migration/runner')
+      import('@/migration/runner'),
+      import('@/migration/startup'),
+      import('@fastgpt/service/core/dataset/vectorData/mq')
     ]);
 
     console.log('System resources detected', getReadableSystemResourceInfo());
 
+    // 初始化日志采集
     await Promise.all([
       runInitializationStep({ step: 'configure-tracing', action: () => configureTracing() }),
       runInitializationStep({ step: 'configure-metrics', action: () => configureMetrics() }),
@@ -78,25 +84,7 @@ export async function registerNodeInstrumentation() {
     const logger = getLogger(LogCategories.SYSTEM);
     logger.info('Starting system initialization...');
 
-    await runInitializationStep({
-      step: 'configure-redis-runtime',
-      action: () =>
-        configureRedisRuntime({
-          redisUrl: serviceEnv.REDIS_URL,
-          logger,
-          metrics: createRedisRuntimeMetrics()
-        }),
-      logger,
-      getErrText
-    });
-
-    await runInitializationStep({
-      step: 'register-redis-shutdown',
-      action: () => registerRedisRuntimeShutdown({ logger }),
-      logger,
-      getErrText
-    });
-
+    // 加载配置
     await runInitializationStep({
       step: 'system-start-callback',
       action: () => systemStartCb(),
@@ -107,17 +95,23 @@ export async function registerNodeInstrumentation() {
       action: () => initGlobalVariables(),
       logger
     });
-    await runInitializationStep({
-      step: 'validate-agent-sandbox-proxy-env',
-      action: () => validateAgentSandboxProxyEnv(),
-      logger
-    });
 
+    // 初始化 REDIS/DB/S3
     await Promise.all([
       runInitializationStep({
-        step: 'init-s3-buckets',
-        stage: InitialErrorEnum.S3_ERROR,
-        action: () => initS3Buckets(),
+        step: 'configure-redis-runtime',
+        action: () =>
+          configureRedisRuntime({
+            redisUrl: serviceEnv.REDIS_URL,
+            logger,
+            metrics: createRedisRuntimeMetrics()
+          }),
+        logger,
+        getErrText
+      }),
+      runInitializationStep({
+        step: 'register-redis-shutdown',
+        action: () => registerRedisRuntimeShutdown({ logger }),
         logger,
         getErrText
       }),
@@ -152,33 +146,38 @@ export async function registerNodeInstrumentation() {
       runInitializationStep({
         step: 'init-vector-store',
         stage: InitialErrorEnum.VECTORDB_ERROR,
-        action: () => initVectorStore(),
+        action: () => initVectorStore({ onDatasetCounted: onDatasetVectorCounted }),
         logger,
         getErrText
       })
     ]);
 
+    // 加载初始化配置
     await runInitializationStep({
       step: 'get-init-config',
-      action: () => getInitConfig(),
+      action: () => getInitConfig({ refreshLLMRequestRecordTTL: false }),
       logger,
       getErrText
     });
 
+    // S3 bucket 的下载模式与公开地址依赖实例配置，必须在 get-init-config 之后构造。
     await runInitializationStep({
-      step: 'instrumentation-check',
-      action: () => instrumentationCheck(),
+      step: 'init-s3-buckets',
+      stage: InitialErrorEnum.S3_ERROR,
+      action: () => initS3Buckets(),
+      logger,
+      getErrText
+    });
+
+    // 初始化系统用户
+    await runInitializationStep({
+      step: 'init-system-user',
+      action: () => initSystemUser(),
       logger,
       getErrText
     });
 
     await Promise.all([
-      runInitializationStep({
-        step: 'init-root-user',
-        action: () => initRootUser(),
-        logger,
-        getErrText
-      }),
       // runInitializationStep({
       //   step: 'load-system-tools',
       //   stage: InitialErrorEnum.PLUGIN_ERROR,
@@ -214,15 +213,6 @@ export async function registerNodeInstrumentation() {
       getErrText
     });
 
-    // 升级脚本可以依赖完整的模型 Provider、模板和运行时缓存。
-    await runInitializationStep({
-      step: 'load-system-models',
-      stage: InitialErrorEnum.PLUGIN_ERROR,
-      action: () => loadSystemModels(),
-      logger,
-      getErrText
-    });
-
     const migrationRunner = await runInitializationStep({
       step: 'start-system-migration-runner',
       action: () => startSystemMigrationRunner(),
@@ -231,10 +221,27 @@ export async function registerNodeInstrumentation() {
     });
 
     /**
-     * 阻塞迁移完成后才启动业务消费者并结束 instrumentation 注册。
-     * 这样不仅 HTTP readiness 被阻塞，队列、cron、watch 也不会在旧数据结构上提前消费。
+     * 启动链成功且本节点模型缓存刷新后才启动业务消费者。
+     * 无关后台迁移延后执行，避免其耗时或 Redis 名额阻塞关键启动路径。
      */
     const startBusinessServices = async () => {
+      // Pro 健康检查必须放在阻塞迁移之后：App 先写入实例配置，Pro 才能完成自身初始化，
+      // 避免两个新进程冷启动时互相等待对方先就绪。
+      await runInitializationStep({
+        step: 'instrumentation-check',
+        action: () => instrumentationCheck(),
+        logger,
+        getErrText
+      });
+
+      const { startAppConfigPolling } = await import('@/service/common/system/configPolling');
+      runBackgroundInitializationStep({
+        step: 'system-config-polling',
+        action: () => startAppConfigPolling(),
+        logger,
+        getErrText
+      });
+
       await Promise.all([
         runInitializationStep({
           step: 'start-mongo-watch',
@@ -271,21 +278,49 @@ export async function registerNodeInstrumentation() {
       logger.info('System business services are ready');
     };
 
-    if (migrationRunner.hasBlockingMigrations) {
-      // 所有节点都会等待并查询状态，只有 lease owner 执行；失败时此 await 按设计不返回。
-      logger.info('App node will remain not ready until all blocking migrations succeed');
-      await migrationRunner.waitForBlockingMigrations();
+    await startBusinessAfterSystemMigrations({
+      runner: migrationRunner,
+      reloadModels: async () => {
+        // 实例配置迁移可能改变存储策略；每个节点都需在业务启动前重新应用，不能只依赖 lease owner。
+        await runInitializationStep({
+          step: 'reload-system-config-after-startup-migrations',
+          action: async () => {
+            await getInitConfig();
+            validateAgentSandboxProxyConfig(
+              getSystemInstanceConfig().subservice.agentSandbox.provider
+            );
+            initS3Buckets();
+          },
+          logger,
+          getErrText
+        });
 
-      // 每个节点只需重新读取迁移后的数据库模型；插件模板和自动预装已在初始加载阶段完成。
-      await runInitializationStep({
-        step: 'reload-system-models-after-blocking-migrations',
-        stage: InitialErrorEnum.PLUGIN_ERROR,
-        action: () => loadInstalledModels(),
-        logger,
-        getErrText
-      });
-    }
-    await startBusinessServices();
+        /**
+         * 系统模型必须在配置迁移之后加载：旧部署的插件地址/凭据要等迁移写入实例配置后才是权威值，
+         * 提前加载会拿 Schema 默认的 localhost:3004 请求 Provider，鉴权失败会让初始化直接终止，
+         * 迁移永远没有机会执行。
+         */
+        await runInitializationStep({
+          step: 'load-system-models-after-startup-migrations',
+          stage: InitialErrorEnum.PLUGIN_ERROR,
+          action: () => loadSystemModels(),
+          logger,
+          getErrText
+        });
+
+        await runInitializationStep({
+          step: 'reload-system-models-after-startup-migrations',
+          stage: InitialErrorEnum.PLUGIN_ERROR,
+          action: () => loadInstalledModels(),
+          logger,
+          getErrText
+        });
+      },
+      onMigrationsSettled: async () => {
+        await getInitConfig();
+      },
+      startBusinessServices
+    });
 
     logger.info('System initialized successfully');
   } catch (error) {

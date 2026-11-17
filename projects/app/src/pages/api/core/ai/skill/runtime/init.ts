@@ -1,3 +1,4 @@
+import { NextAPI } from '@/service/middleware/entry';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { sseErrRes } from '@fastgpt/service/common/response';
 import { responseWrite } from '@fastgpt/service/common/response';
@@ -7,7 +8,7 @@ import {
   getSkillEditRuntimeContext,
   getSkillEditRuntimeStatus,
   initSkillEditRuntimeSandbox
-} from '@fastgpt/service/core/ai/sandbox/interface/skillEdit';
+} from '@fastgpt/service/core/ai/sandbox/application/skillEdit/runtime';
 import { SkillRuntimeBodySchema } from '@fastgpt/global/core/ai/skill/api';
 import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import type { SandboxStatusItemType } from '@fastgpt/global/core/chat/type';
@@ -26,7 +27,7 @@ import {
  *
  * 该接口只负责启动、恢复或复用沙盒；runtime 升级判断和触发由 getStatus/upgrade 承担。
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -100,3 +101,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.end();
   }
 }
+
+export default NextAPI(handler);

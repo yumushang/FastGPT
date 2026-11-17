@@ -1,50 +1,50 @@
-import React, { useCallback, useEffect, useMemo, useTransition } from 'react';
+import { getModelQuoteTokenLimit } from '@/web/core/ai/model/selection';
 import {
   Box,
+  Button,
   Flex,
   Grid,
-  type BoxProps,
-  useDisclosure,
-  Button,
   HStack,
-  Switch
+  Switch,
+  useDisclosure,
+  type BoxProps
 } from '@chakra-ui/react';
-import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type {
+  AppFormEditFormType,
+  SelectedToolItemType
+} from '@fastgpt/global/core/app/formEdit/type';
 import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
-
-import dynamic from 'next/dynamic';
-import MyIcon from '@fastgpt/web/components/common/Icon';
-import VariableEdit from '@/components/core/app/VariableEdit';
-import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
-import { formatEditorVariablePickerIcon } from '@fastgpt/global/core/workflow/utils';
-import SearchParamsTip from '@/components/core/dataset/SearchParamsTip';
-import SettingLLMModel from '@/components/core/ai/SettingLLMModel';
-import { TTSTypeEnum } from '@/web/core/app/constants';
-import { workflowSystemVariables } from '@/web/core/app/utils';
-import { useContextSelector } from 'use-context-selector';
-import { AppContext } from '@/pageComponents/app/detail/context';
-import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
-import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
-import VariableTip from '@/components/common/Textarea/MyTextarea/VariableTip';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
-import ToolSelect from '../FormComponent/ToolSelector/ToolSelect';
-import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import React, { useCallback, useMemo, useState, useTransition } from 'react';
 import OptimizerPopover from '@/components/common/PromptEditor/OptimizerPopover';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
-import { SmallAddIcon } from '@chakra-ui/icons';
-import { SANDBOX_ICON } from '@fastgpt/global/core/ai/sandbox/tools';
-import SandboxConfigButton from '../../components/SandboxConfigButton';
-import { useUserStore } from '@/web/support/user/useUserStore';
+import VariableTip from '@/components/common/Textarea/MyTextarea/VariableTip';
+import SettingLLMModel from '@/components/core/ai/SettingLLMModel';
 import DatasetCard from '@/components/core/app/DatasetCard';
 import { useWelcomeTextFoldState } from '@/components/core/app/useAppEditorUIState';
-import {
-  findClientModelByReference,
-  resolveClientModelReferenceId
-} from '@/web/core/ai/model/modelReference';
+import VariableEdit from '@/components/core/app/VariableEdit';
+import SearchParamsTip from '@/components/core/dataset/SearchParamsTip';
+import { AppContext } from '@/pageComponents/app/detail/context';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useModelDetail } from '@/web/core/ai/model/useModelDetail';
+import { TTSTypeEnum } from '@/web/core/app/constants';
+import { useUserStore } from '@/web/support/user/useUserStore';
+import { SmallAddIcon } from '@chakra-ui/icons';
+import { SANDBOX_ICON } from '@fastgpt/global/core/ai/sandbox/tools';
+import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
+import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
+import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
+import dynamic from 'next/dynamic';
+import { useContextSelector } from 'use-context-selector';
+import SandboxConfigButton from '../../components/SandboxConfigButton';
+import ToolSelect from '../FormComponent/ToolSelector/ToolSelect';
+import { useAppDatasetTagFilter } from '../FormComponent/useAppDatasetTagFilter';
+import { useInitializeQueryExtensionModel } from '../FormComponent/useInitializeQueryExtensionModel';
 
 const DatasetSelectModal = dynamic(() => import('@/components/core/app/DatasetSelectModal'));
 const DatasetParamsModal = dynamic(() => import('@/components/core/app/DatasetParamsModal'));
+const ConfigToolModal = dynamic(() => import('../component/ConfigToolModal'));
 const TTSSelect = dynamic(() => import('@/components/core/app/TTSSelect'));
 const QGConfig = dynamic(() => import('@/components/core/app/QGConfig'));
 const WhisperConfig = dynamic(() => import('@/components/core/app/WhisperConfig'));
@@ -78,14 +78,18 @@ const EditForm = ({
 }) => {
   const { t } = useSafeTranslation();
   const { feConfigs } = useSystemStore();
-  const { defaultModels } = useUserModelStore();
   const showSandbox = feConfigs.show_agent_sandbox;
   const { teamPlanStatus } = useUserStore();
   const enableSandbox = !teamPlanStatus?.standard || !!teamPlanStatus?.standard?.enableSandbox;
   const { appDetail } = useContextSelector(AppContext, (v) => v);
   const selectDatasets = useMemo(() => appForm?.dataset?.datasets, [appForm]);
+  const { datasetIds, formatVariables, tagFilterReferenceList } = useAppDatasetTagFilter({
+    appForm,
+    setAppForm
+  });
   const [, startTst] = useTransition();
   const isAgentSandboxEnabled = !!appForm.aiSettings.useAgentSandbox;
+  const [configTool, setConfigTool] = useState<SelectedToolItemType>();
   const { isWelcomeTextFolded, toggleWelcomeTextFold } = useWelcomeTextFoldState(appDetail._id);
 
   const {
@@ -99,38 +103,14 @@ const EditForm = ({
     onClose: onCloseDatasetParams
   } = useDisclosure();
 
-  const formatVariables = useMemo(
-    () =>
-      formatEditorVariablePickerIcon([
-        ...workflowSystemVariables.filter(
-          (variable) =>
-            !['appId', 'chatId', 'responseChatItemId', 'histories'].includes(variable.key)
-        ),
-        ...(appForm.chatConfig.variables || [])
-      ]).map((item) => ({
-        ...item,
-        label: t(item.label as any),
-        parent: {
-          id: 'VARIABLE_NODE_ID',
-          label: t('common:core.module.Variable'),
-          avatar: 'core/workflow/template/variable'
-        }
-      })),
-    [appForm.chatConfig.variables, t]
-  );
-
-  const { llmModelList, reRankModelList } = useUserModelLists();
-  const selectedModel =
-    findClientModelByReference({
-      models: llmModelList,
-      reference: appForm.aiSettings
-    }) ??
-    (appForm.aiSettings.modelId === undefined && !appForm.aiSettings.model
-      ? llmModelList[0]
-      : undefined);
+  const { model: configuredModel } = useModelDetail({
+    ...appForm.aiSettings,
+    modelType: ModelTypeEnum.llm
+  });
+  const selectedModel = configuredModel;
   const tokenLimit = useMemo(() => {
-    return selectedModel?.config.quoteMaxToken ?? 3000;
-  }, [selectedModel?.config.quoteMaxToken]);
+    return getModelQuoteTokenLimit(configuredModel);
+  }, [configuredModel]);
 
   const updateWelcomeText = useCallback(
     (value: string) => {
@@ -165,66 +145,7 @@ const EditForm = ({
     [setAppForm]
   );
 
-  useEffect(() => {
-    setAppForm((state) => {
-      const modelId = resolveClientModelReferenceId({
-        models: llmModelList,
-        reference: state.aiSettings
-      });
-      const rerankModelId =
-        resolveClientModelReferenceId({
-          models: reRankModelList,
-          reference: {
-            modelId: state.dataset.rerankModelId,
-            model: state.dataset.rerankModel
-          }
-        }) ??
-        (state.dataset.usingReRank &&
-        state.dataset.rerankModelId === undefined &&
-        !state.dataset.rerankModel
-          ? defaultModels.rerank?.modelId
-          : undefined);
-      const datasetSearchExtensionModelId =
-        resolveClientModelReferenceId({
-          models: llmModelList,
-          reference: {
-            modelId: state.dataset.datasetSearchExtensionModelId,
-            model: state.dataset.datasetSearchExtensionModel
-          }
-        }) ??
-        (state.dataset.datasetSearchUsingExtensionQuery &&
-        state.dataset.datasetSearchExtensionModelId === undefined &&
-        !state.dataset.datasetSearchExtensionModel
-          ? defaultModels.llm?.modelId
-          : undefined);
-
-      if (
-        modelId === state.aiSettings.modelId &&
-        rerankModelId === state.dataset.rerankModelId &&
-        datasetSearchExtensionModelId === state.dataset.datasetSearchExtensionModelId
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        aiSettings: {
-          ...state.aiSettings,
-          modelId
-        },
-        dataset: {
-          ...state.dataset,
-          rerankModelId,
-          datasetSearchExtensionModelId
-        }
-      };
-    });
-  }, [
-    defaultModels.llm?.modelId,
-    defaultModels.rerank?.modelId,
-    llmModelList,
-    reRankModelList,
-    setAppForm
-  ]);
+  useInitializeQueryExtensionModel({ appId: appDetail._id, appForm, setAppForm });
 
   const OptimizerPopverComponent = useCallback(
     ({ iconButtonStyle }: { iconButtonStyle: Record<string, any> }) => {
@@ -260,8 +181,9 @@ const EditForm = ({
           </Flex>
           <Flex alignItems={'center'} mt={5}>
             <Box {...LabelStyles}>{t('common:core.ai.Model')}</Box>
-            <Box flex={'1 0 0'}>
+            <Box flex={'1 1 0'} minW={0}>
               <SettingLLMModel
+                appId={appDetail._id}
                 bg="myGray.50"
                 defaultData={{
                   modelId:
@@ -368,39 +290,31 @@ const EditForm = ({
         </Box>
 
         {/* tool choice */}
-        {selectedModel && (
-          <Box {...BoxStyles}>
-            <ToolSelect
-              selectedModel={selectedModel}
-              selectedTools={appForm.selectedTools}
-              fileSelectConfig={appForm.chatConfig.fileSelectConfig}
-              onAddTool={(e) => {
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools: [e, ...(state.selectedTools || [])]
-                }));
-              }}
-              onUpdateTool={(e) => {
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools:
-                    state.selectedTools?.map((item) => (item.id === e.id ? e : item)) || []
-                }));
-              }}
-              onRemoveTool={(id, source) => {
-                setAppForm((state) => ({
-                  ...state,
-                  selectedTools:
-                    state.selectedTools?.filter(
-                      (item) =>
-                        getToolIdentityKey(item.pluginId, item.source) !==
-                        getToolIdentityKey(id, source)
-                    ) || []
-                }));
-              }}
-            />
-          </Box>
-        )}
+        <Box {...BoxStyles}>
+          <ToolSelect
+            selectedModel={selectedModel}
+            selectedTools={appForm.selectedTools}
+            fileSelectConfig={appForm.chatConfig.fileSelectConfig}
+            onAddTool={(e) => {
+              setAppForm((state) => ({
+                ...state,
+                selectedTools: [e, ...(state.selectedTools || [])]
+              }));
+            }}
+            onConfigTool={setConfigTool}
+            onRemoveTool={(id, source) => {
+              setAppForm((state) => ({
+                ...state,
+                selectedTools:
+                  state.selectedTools?.filter(
+                    (item) =>
+                      getToolIdentityKey(item.pluginId, item.source) !==
+                      getToolIdentityKey(id, source)
+                  ) || []
+              }));
+            }}
+          />
+        </Box>
 
         {/* dataset */}
         <Box {...BoxStyles}>
@@ -465,6 +379,8 @@ const EditForm = ({
                   appForm.dataset.datasetSearchExtensionModelId ||
                   appForm.dataset.datasetSearchExtensionModel
                 }
+                showTagFilter={!!feConfigs?.isPlus}
+                collectionFilterMatch={appForm.dataset.collectionFilterMatch}
               />
             </Box>
           )}
@@ -576,6 +492,7 @@ const EditForm = ({
         {/* question guide */}
         <Box {...BoxStyles}>
           <QGConfig
+            appId={appDetail._id}
             value={appForm.chatConfig.questionGuide}
             onChange={(e) => {
               setAppForm((state) => ({
@@ -607,6 +524,18 @@ const EditForm = ({
         </Box>
       </Box>
 
+      {configTool && (
+        <ConfigToolModal
+          configTool={configTool}
+          onCloseConfigTool={() => setConfigTool(undefined)}
+          onAddTool={(tool) => {
+            setAppForm((state) => ({
+              ...state,
+              selectedTools: state.selectedTools.map((item) => (item.id === tool.id ? tool : item))
+            }));
+          }}
+        />
+      )}
       {isOpenDatasetSelect && (
         <DatasetSelectModal
           defaultSelectedDatasets={selectDatasets.map((item) => ({
@@ -614,7 +543,7 @@ const EditForm = ({
             name: item.name,
             avatar: item.avatar,
             vectorModel: item.vectorModel,
-            isDeleted: item.isDeleted
+            error: item.error
           }))}
           onClose={onCloseDatasetSelect}
           onChange={(e) => {
@@ -631,7 +560,11 @@ const EditForm = ({
       {isOpenDatasetParams && (
         <DatasetParamsModal
           {...appForm.dataset}
+          appId={appDetail._id}
           maxTokens={tokenLimit}
+          showTagFilter={!!feConfigs?.isPlus}
+          datasetIds={datasetIds}
+          tagFilterReferenceList={tagFilterReferenceList}
           onClose={onCloseDatasetParams}
           onSuccess={(e) => {
             setAppForm((state) => ({

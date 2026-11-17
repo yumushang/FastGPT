@@ -1,4 +1,4 @@
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import { countGptMessagesTokens, countPromptTokens } from '../../../../common/string/tiktoken';
 import {
   ACTIVE_PLAN_END_TAG,
@@ -536,6 +536,7 @@ const getToolResponseCompressionLimits = ({ maxContext }: { maxContext: number }
  */
 export const compressRequestMessages = async ({
   activePlan,
+  getCheckpointContext,
   checkIsStopping,
   messageTokens: cachedMessageTokens,
   messages,
@@ -546,10 +547,11 @@ export const compressRequestMessages = async ({
   teamId
 }: {
   activePlan?: AgentPlanType;
+  getCheckpointContext?: () => Promise<string>;
   checkIsStopping?: CreateLLMResponseProps['isAborted'];
   messageTokens?: number;
   messages: ChatCompletionMessageParam[];
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   reasoningEffort?: CreateLLMResponseProps['body']['reasoning_effort'];
   tools?: ChatCompletionTool[];
   userKey?: OpenaiAccountType;
@@ -623,6 +625,8 @@ export const compressRequestMessages = async ({
   logger.info('Message compression started');
 
   try {
+    // 业务恢复快照只在真正压缩时生成；读取失败保留原上下文，不能发布缺少入口的 checkpoint。
+    const checkpointContext = await getCheckpointContext?.();
     // 触发压缩后，全部非 system/developer 历史都写进 checkpoint，避免继续保留大量原始 history。
     const compressPrompt = await getCompressRequestMessagesPrompt();
     const userPrompt = await getCompressRequestMessagesUserPrompt({
@@ -701,10 +705,12 @@ export const compressRequestMessages = async ({
       return { messages, messageTokens, usage: compressedUsage, requestIds: [requestId] };
     }
 
-    const compressedContextContent = createCompressedContextContent({
-      activePlan,
-      checkpointContent
-    });
+    const compressedContextContent = [
+      createCompressedContextContent({ activePlan, checkpointContent }),
+      checkpointContext
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const checkpointMessage = createContextCheckpointMessage(compressedContextContent);
     const finalMessages = [...systemMessages, checkpointMessage];
     const compressedTokens = await countRequestMessagesTokens({
@@ -789,7 +795,7 @@ export const compressLargeContent = async ({
   teamId
 }: {
   content: string;
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   compressedTokenLimit: number;
   moduleName?: string;
   reasoningEffort?: CreateLLMResponseProps['body']['reasoning_effort'];
@@ -811,14 +817,14 @@ export const compressLargeContent = async ({
   const chunkAndCompress = async (params: {
     content: string;
     compressedTokenLimit: number;
-    model: LLMSystemModelDataType;
+    model: LLMModelDataType;
   }): Promise<{
     compressed: string;
     usage: CompressUsageType;
   }> => {
     async function compressSingleChunk(params: {
       chunk: string;
-      model: LLMSystemModelDataType;
+      model: LLMModelDataType;
       chunkTokenLimit: number;
       chunkIndex?: number;
     }): Promise<{
@@ -1127,7 +1133,7 @@ export const compressToolResponse = async ({
   teamId
 }: {
   response: string;
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   reasoningEffort?: CreateLLMResponseProps['body']['reasoning_effort'];
   userKey?: OpenaiAccountType;
   teamId: string;

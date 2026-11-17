@@ -1,3 +1,7 @@
+import {
+  createDefaultInstanceConfig,
+  getTestInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -23,32 +27,21 @@ import {
 } from '@fastgpt/service/common/file/utils';
 
 describe('getFileMaxSize', () => {
-  it('should return default max size (1000MB) when uploadFileMaxSize is not set', () => {
-    const original = global.feConfigs?.uploadFileMaxSize;
-    global.feConfigs = { ...global.feConfigs } as any;
-    delete (global.feConfigs as any).uploadFileMaxSize;
-    expect(getFileMaxSize()).toBe(1000 * 1024 * 1024);
-    if (original !== undefined) {
-      (global.feConfigs as any).uploadFileMaxSize = original;
-    }
+  let originalConfig: typeof global.systemInstanceConfig;
+  beforeEach(() => {
+    originalConfig = global.systemInstanceConfig;
   });
-
-  it('should return configured max size in bytes', () => {
-    const original = global.feConfigs?.uploadFileMaxSize;
-    (global.feConfigs as any).uploadFileMaxSize = 500;
-    expect(getFileMaxSize()).toBe(500 * 1024 * 1024);
-    if (original !== undefined) {
-      (global.feConfigs as any).uploadFileMaxSize = original;
-    } else {
-      delete (global.feConfigs as any).uploadFileMaxSize;
-    }
+  afterEach(() => {
+    global.systemInstanceConfig = originalConfig;
   });
-
-  it('should handle zero value and fall back to default', () => {
-    (global.feConfigs as any).uploadFileMaxSize = 0;
-    // 0 is falsy, so it falls back to 1000
-    expect(getFileMaxSize()).toBe(1000 * 1024 * 1024);
-    delete (global.feConfigs as any).uploadFileMaxSize;
+  it.each([
+    [undefined, 1000],
+    [500, 500],
+    [0, 1000]
+  ])('returns the configured size %s or the missing-value default in bytes', (value, expected) => {
+    global.systemInstanceConfig = createDefaultInstanceConfig();
+    if (value !== undefined) getTestInstanceConfig().resource.uploadFileMaxSize = value;
+    expect(getFileMaxSize()).toBe(expected * 1024 * 1024);
   });
 });
 
@@ -210,7 +203,8 @@ describe('clearTmpUploadFiles', () => {
     vi.spyOn(fs, 'stat').mockImplementation((_path: any, cb: any) =>
       cb(null, { mtime: threeHoursAgo } as fs.Stats)
     );
-    vi.spyOn(fs, 'unlink').mockImplementation((_path: any, cb: any) => cb(null));
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation((_path: any, cb: any) => cb(null));
     clearTmpUploadFiles();
+    expect(unlinkSpy).toHaveBeenCalled();
   });
 });

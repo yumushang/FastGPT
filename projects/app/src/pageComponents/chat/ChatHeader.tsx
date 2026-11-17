@@ -14,12 +14,11 @@ import { AppFolderTypeList, AppTypeEnum } from '@fastgpt/global/core/app/constan
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import LightRowTabs from '@fastgpt/web/components/common/Tabs/LightRowTabs';
 import { useRouter } from 'next/router';
-import {
-  type GetResourceFolderListProps,
-  type GetResourceListItemResponse
-} from '@fastgpt/global/common/parentFolder/type';
-import { getMyApps } from '@/web/core/app/api';
-import SelectOneResource from '@/components/common/folder/SelectOneResource';
+import SelectOneResource, {
+  type SelectOneResourceItemType,
+  type SelectOneResourceServer
+} from '@/components/common/folder/SelectOneResource';
+import { getMyAppsV2 } from '@/web/core/app/api';
 import { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
 import VariablePopover from '@/components/core/chat/ChatContainer/components/VariablePopover';
 import { useCopyData } from '@fastgpt/web/hooks/useCopyData';
@@ -119,31 +118,26 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
   const { t } = useTranslation();
 
   const myApps = useContextSelector(ChatPageContext, (v) => v.myApps);
-  const upsertRecentlyUsedAppPlaceholder = useContextSelector(
-    ChatPageContext,
-    (v) => v.upsertRecentlyUsedAppPlaceholder
-  );
 
   const [currentTab, setCurrentTab] = useState<TabEnum>(TabEnum.recently);
 
-  const getAppList = useCallback(async ({ parentId }: GetResourceFolderListProps) => {
-    return getMyApps({ parentId }).then((res) =>
-      res.map<GetResourceListItemResponse>((item) => ({
-        id: item._id,
-        name: item.name,
-        avatar: item.avatar,
-        isFolder: AppFolderTypeList.includes(item.type)
-      }))
-    );
-  }, []);
+  const getAppList = useCallback<SelectOneResourceServer>(
+    ({ parentId, offset, pageSize }, cancelToken) =>
+      getMyAppsV2({ parentId, offset, pageSize }, cancelToken).then(({ list, total }) => ({
+        total,
+        list: list.map<SelectOneResourceItemType>((item) => ({
+          id: item._id,
+          name: item.name,
+          avatar: item.avatar,
+          isFolder: AppFolderTypeList.includes(item.type)
+        }))
+      })),
+    []
+  );
 
   const handlePaneChange = useContextSelector(ChatPageContext, (v) => v.handlePaneChange);
 
   const onclickApp = (id: string) => {
-    const app = myApps.find((item) => item.appId === id);
-    if (app) {
-      upsertRecentlyUsedAppPlaceholder(app);
-    }
     handlePaneChange(ChatSidebarPaneEnum.RECENTLY_USED_APPS, id);
     onCloseDrawer();
   };
@@ -221,9 +215,7 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
                         })}
                   >
                     <Avatar src={item.avatar} w={'24px'} borderRadius={'sm'} />
-                    <Box className={'textEllipsis'}>
-                      {item.name}
-                    </Box>
+                    <Box className={'textEllipsis'}>{item.name}</Box>
                   </Flex>
                 </Flex>
               ))}
@@ -234,11 +226,6 @@ const MobileDrawer = ({ onCloseDrawer, appId }: { onCloseDrawer: () => void; app
             value={appId}
             onSelect={(item) => {
               if (!item) return;
-              upsertRecentlyUsedAppPlaceholder({
-                appId: item.id,
-                name: item.name,
-                avatar: item.avatar
-              });
               onclickApp(item.id);
             }}
             server={getAppList}

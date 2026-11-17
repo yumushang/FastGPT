@@ -1,15 +1,17 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import React, { useMemo } from 'react';
-import { Flex, Box, Table, Thead, Tbody, Tr, Th, Td, TableContainer } from '@chakra-ui/react';
+import { Flex, Box, Table, Thead, Tbody, Tr, Th, Td } from '@chakra-ui/react';
 import { type UsageListItemType } from '@fastgpt/global/support/wallet/usage/type';
 import dayjs from 'dayjs';
 import { UsageSourceMap } from '@fastgpt/global/support/wallet/usage/constants';
 import MyModal from '@fastgpt/web/components/v2/common/MyModal';
 import { formatNumber } from '@fastgpt/global/common/math/tools';
 import FormLabel from '@fastgpt/web/components/common/MyBox/FormLabel';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import { UsageMember } from './UsageMember';
 
 const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: () => void }) => {
-  const { t } = useClientTranslation('account_usage');
+  const { t } = useSafeTranslation();
   const filterBillList = useMemo(
     () => usage.list.filter((item) => item && item.moduleName),
     [usage.list]
@@ -39,7 +41,7 @@ const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: ()
         hasModel = true;
       }
 
-      if (typeof item.tokens === 'number') {
+      if (typeof item.totalTokens === 'number' || typeof item.tokens === 'number') {
         hasToken = true;
       }
       if (typeof item.inputTokens === 'number') {
@@ -85,6 +87,10 @@ const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: ()
         <Box>{dayjs(usage.time).format('YYYY/MM/DD HH:mm:ss')}</Box>
       </Flex>
       <Flex alignItems={'center'} pb={4}>
+        <FormLabel flex={'0 0 80px'}>{t('account_usage:member')}:</FormLabel>
+        <UsageMember member={usage.sourceMember} />
+      </Flex>
+      <Flex alignItems={'center'} pb={4}>
         <FormLabel flex={'0 0 80px'}>{t('account_usage:app_name')}:</FormLabel>
         <Box>{t(usage.appName as any) || '-'}</Box>
       </Flex>
@@ -100,7 +106,7 @@ const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: ()
         <FormLabel flex={'0 0 80px'} mb={1}>
           {t('account_usage:billing_module')}
         </FormLabel>
-        <TableContainer fontSize={'sm'}>
+        <FixedTableContainer fontSize={'sm'} maxH="none">
           <Table>
             <Thead>
               <Tr>
@@ -121,7 +127,7 @@ const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: ()
                 <Tr key={i}>
                   <Td>{t(item.moduleName as any)}</Td>
                   {hasModel && <Td>{item.model ?? '-'}</Td>}
-                  {hasToken && <Td>{item.tokens ?? '-'}</Td>}
+                  {hasToken && <Td>{item.totalTokens ?? item.tokens ?? '-'}</Td>}
                   {hasInputToken && <Td>{item.inputTokens ?? '-'}</Td>}
                   {hasOutputToken && <Td>{item.outputTokens ?? '-'}</Td>}
                   {hasCount && <Td>{item.count ?? '-'}</Td>}
@@ -133,7 +139,7 @@ const UsageDetail = ({ usage, onClose }: { usage: UsageListItemType; onClose: ()
               ))}
             </Tbody>
           </Table>
-        </TableContainer>
+        </FixedTableContainer>
       </Box>
     </MyModal>
   );

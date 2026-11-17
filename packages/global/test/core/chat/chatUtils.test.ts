@@ -19,7 +19,9 @@ import {
   getFlatAppResponses,
   checkInteractiveResponseStatus,
   removeAIResponseCite,
-  hasContextCheckpoint
+  hasContextCheckpoint,
+  isToolExecutionResponse,
+  findFailedResponseNode
 } from '@fastgpt/global/core/chat/utils';
 import type { AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
 
@@ -48,6 +50,31 @@ describe('concatHistories', () => {
     const result = concatHistories(histories1, histories2);
 
     expect(result[0].obj).toBe(ChatRoleEnum.System);
+  });
+
+  it('should keep the original order of multiple system messages and of the rest', () => {
+    const text = (content: string) => [{ text: { content } }];
+    const histories1: ChatItemMiniType[] = [
+      { obj: ChatRoleEnum.Human, value: text('Q1') },
+      { obj: ChatRoleEnum.AI, value: text('A1') }
+    ];
+    const histories2: ChatItemMiniType[] = [
+      { obj: ChatRoleEnum.System, value: text('S1') },
+      { obj: ChatRoleEnum.System, value: text('S2') },
+      { obj: ChatRoleEnum.Human, value: text('Q2') },
+      { obj: ChatRoleEnum.System, value: text('S3') }
+    ];
+
+    const result = concatHistories(histories1, histories2);
+
+    expect(result.map((item) => item.value[0].text?.content)).toEqual([
+      'S1',
+      'S2',
+      'S3',
+      'Q1',
+      'A1',
+      'Q2'
+    ]);
   });
 });
 
@@ -348,6 +375,31 @@ describe('filterNodeResponseTreeData', () => {
       }
     ]);
   });
+
+  it('keeps retrievalResults in step with quoteList under responseDetail', () => {
+    const nodeResponses: ChatHistoryItemResType[] = [
+      {
+        id: 'dataset',
+        nodeId: 'dataset-node',
+        moduleName: 'Dataset Search',
+        moduleType: FlowNodeTypeEnum.datasetSearchNode,
+        quoteList: [{ id: 'quote-1', q: 'reranked question', chunkIndex: 0, score: [] } as any],
+        retrievalResults: [
+          { id: 'recall-1', q: 'recalled question', chunkIndex: 1, score: [] } as any
+        ]
+      }
+    ];
+
+    // detail 打开时两者都保留，保持与 quoteList 一致
+    const withDetail = filterNodeResponseTreeData({ nodeResponses, responseDetail: true });
+    expect(withDetail[0].quoteList?.[0].id).toBe('quote-1');
+    expect(withDetail[0].retrievalResults?.[0].id).toBe('recall-1');
+
+    // detail 关闭时两者都剥掉，避免默认渠道多泄露候选集
+    const withoutDetail = filterNodeResponseTreeData({ nodeResponses, responseDetail: false });
+    expect(withoutDetail[0]).not.toHaveProperty('quoteList');
+    expect(withoutDetail[0]).not.toHaveProperty('retrievalResults');
+  });
 });
 
 describe('removeEmptyUserInput', () => {
@@ -438,6 +490,12 @@ describe('getChatSourceByPublishChannel', () => {
 
   it('should map wecom channel to wecom source', () => {
     expect(getChatSourceByPublishChannel(PublishChannelEnum.wecom)).toBe(ChatSourceEnum.wecom);
+  });
+
+  it('should map wecom websocket channel to the existing wecom source', () => {
+    expect(getChatSourceByPublishChannel(PublishChannelEnum.wecomWebsocket)).toBe(
+      ChatSourceEnum.wecom
+    );
   });
 
   it('should map officialAccount channel to official_account source', () => {
@@ -582,56 +640,68 @@ describe('getFlatAppResponses', () => {
 });
 
 describe('checkInteractiveResponseStatus', () => {
-  it('should keep legacy agentPlanAskQuery as a query', () => {
-    const result = checkInteractiveResponseStatus({
-      interactive: {
-        type: 'agentPlanAskQuery',
-        askId: 'call_ask',
-        params: {
-          content: 'What do you want?',
-          options: ['Use repo', 'Use docs', 'Use defaults']
-        }
-      },
-      input: 'any input'
-    });
+  it('creates a new message round for workflow preview decisions, including nested previews', () => {
+    const preview = {
+      type: 'workflowBuilderPreview' as const,
 
-    expect(result).toBe('query');
-  });
-
-  it('should return query for agentAsk by default and submit when configured', () => {
-    const interactive = {
-      type: 'agentAsk' as const,
-      askId: 'call_ask',
+      entryNodeIds: [],
+      memoryEdges: [],
+      nodeOutputs: [],
       params: {
-        description: 'Need input',
-        questions: [
-          {
-            question: 'Need input?',
-            options: [
-              { summary: 'A', value: 'A' },
-              { summary: 'B', value: 'B' }
-            ],
-            answer: ''
-          }
-        ]
+        toolCallId: 'preview-1',
+        arguments: JSON.stringify({
+          title: 'Confirm workflow?',
+          mermaid: 'flowchart LR\n A --> B',
+          sections: [{ title: 'Goal', content: 'Build the workflow' }]
+        })
       }
     };
-    expect(
-      checkInteractiveResponseStatus({
-        interactive,
-        input: '{"answers":["A"]}'
-      })
-    ).toBe('query');
+    for (const interactive of [
+      preview,
+      {
+        type: 'childrenInteractive' as const,
+        entryNodeIds: [],
+        memoryEdges: [],
+        nodeOutputs: [],
+        params: { childrenResponse: preview }
+      }
+    ]) {
+      expect(checkInteractiveResponseStatus({ interactive, input: 'Confirm' })).toBe('query');
+    }
+  });
 
-    expect(
-      checkInteractiveResponseStatus({
-        interactive: {
-          ...interactive,
-          responseMode: 'submit'
-        },
-        input: '{"answers":["A"]}'
-      })
-    ).toBe('submit');
+  it('should always create a query round for agentAsk answers', () => {
+    const interactive = {
+      type: 'agentAsk' as const,
+
+      entryNodeIds: [],
+      memoryEdges: [],
+      nodeOutputs: [],
+      params: {
+        toolCallId: 'call_ask',
+        arguments: JSON.stringify({
+          reason: 'Need input',
+          blockerType: 'user_choice',
+          questions: [
+            {
+              question: 'Need input?',
+              options: [
+                { summary: 'A', value: 'A' },
+                { summary: 'B', value: 'B' }
+              ]
+            }
+          ]
+        })
+      }
+    };
+    for (const answer of ['A', 'custom answer', '']) {
+      expect(
+        checkInteractiveResponseStatus({
+          interactive,
+          input: JSON.stringify({ answers: [answer] })
+        })
+      ).toBe('query');
+    }
   });
 
   it('should keep a nested legacy agent ask as a query', () => {
@@ -639,19 +709,30 @@ describe('checkInteractiveResponseStatus', () => {
       interactive: {
         type: 'toolChildrenInteractive',
         params: {
-          toolParams: {
-            toolCallId: 'tool_1'
-          },
+          toolCallId: 'tool_1',
           childrenResponse: {
             type: 'childrenInteractive',
             params: {
               childrenId: 'child_1',
               childrenResponse: {
-                type: 'agentPlanAskQuery',
-                askId: 'ask_1',
+                type: 'agentAsk',
+
                 params: {
-                  content: 'Choose one',
-                  options: ['A', 'B', 'C']
+                  toolCallId: 'ask_1',
+                  arguments: JSON.stringify({
+                    reason: '',
+                    blockerType: 'user_choice',
+                    questions: [
+                      {
+                        question: 'Choose one',
+                        options: [
+                          { summary: 'A', value: 'A' },
+                          { summary: 'B', value: 'B' },
+                          { summary: 'C', value: 'C' }
+                        ]
+                      }
+                    ]
+                  })
                 }
               }
             }
@@ -669,9 +750,7 @@ describe('checkInteractiveResponseStatus', () => {
       interactive: {
         type: 'toolChildrenInteractive',
         params: {
-          toolParams: {
-            toolCallId: 'tool_1'
-          },
+          toolCallId: 'tool_1',
           childrenResponse: {
             type: 'userSelect',
             params: {
@@ -781,5 +860,248 @@ describe('removeAIResponseCite', () => {
 
     expect(result[0].id).toBe('item1');
     expect(result[0].text?.content).toBe('Hello ');
+  });
+});
+
+describe('isToolExecutionResponse', () => {
+  it.each([false, true])('prefers the recorded execution context isToolCall=%s', (isToolCall) => {
+    expect(
+      isToolExecutionResponse({
+        id: 'mcp-response',
+        nodeId: 'mcp-node',
+        moduleName: 'MCP',
+        moduleType: FlowNodeTypeEnum.tool,
+        toolRes: { error: 'failed' },
+        isToolCall
+      })
+    ).toBe(isToolCall);
+  });
+
+  it('does not treat child workflow nodes as tools solely based on parentId', () => {
+    expect(
+      isToolExecutionResponse({
+        id: 'child-1',
+        nodeId: 'child-node',
+        moduleName: 'Child',
+        moduleType: FlowNodeTypeEnum.agent,
+        parentId: 'parent-1'
+      })
+    ).toBe(false);
+  });
+
+  it('returns true when moduleType is tool or toolSet', () => {
+    expect(
+      isToolExecutionResponse({
+        id: 'tool-1',
+        nodeId: 'tool-node',
+        moduleName: '虚拟机/列出目录',
+        moduleType: FlowNodeTypeEnum.tool
+      })
+    ).toBe(true);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'tool-set-1',
+        nodeId: 'tool-set-node',
+        moduleName: 'Tool Set',
+        moduleType: FlowNodeTypeEnum.toolSet
+      })
+    ).toBe(true);
+  });
+
+  it('returns true when toolRes or toolId is present', () => {
+    expect(
+      isToolExecutionResponse({
+        id: 'sub-app-1',
+        nodeId: 'sub-app-node',
+        moduleName: 'SubApp Tool',
+        moduleType: FlowNodeTypeEnum.appModule,
+        toolRes: 'Tool error: failed'
+      })
+    ).toBe(true);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'sub-app-toolId',
+        nodeId: 'sub-app-node',
+        moduleName: 'SubApp Tool',
+        moduleType: FlowNodeTypeEnum.appModule,
+        toolId: 'my_tool'
+      })
+    ).toBe(true);
+  });
+
+  it('does not treat standalone nodes with toolInput as tool execution unless toolId or toolRes is present', () => {
+    expect(
+      isToolExecutionResponse({
+        id: 'sub-app-2',
+        nodeId: 'sub-app-node',
+        moduleName: 'SubApp Node',
+        moduleType: FlowNodeTypeEnum.appModule,
+        toolInput: { query: 'test' }
+      })
+    ).toBe(false);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'plugin-1',
+        nodeId: 'plugin-node',
+        moduleName: '插件',
+        moduleType: FlowNodeTypeEnum.pluginModule,
+        toolInput: { text: 'hello' }
+      })
+    ).toBe(false);
+  });
+
+  it('returns false for standalone root workflow nodes without tool attributes', () => {
+    expect(
+      isToolExecutionResponse({
+        id: 'agent-1',
+        nodeId: 'agent-node',
+        moduleName: '主模型',
+        moduleType: FlowNodeTypeEnum.agent
+      })
+    ).toBe(false);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'tool-call-1',
+        nodeId: 'tool-call-node',
+        moduleName: 'Tool Call',
+        moduleType: FlowNodeTypeEnum.toolCall
+      })
+    ).toBe(false);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'http-1',
+        nodeId: 'http-node',
+        moduleName: 'HTTP 请求',
+        moduleType: FlowNodeTypeEnum.httpRequest468
+      })
+    ).toBe(false);
+
+    expect(
+      isToolExecutionResponse({
+        id: 'chat-1',
+        nodeId: 'chat-node',
+        moduleName: 'AI 对话',
+        moduleType: FlowNodeTypeEnum.chatNode
+      })
+    ).toBe(false);
+  });
+});
+
+describe('findFailedResponseNode', () => {
+  it('returns undefined when responseData is empty', () => {
+    expect(findFailedResponseNode([])).toBeUndefined();
+  });
+
+  it('ignores tool execution responses', () => {
+    expect(
+      findFailedResponseNode([
+        {
+          id: 'sandbox-tool',
+          moduleName: '虚拟机/列出目录',
+          moduleType: FlowNodeTypeEnum.tool,
+          errorText: 'File not found'
+        }
+      ])
+    ).toBeUndefined();
+  });
+
+  it('ignores nodes with errorCaptured: true', () => {
+    expect(
+      findFailedResponseNode([
+        {
+          id: 'catch-node',
+          moduleName: 'HTTP 请求',
+          moduleType: FlowNodeTypeEnum.httpRequest468,
+          errorText: 'Network timeout',
+          errorCaptured: true
+        }
+      ])
+    ).toBeUndefined();
+  });
+
+  it('returns root node error when present', () => {
+    const rootNode: ChatHistoryItemResType = {
+      id: 'root-llm',
+      moduleName: '主模型',
+      moduleType: FlowNodeTypeEnum.chatNode,
+      errorText: 'Quota exhausted'
+    };
+
+    expect(findFailedResponseNode([rootNode])).toEqual(rootNode);
+  });
+
+  it('returns root toolCall node error when toolCall failed', () => {
+    const toolCallNode: ChatHistoryItemResType = {
+      id: 'root-tool-call',
+      moduleName: '工具调用',
+      moduleType: FlowNodeTypeEnum.toolCall,
+      errorText: 'Sandbox capacity exceeded'
+    };
+
+    expect(findFailedResponseNode([toolCallNode])).toEqual(toolCallNode);
+  });
+
+  it('prefers root node error over child node error', () => {
+    const rootNode: ChatHistoryItemResType = {
+      id: 'loop-run',
+      moduleName: '循环节点',
+      moduleType: FlowNodeTypeEnum.loopRun,
+      errorText: 'Loop failed'
+    };
+    const childNode: ChatHistoryItemResType = {
+      id: 'child-step',
+      moduleName: '代码节点',
+      moduleType: FlowNodeTypeEnum.code,
+      parentId: 'loop-run',
+      errorText: 'Code syntax error'
+    };
+
+    expect(findFailedResponseNode([childNode, rootNode])).toEqual(rootNode);
+  });
+
+  it('falls back to orphan child node error when parent container crashed before writing nodeResponse', () => {
+    const orphanChild: ChatHistoryItemResType = {
+      id: 'orphan-code',
+      moduleName: '代码节点',
+      moduleType: FlowNodeTypeEnum.code,
+      parentId: 'crashed-container',
+      errorText: 'Container killed unexpectedly'
+    };
+
+    expect(findFailedResponseNode([orphanChild])).toEqual(orphanChild);
+  });
+
+  it('returns standalone canvas pluginModule error', () => {
+    const pluginNode: ChatHistoryItemResType = {
+      id: 'canvas-plugin',
+      moduleName: '工作流插件',
+      moduleType: FlowNodeTypeEnum.pluginModule,
+      toolInput: { text: 'test' },
+      errorText: 'Plugin execution failed'
+    };
+
+    expect(findFailedResponseNode([pluginNode])).toEqual(pluginNode);
+  });
+
+  it('does not promote child node error when parent container is present and succeeded', () => {
+    const parentNode: ChatHistoryItemResType = {
+      id: 'parent-container',
+      moduleName: '循环容器',
+      moduleType: FlowNodeTypeEnum.loopRun
+    };
+    const childNode: ChatHistoryItemResType = {
+      id: 'child-step',
+      parentId: 'parent-container',
+      moduleName: '子节点',
+      moduleType: FlowNodeTypeEnum.code,
+      errorText: 'Internal branch error'
+    };
+
+    expect(findFailedResponseNode([parentNode, childNode])).toBeUndefined();
   });
 });

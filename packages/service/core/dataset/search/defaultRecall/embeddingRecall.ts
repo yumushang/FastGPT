@@ -6,15 +6,19 @@ import type {
 } from '@fastgpt/global/core/dataset/type';
 import { recallFromVectorStore } from '../../../../common/vectorDB/controller';
 import { getVectors } from '../../../ai/embedding';
-import { isImageEmbeddingModel } from '../../../ai/model';
-import type { EmbeddingSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import { isImageEmbeddingModel } from '@fastgpt/global/core/ai/model/utils';
+import type { EmbeddingModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import { MongoDatasetCollection } from '../../collection/schema';
 import { MongoDatasetData } from '../../data/schema';
 import { getLogger, LogCategories } from '../../../../common/logger';
 import { readFromSecondary } from '../../../../common/mongo/utils';
 import { normalizeImageToBase64 } from '../utils';
+import { getMultipleDataToBase64 } from '../../../../common/system/constants';
 import { datasetCollectionSelectField, datasetDataSelectField } from './constant';
 import { buildSearchResultItem, concatRecallLists } from './result';
+import { getDatasetVectorSearchData } from '../../vectorData/service';
+import { getSystemInstanceConfig } from '../../../../common/system/systemInstanceConfig/runtime';
+import { logInstanceConfigRead } from '../../../../common/system/migrationCoverageLog';
 
 const logger = getLogger(LogCategories.MODULE.DATASET.DATA);
 
@@ -43,7 +47,7 @@ const buildVectorRecallTasks = async ({
   imageCaptionQueries,
   imageQueries
 }: {
-  model: EmbeddingSystemModelDataType;
+  model: EmbeddingModelDataType;
   textQueries: string[];
   imageCaptionQueries: string[];
   imageQueries: string[];
@@ -76,11 +80,13 @@ const buildVectorRecallTasks = async ({
   const validImageQueries = imageQueries.map((url) => url.trim()).filter(Boolean);
 
   if (validImageQueries.length > 0 && isImageEmbeddingModel(embeddingModel)) {
+    // 批量入口一次求值下传：管理员中途保存配置不会让同批图片出现混合形态
+    const toBase64 = getMultipleDataToBase64();
     const imageInputs = (
       await Promise.all(
         validImageQueries.map(async (url, index) => {
           try {
-            return await normalizeImageToBase64(url);
+            return await normalizeImageToBase64(url, toBase64);
           } catch (error) {
             // Image search is additive. A stale or unreadable image should not break text recall
             // or other valid images in the same request.
@@ -131,6 +137,7 @@ const buildVectorRecallTasks = async ({
  * 执行 embedding 召回并按 query 来源分组返回。
  * 向量库返回的是 index dataId，这里需要再回查 data/collection，补齐 q/a、
  * 图片字段和来源信息。每个 query 内先按数据块去重，多个 query 之间再交给 RRF 合并。
+ * 同一轮召回统一读取搜索配置后传给各 provider，避免多个 query 分别读取到不同配置。
  */
 export const embeddingRecall = async ({
   teamId,
@@ -145,7 +152,7 @@ export const embeddingRecall = async ({
 }: {
   teamId: string;
   datasetIds: string[];
-  model: EmbeddingSystemModelDataType;
+  model: EmbeddingModelDataType;
   imageQueries: string[];
   textQueries: string[];
   imageCaptionQueries: string[];
@@ -178,13 +185,25 @@ export const embeddingRecall = async ({
     };
   }
 
+  // 同一轮多 query 召回共用配置值，统一限制在 100～1000，provider 直接使用，不再按 limit 调整。
+  const { hnswEfSearch: configuredHnswEfSearch } = getSystemInstanceConfig().vector;
+  const hnswEfSearch = Math.min(1000, Math.max(100, configuredHnswEfSearch));
+  logInstanceConfigRead({
+    callsite: 'runtime.core.dataset.search.embeddingRecall',
+    fields: [{ path: 'vector.hnswEfSearch', value: configuredHnswEfSearch }]
+  });
+
+  // 多个文本/图片 query 共用路由快照，避免每个向量都重复查询计数及索引状态。
+  const datasetVectorData = await getDatasetVectorSearchData({ teamId, datasetIds });
   const recallResults = await Promise.all(
     tasks.map(async ({ vector }) => {
       return await recallFromVectorStore({
         teamId,
         datasetIds,
+        datasetVectorData,
         vector,
         limit,
+        hnswEfSearch,
         forbidCollectionIdList,
         filterCollectionIdList
       });
@@ -198,12 +217,18 @@ export const embeddingRecall = async ({
     new Set(recallResults.map((item) => item.results.map((item) => item.id?.trim())).flat())
   );
 
+  // 结果回查防御（NFR-8）：数据回查再附加权限过滤集合，防止向量库过滤失效时越权取出 data。
+  // 全快照模型下 filterCollectionIdList 已含权限 ∩ metadata 的有效集合；无过滤时保持原集合。
+  const recallFilterCollectionIdList = filterCollectionIdList
+    ? collectionIdList.filter((id) => filterCollectionIdList.includes(id))
+    : collectionIdList;
+
   const [dataMaps, collectionMaps] = await Promise.all([
     MongoDatasetData.find(
       {
         teamId,
         datasetId: { $in: datasetIds },
-        collectionId: { $in: collectionIdList },
+        collectionId: { $in: recallFilterCollectionIdList },
         'indexes.dataId': { $in: indexDataIds }
       },
       datasetDataSelectField,
@@ -223,7 +248,7 @@ export const embeddingRecall = async ({
       }),
     MongoDatasetCollection.find(
       {
-        _id: { $in: collectionIdList }
+        _id: { $in: recallFilterCollectionIdList }
       },
       datasetCollectionSelectField,
       { ...readFromSecondary }

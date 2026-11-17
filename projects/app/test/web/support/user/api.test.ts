@@ -74,18 +74,6 @@ describe('user api', () => {
     await api.postFindPassword(data);
   });
 
-  it('should update password by old password', async () => {
-    const data = {
-      oldPsw: 'oldpassword',
-      newPsw: 'newpassword'
-    };
-    await api.updatePasswordByOld(data);
-  });
-
-  it('should reset password', async () => {
-    await api.resetPassword('newpassword');
-  });
-
   it('should check password expired', async () => {
     await api.getCheckPswExpired();
   });
@@ -140,8 +128,13 @@ describe('user api', () => {
     });
   });
 
-  it('should get captcha pic', async () => {
+  it('gets the rotation captcha from the shared endpoint', async () => {
     await api.getCaptchaPic('test@test.com', 'register');
+    expect(GET).toHaveBeenCalledWith(
+      '/support/user/account/captcha/getImgCaptcha',
+      { username: 'test@test.com', purpose: 'register' },
+      { timeout: 90_000 }
+    );
   });
 
   it('should get pre login info', async () => {

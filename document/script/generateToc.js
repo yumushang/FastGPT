@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const fg = require('fast-glob');
+const matter = require('gray-matter');
 
 // 假设 i18n.defaultLanguage = 'zh-CN'，这里不用 i18n 直接写两份逻辑即可
 
@@ -16,7 +17,6 @@ const blacklist = [
 function filePathToUrl(filePath, lang) {
   const baseDir = path.join(__dirname, '../content');
   let relativePath = filePath.replace(baseDir, '');
-  const basePath = lang === 'zh-CN' ? '' : '/en';
 
   if (lang !== 'zh-CN' && relativePath.endsWith('.en.mdx')) {
     relativePath = relativePath.replace(/\.en\.mdx$/, '');
@@ -24,7 +24,7 @@ function filePathToUrl(filePath, lang) {
     relativePath = relativePath.replace(/\.mdx$/, '');
   }
 
-  return `${basePath}/${relativePath}`.replace(/\/\/+/g, '/');
+  return `/${relativePath}`.replace(/\/\/+/g, '/').replace(/\/index$/, '');
 }
 
 function isBlacklisted(url) {
@@ -39,6 +39,7 @@ function isZhFile(file) {
   return file.endsWith('.mdx') && !file.endsWith('.en.mdx');
 }
 
+/** 为当前版本已发布的中英文页面生成目录，排除版本快照、草稿及索引页本身。 */
 async function generateToc() {
   // 匹配所有 mdx 文件
   const baseDir = path.join(__dirname, '../content');
@@ -50,9 +51,19 @@ async function generateToc() {
     return !/^\d+\.\d+/.test(top);
   });
 
+  // 目录导出同样排除未发布页面，不因文件仍在仓库而重新加入草稿链接。
+  const publishedFiles = (
+    await Promise.all(
+      latestFiles.map(async (file) => {
+        const { data } = matter(await fs.readFile(file, 'utf8'));
+        return data.draft === true ? undefined : file;
+      })
+    )
+  ).filter(Boolean);
+
   // 筛选中英文文件
-  const zhFiles = latestFiles.filter(isZhFile);
-  const enFiles = latestFiles.filter(isEnFile);
+  const zhFiles = publishedFiles.filter(isZhFile);
+  const enFiles = publishedFiles.filter(isEnFile);
 
   // 生成中文 URL
   const zhUrls = zhFiles
@@ -69,7 +80,7 @@ async function generateToc() {
   const makeMdxContent = (urls, title, isChinese = true) =>
     `---
 title: ${title}
-description: ${isChinese ? 'FastGPT 文档目录' : 'FastGPT Toc'}
+description: ${isChinese ? 'FastGPT 文档目录' : 'Browse the FastGPT documentation by topic.'}
 ---
 
 ${urls.map((url) => `- [${url}](${url})`).join('\n')}
@@ -82,7 +93,7 @@ ${urls.map((url) => `- [${url}](${url})`).join('\n')}
   // 写入文件
   await fs.mkdir(baseDir, { recursive: true });
   await fs.writeFile(zhOutputPath, makeMdxContent(zhUrls, 'FastGPT 文档目录', true), 'utf8');
-  await fs.writeFile(enOutputPath, makeMdxContent(enUrls, 'FastGPT Toc', false), 'utf8');
+  await fs.writeFile(enOutputPath, makeMdxContent(enUrls, 'FastGPT Documentation Index', false), 'utf8');
 
   console.log(`✅ 写入中文目录 ${zhOutputPath}`);
   console.log(`✅ 写入英文目录 ${enOutputPath}`);

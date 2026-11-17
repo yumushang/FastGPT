@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
 
 const mocks = vi.hoisted(() => ({ getUserModelCatalog: vi.fn() }));
-vi.mock('@/web/common/system/api', () => ({ getUserModelCatalog: mocks.getUserModelCatalog }));
+vi.mock('@/web/core/ai/model/catalogApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/web/core/ai/model/catalogApi')>()),
+  getUserModelCatalog: mocks.getUserModelCatalog
+}));
 
 import {
   resetUserModelCatalogAfterLogin,
@@ -34,7 +37,6 @@ const catalogData = {
       type: ModelTypeEnum.llm,
       scope: 'system' as const,
       isActive: true,
-      isCustom: false,
       config: { maxContext: 4096, maxResponse: 1024, quoteMaxToken: 1024 }
     }
   ],
@@ -49,6 +51,17 @@ const catalogData = {
 };
 
 describe('useUserModelStore catalog cache', () => {
+  it('stores only candidates and clears them with the identity', async () => {
+    mocks.getUserModelCatalog.mockResolvedValueOnce({
+      version: 'inactive-v1',
+      data: catalogData
+    });
+    await useUserModelStore.getState().loadModelCatalog({ teamId: 'team', tmbId: 'member' });
+    expect(useUserModelStore.getState().modelList).toEqual(catalogData.models);
+    expect(useUserModelStore.getState().modelMap['inactive-id']).toBeUndefined();
+    useUserModelStore.getState().clearMemory();
+    expect(useUserModelStore.getState().modelList).toEqual([]);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     const storage = createStorage();
@@ -70,7 +83,8 @@ describe('useUserModelStore catalog cache', () => {
 
     expect(mocks.getUserModelCatalog).toHaveBeenLastCalledWith({
       version: 'version-1',
-      outLinkAuthData: undefined
+      outLinkAuthData: undefined,
+      orderBy: 'custom'
     });
     expect(useUserModelStore.getState().modelMap['model-id']?.model).toBe('provider-model');
   });
@@ -91,11 +105,13 @@ describe('useUserModelStore catalog cache', () => {
 
     expect(mocks.getUserModelCatalog).toHaveBeenNthCalledWith(1, {
       version: undefined,
-      outLinkAuthData: undefined
+      outLinkAuthData: undefined,
+      orderBy: 'custom'
     });
     expect(mocks.getUserModelCatalog).toHaveBeenNthCalledWith(2, {
       version: 'version-1',
-      outLinkAuthData: undefined
+      outLinkAuthData: undefined,
+      orderBy: 'custom'
     });
     expect(useUserModelStore.getState().modelMap['updated-model-id']).toBeDefined();
   });
@@ -108,7 +124,8 @@ describe('useUserModelStore catalog cache', () => {
 
     expect(mocks.getUserModelCatalog).toHaveBeenCalledWith({
       version: undefined,
-      outLinkAuthData
+      outLinkAuthData,
+      orderBy: 'custom'
     });
     expect(useUserModelStore.getState().identity).toBe('outlink:share-id');
     expect(localStorage.getItem('fastgpt:model-catalog:v1:outlink:share-id')).toBeNull();
@@ -180,7 +197,8 @@ describe('useUserModelStore catalog cache', () => {
     expect(newCredentialRequest).not.toBe(oldCredentialRequest);
     expect(mocks.getUserModelCatalog).toHaveBeenNthCalledWith(2, {
       version: undefined,
-      outLinkAuthData: { shareId: 'share-id', outLinkUid: 'new-user' }
+      outLinkAuthData: { shareId: 'share-id', outLinkUid: 'new-user' },
+      orderBy: 'custom'
     });
     await newCredentialRequest;
     resolveOldCredentialRequest?.({ version: 'version-1', data: catalogData });

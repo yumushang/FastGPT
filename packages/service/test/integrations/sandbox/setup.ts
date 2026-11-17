@@ -1,3 +1,4 @@
+import { createDefaultInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 import '@test/mocks/common/mongo';
 import { connectMongo } from '@fastgpt/service/common/mongo/init';
 import { connectionLogMongo, connectionMongo } from '@fastgpt/service/common/mongo';
@@ -26,8 +27,8 @@ beforeAll(async () => {
   await connectMongo({ db: connectionLogMongo, url: inject('MONGODB_URI') });
 
   initGlobalVariables();
-  global.systemEnv = {} as typeof global.systemEnv;
-  global.feConfigs = { isPlus: false } as typeof global.feConfigs;
+  global.agentUserTmbIds = new Set();
+  global.systemInstanceConfig = createDefaultInstanceConfig();
   await setupModels();
 });
 

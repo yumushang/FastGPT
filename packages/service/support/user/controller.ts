@@ -7,6 +7,9 @@ import type { ClientSession } from '../../common/mongo';
 import { getUserFallbackTeam } from './team/fallback';
 import { getActiveAccountCancellationByUserId } from './account/cancellation/read';
 import { formatTeamAccountCancellationSummary } from './account/cancellation/formatter';
+import { hasStoredPassword } from '@fastgpt/global/support/user/utils';
+import { getUserPasswordAvailability } from './account/password/service';
+import { SsoConfigurationUnavailableError } from '../../common/system/sso';
 
 export async function authUserExist({ userId, username }: { userId?: string; username?: string }) {
   if (userId) {
@@ -20,17 +23,23 @@ export async function authUserExist({ userId, username }: { userId?: string; use
 
 /**
  * 加载用户及团队详情；tmb 失效时回退到用户可用团队。
+ * 只有显式传入创建回调的登录流程，才允许在没有可用团队时补建团队。
  */
 export async function getUserDetail({
   tmbId,
   userId,
   isRoot = false,
-  session
+  session,
+  createTeamIfUnavailable
 }: {
   tmbId?: string;
   userId?: string;
   isRoot?: boolean;
   session?: ClientSession;
+  createTeamIfUnavailable?: (params: {
+    userId: string;
+    session?: ClientSession;
+  }) => Promise<string | null | undefined>;
 }): Promise<UserType> {
   const tmb = await (async () => {
     if (tmbId) {
@@ -46,9 +55,16 @@ export async function getUserDetail({
       });
       if (fallback) return getTmbInfoByTmbId({ tmbId: fallback.tmbId, session });
     }
+    if (userId && createTeamIfUnavailable) {
+      const fallbackTmbId = await createTeamIfUnavailable({
+        userId: String(userId),
+        session
+      });
+      if (fallbackTmbId) return getTmbInfoByTmbId({ tmbId: fallbackTmbId, session });
+    }
     return Promise.reject(ERROR_ENUM.unAuthorization);
   })();
-  const query = MongoUser.findById(tmb.userId);
+  const query = MongoUser.findById(tmb.userId).select('+password');
   if (session) query.session(session);
   const user = await query;
 
@@ -66,6 +82,7 @@ export async function getUserDetail({
   return {
     _id: String(user._id),
     username: user.username,
+    status: user.status,
     avatar: tmb.avatar,
     timezone: user.timezone,
     team,
@@ -75,6 +92,12 @@ export async function getUserDetail({
     tags: user.tags,
     ...(accountCancellation
       ? { accountCancellation: formatTeamAccountCancellationSummary(accountCancellation) }
-      : {})
+      : {}),
+    hasPassword: hasStoredPassword(user.password),
+    // 详情展示遇到 Pro 短暂不可用时保守隐藏密码入口，不能阻断已登录用户的普通操作。
+    passwordAvailable: await getUserPasswordAvailability(user.username).catch((error: unknown) => {
+      if (error instanceof SsoConfigurationUnavailableError) return false;
+      throw error;
+    })
   };
 }

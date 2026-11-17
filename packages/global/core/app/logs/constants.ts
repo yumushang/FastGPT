@@ -2,7 +2,9 @@ import { i18nT } from '../../../common/i18n/utils';
 
 export enum AppLogKeysEnum {
   SOURCE = 'source',
+  PUBLISH_SOURCE_TYPE = 'publishSourceType',
   USER = 'user',
+  AUTH_USER = 'authUser',
   TITLE = 'title',
   SESSION_ID = 'sessionId',
   CREATED_TIME = 'createdTime',
@@ -19,8 +21,10 @@ export enum AppLogKeysEnum {
 }
 
 export const AppLogKeysEnumMap = {
+  [AppLogKeysEnum.PUBLISH_SOURCE_TYPE]: i18nT('app:logs_keys_publish_source_type'),
   [AppLogKeysEnum.SOURCE]: i18nT('app:logs_keys_source'),
   [AppLogKeysEnum.USER]: i18nT('app:logs_keys_user'),
+  [AppLogKeysEnum.AUTH_USER]: i18nT('app:logs_keys_auth_user'),
   [AppLogKeysEnum.TITLE]: i18nT('app:logs_keys_title'),
   [AppLogKeysEnum.SESSION_ID]: i18nT('app:logs_keys_sessionId'),
   [AppLogKeysEnum.CREATED_TIME]: i18nT('app:logs_keys_createdTime'),
@@ -37,8 +41,10 @@ export const AppLogKeysEnumMap = {
 };
 
 export const DefaultAppLogKeys = [
+  { key: AppLogKeysEnum.PUBLISH_SOURCE_TYPE, enable: true },
   { key: AppLogKeysEnum.SOURCE, enable: false },
   { key: AppLogKeysEnum.USER, enable: true },
+  { key: AppLogKeysEnum.AUTH_USER, enable: false },
   { key: AppLogKeysEnum.TITLE, enable: true },
   { key: AppLogKeysEnum.SESSION_ID, enable: false },
   { key: AppLogKeysEnum.CREATED_TIME, enable: false },
@@ -91,6 +97,9 @@ export const fakeChartData = {
       newUserCount: 5,
       retentionUserCount: 3,
       points: 100,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 1,
         online: 1,
@@ -101,7 +110,8 @@ export const fakeChartData = {
         feishu: 0,
         official_account: 1,
         wecom: 1,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -111,6 +121,9 @@ export const fakeChartData = {
       newUserCount: 8,
       retentionUserCount: 4,
       points: 160,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 2,
         online: 2,
@@ -121,7 +134,8 @@ export const fakeChartData = {
         feishu: 0,
         official_account: 1,
         wecom: 1,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -131,6 +145,9 @@ export const fakeChartData = {
       newUserCount: 12,
       retentionUserCount: 6,
       points: 220,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 2,
         online: 3,
@@ -141,7 +158,8 @@ export const fakeChartData = {
         feishu: 0,
         official_account: 1,
         wecom: 1,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -151,6 +169,9 @@ export const fakeChartData = {
       newUserCount: 7,
       retentionUserCount: 8,
       points: 180,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 1,
         online: 2,
@@ -161,7 +182,8 @@ export const fakeChartData = {
         feishu: 1,
         official_account: 1,
         wecom: 0,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -171,6 +193,9 @@ export const fakeChartData = {
       newUserCount: 15,
       retentionUserCount: 5,
       points: 250,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 2,
         online: 4,
@@ -181,7 +206,8 @@ export const fakeChartData = {
         feishu: 1,
         official_account: 1,
         wecom: 0,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -191,6 +217,9 @@ export const fakeChartData = {
       newUserCount: 6,
       retentionUserCount: 8,
       points: 170,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 1,
         online: 3,
@@ -201,7 +230,8 @@ export const fakeChartData = {
         feishu: 1,
         official_account: 1,
         wecom: 0,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     },
     {
@@ -211,6 +241,9 @@ export const fakeChartData = {
       newUserCount: 17,
       retentionUserCount: 5,
       points: 280,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       sourceCountMap: {
         test: 2,
         online: 5,
@@ -221,7 +254,8 @@ export const fakeChartData = {
         feishu: 1,
         official_account: 1,
         wecom: 0,
-        mcp: 0
+        mcp: 0,
+        dingtalk: 0
       }
     }
   ],
@@ -344,6 +378,8 @@ export const fakeChartData = {
   cumulative: {
     userCount: 109,
     points: 1360,
+    inputTokens: 0,
+    outputTokens: 0,
     chatItemCount: 280,
     chatCount: 177,
     pointsPerChat: 7.2,

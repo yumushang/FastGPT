@@ -14,7 +14,9 @@ import {
 } from '../../../../src/web/common/api/request';
 import {
   FASTGPT_LANGUAGE_HEADER,
-  FASTGPT_SHARE_LANGUAGE_HEADER
+  FASTGPT_SHARE_LANGUAGE_HEADER,
+  FASTGPT_WEB_REQUEST_HEADER,
+  FASTGPT_WEB_REQUEST_VALUE
 } from '@fastgpt/global/common/system/constants';
 import {
   LANG_KEY,
@@ -27,6 +29,7 @@ import { TOKEN_ERROR_CODE } from '@fastgpt/global/common/error/errorCode';
 import { ToastHandledError } from '@fastgpt/global/common/error/utils';
 import { clearToken } from '@/web/support/user/auth';
 import { beginLogout, resetLogoutState } from '@/web/support/user/logoutState';
+import { getDashboardData, getUserUsages } from '@/web/support/wallet/usage/api';
 
 // Mock all required dependencies
 vi.mock('@fastgpt/web/common/system/utils', () => ({
@@ -81,6 +84,66 @@ describe('request utils', () => {
     resetLogoutState();
     mockLocation.pathname = '/test';
     dispatchEventMock.mockReturnValue(true);
+  });
+
+  it('preserves inclusive date boundaries and milliseconds in GET and POST requests', async () => {
+    const start = new Date(2026, 10, 2, 0, 0, 0, 0);
+    const end = new Date(2026, 10, 9, 23, 59, 59, 999);
+    const spy = vi
+      .spyOn(instance, 'request')
+      .mockResolvedValue({ data: { code: 200, data: null } });
+    try {
+      await GET('/test', { dateStart: start, dateEnd: end });
+      await POST('/test', { dateStart: start, dateEnd: end });
+      const [get, post] = spy.mock.calls.slice(-2).map(([config]) => config);
+      for (const body of [get.params, post.data]) {
+        expect(body.dateStart).toMatch(/T00:00:00\.000[+-]\d{2}:\d{2}$/);
+        expect(body.dateEnd).toMatch(/T23:59:59\.999[+-]\d{2}:\d{2}$/);
+        expect(new Date(body.dateStart).getTime()).toBe(start.getTime());
+        expect(new Date(body.dateEnd).getTime()).toBe(end.getTime());
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('aborts the previous usage request per endpoint and keeps the latest request registered', async () => {
+    const pending: { signal: AbortSignal; resolve: (value: any) => void }[] = [];
+    const spy = vi.spyOn(instance, 'request').mockImplementation(
+      (config) =>
+        new Promise((resolve, reject) => {
+          const signal = config.signal as AbortSignal;
+          pending.push({ signal, resolve });
+          signal.addEventListener('abort', () => reject({ code: 'ERR_CANCELED' }), { once: true });
+        })
+    );
+    try {
+      const body = {
+        dateStart: '2026-11-01T00:00:00Z',
+        dateEnd: '2026-11-02T00:00:00Z',
+        unit: 'day' as const
+      };
+      const oldList = getUserUsages(body).catch((error) => error);
+      const oldDashboard = getDashboardData(body).catch((error) => error);
+      expect(pending.map(({ signal }) => signal.aborted)).toEqual([false, false]);
+
+      const latestList = getUserUsages(body);
+      const latestDashboard = getDashboardData(body);
+      expect(pending.map(({ signal }) => signal.aborted)).toEqual([true, true, false, false]);
+      await expect(oldList).resolves.toMatchObject({ code: 'ERR_CANCELED' });
+      await expect(oldDashboard).resolves.toMatchObject({ code: 'ERR_CANCELED' });
+      expect(maxQuantityMap['/proApi/support/wallet/usage/getUsage']).toHaveLength(1);
+      expect(maxQuantityMap['/proApi/support/wallet/usage/getDashboardData']).toHaveLength(1);
+
+      pending[2].resolve({ data: { code: 200, data: { list: [], total: 0 } } });
+      pending[3].resolve({ data: { code: 200, data: [] } });
+      await expect(latestList).resolves.toEqual({ list: [], total: 0 });
+      await expect(latestDashboard).resolves.toEqual([]);
+      expect(maxQuantityMap['/proApi/support/wallet/usage/getUsage']).toBeUndefined();
+      expect(maxQuantityMap['/proApi/support/wallet/usage/getDashboardData']).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   describe('deduplicate request', () => {
@@ -214,6 +277,13 @@ describe('request utils', () => {
     });
   });
 
+  describe('web request header', () => {
+    it('adds the Web header to requests even without language headers', () => {
+      const config = startInterceptors({ headers: {}, method: 'GET' } as any);
+
+      expect(config.headers?.[FASTGPT_WEB_REQUEST_HEADER]).toBe(FASTGPT_WEB_REQUEST_VALUE);
+    });
+  });
   describe('raw request body', () => {
     it('should send File without mutating its readonly properties', async () => {
       const file = new File(['skill package'], 'skill.zip', { type: 'application/octet-stream' });
@@ -243,9 +313,10 @@ describe('request utils', () => {
     });
 
     it('should handle first request', () => {
-      const result = checkMaxQuantity({ url: 'test', maxQuantity: 2 });
+      const cancelToken = new AbortController();
+      const result = checkMaxQuantity({ url: 'test', maxQuantity: 2, cancelToken });
       expect(result.id).toBeDefined();
-      expect(result.abortSignal).toBeDefined();
+      expect(result.abortSignal).toBe(cancelToken.signal);
       expect(maxQuantityMap['test']?.length).toBe(1);
     });
 
@@ -284,6 +355,7 @@ describe('request utils', () => {
     });
 
     it('should reject for undefined response', async () => {
+      // @ts-expect-error 验证运行时收到非法空响应时的处理。
       await expect(checkRes(undefined)).rejects.toBe('服务器异常');
     });
   });

@@ -1,40 +1,42 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getSystemInstanceConfig } from '@fastgpt/service/common/system/systemInstanceConfig/runtime';
 import handler from '@/pages/api/core/dataset/training/rebuildEmbedding';
-import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection/schema';
-import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
-import { MongoDataset } from '@fastgpt/service/core/dataset/schema';
-import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
+import type {
+  EmbeddingModelDataType,
+  LLMModelDataType
+} from '@fastgpt/global/core/ai/model/schema';
+import { ModelScopeEnum } from '@fastgpt/global/core/ai/constants';
 import {
   DatasetCollectionTypeEnum,
   TrainingModeEnum
 } from '@fastgpt/global/core/dataset/constants';
 import { DatasetDataIndexTypeEnum } from '@fastgpt/global/core/dataset/data/constants';
-import { getRootUser } from '@test/datas/users';
-import { Call } from '@test/utils/request';
-import {
-  getEmbeddingModelData,
-  getLLMModelData,
-  getVlmModelData
-} from '@fastgpt/service/core/ai/model';
-import type {
-  EmbeddingSystemModelDataType,
-  LLMSystemModelDataType
-} from '@fastgpt/global/core/ai/model.schema';
 import { connectionMongo } from '@fastgpt/service/common/mongo';
 import { mongoSessionRun } from '@fastgpt/service/common/mongo/sessionRun';
+import * as modelCatalogService from '@fastgpt/service/core/ai/model/catalog/service';
+import { MongoDatasetCollection } from '@fastgpt/service/core/dataset/collection/schema';
+import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
+import { MongoDataset } from '@fastgpt/service/core/dataset/schema';
+import { MongoDatasetTraining } from '@fastgpt/service/core/dataset/training/schema';
+import { MongoTeamAudit } from '@fastgpt/service/support/user/audit/schema';
+import { getRootUser } from '@test/datas/users';
+import { addModelTestModel, getModelTestDefaults } from '@test/modelCache';
+import { Call } from '@test/utils/request';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+vi.unmock('@fastgpt/service/core/ai/model/catalog/service');
+vi.unmock('@fastgpt/service/support/user/audit/util');
 
 let testRoot: Awaited<ReturnType<typeof getRootUser>>;
-let visionEmbeddingModel: EmbeddingSystemModelDataType;
-let textOnlyEmbeddingModel: EmbeddingSystemModelDataType;
-let datasetVlmModel: LLMSystemModelDataType;
-let agentModel: LLMSystemModelDataType;
+let visionEmbeddingModel: EmbeddingModelDataType;
+let textOnlyEmbeddingModel: EmbeddingModelDataType;
+let datasetVlmModel: LLMModelDataType;
+let agentModel: LLMModelDataType;
 
 const createDatasetContext = async ({
   currentVectorModel = textOnlyEmbeddingModel,
   vlmModel
 }: {
-  currentVectorModel?: EmbeddingSystemModelDataType;
-  vlmModel?: LLMSystemModelDataType;
+  currentVectorModel?: EmbeddingModelDataType;
+  vlmModel?: LLMModelDataType;
 } = {}) => {
   const root = testRoot;
   const dataset = await MongoDataset.create({
@@ -60,12 +62,10 @@ const createDatasetContext = async ({
 describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
   beforeEach(async () => {
     testRoot = await getRootUser();
-    global.systemEnv = {
-      ...global.systemEnv,
-      vectorMaxProcess: 1
-    };
-    agentModel = global.systemDefaultModel.llm;
-    const defaultEmbeddingModel = global.systemDefaultModel.embedding;
+    getSystemInstanceConfig().performance.dataset.vectorMaxProcess = 1;
+    const { llm, embedding: defaultEmbeddingModel } = getModelTestDefaults();
+    if (!llm || !defaultEmbeddingModel) throw new Error('Default test models are not initialized');
+    agentModel = llm;
     visionEmbeddingModel = {
       ...defaultEmbeddingModel,
       modelId: '507f1f77bcf86cd799439012',
@@ -98,21 +98,11 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
     };
 
     [visionEmbeddingModel, textOnlyEmbeddingModel, datasetVlmModel].forEach((model) => {
-      global.systemModelMap.set(`id:${model.modelId}`, model);
-      global.systemModelMap.set(`model:${model.model}`, model);
-    });
-
-    // 全局测试环境会固定 mock embedding 模型；本组用例需要验证按 ID 切换后的真实能力。
-    vi.mocked(getEmbeddingModelData).mockImplementation(({ modelId, model }) => {
-      const modelData = global.systemModelMap.get(modelId ? `id:${modelId}` : `model:${model}`) as
-        | EmbeddingSystemModelDataType
-        | undefined;
-      if (!modelData) throw new Error('模型不存在');
-      return modelData;
+      addModelTestModel(model);
     });
   });
 
-  it('should keep image index and enqueue image mode when the new embedding model supports images', async () => {
+  it('should keep image index and enqueue only rebuild mode when the new embedding model supports images', async () => {
     const { root, dataset, collection } = await createDatasetContext();
     const data = await MongoDatasetData.create({
       teamId: root.teamId,
@@ -129,11 +119,21 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
       ]
     });
 
-    expect(getEmbeddingModelData({ modelId: visionEmbeddingModel.modelId })).toEqual(
-      visionEmbeddingModel
-    );
-    expect(getLLMModelData({ modelId: agentModel.modelId })).toEqual(agentModel);
+    expect(
+      (await modelCatalogService.getSystemModelHandle()).getModelData(
+        { modelId: visionEmbeddingModel.modelId },
+        { type: 'embedding' }
+      )
+    ).toEqual(visionEmbeddingModel);
+    expect(
+      (await modelCatalogService.getSystemModelHandle()).getModelData(
+        { modelId: agentModel.modelId },
+        { type: 'llm' }
+      )
+    ).toEqual(agentModel);
 
+    const getTeamModelHandleSpy = vi.spyOn(modelCatalogService, 'getTeamModelHandle');
+    onTestFinished(() => getTeamModelHandleSpy.mockRestore());
     const res = await Call(handler, {
       auth: root,
       body: {
@@ -148,24 +148,42 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
 
     expect(res.error).toBeUndefined();
     expect(res.code).toBe(200);
+    // 目录只在鉴权时读取一次，审计必须复用快照，不能额外发起主库版本查询。
+    expect(getTeamModelHandleSpy).toHaveBeenCalledTimes(1);
     expect(String(updatedDataset?.vectorModelId)).toBe(visionEmbeddingModel.modelId);
     expect(updatedCollection?.imageIndex).toBe(true);
     expect(training).toEqual(
       expect.objectContaining({
-        mode: TrainingModeEnum.image,
-        q: 'question with ![cat](dataset/team/cat.png)',
-        retryCount: 50
+        mode: TrainingModeEnum.rebuildIndex,
+        q: '',
+        retryCount: 3
       })
     );
-    expect(training?.indexes).toEqual([
-      expect.objectContaining({
-        type: DatasetDataIndexTypeEnum.custom,
-        text: 'manual index'
-      })
-    ]);
+    expect(training?.indexes).toEqual([]);
+
+    // 审计在重建任务落库后异步写入：正文用模型展示名，内部 ID 单独保留以便排查改名。
+    await vi.waitFor(
+      async () => {
+        const logs = await MongoTeamAudit.find({
+          teamId: root.teamId,
+          event: 'dataset.index.rebuild'
+        }).lean();
+        expect(logs).toHaveLength(1);
+        expect(logs[0].metadata).toEqual(
+          expect.objectContaining({
+            datasetName: 'test dataset',
+            oldModelName: textOnlyEmbeddingModel.name,
+            newModelName: visionEmbeddingModel.name,
+            oldModelId: textOnlyEmbeddingModel.modelId,
+            newModelId: visionEmbeddingModel.modelId
+          })
+        );
+      },
+      { timeout: 5000 }
+    );
   });
 
-  it('should disable image index and enqueue chunk mode when the new embedding model has no image capability', async () => {
+  it('should disable image index and enqueue rebuild mode when the new embedding model has no image capability', async () => {
     const { root, dataset, collection } = await createDatasetContext({
       currentVectorModel: visionEmbeddingModel
     });
@@ -195,14 +213,14 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
     expect(updatedCollection?.imageIndex).toBe(false);
     expect(training).toEqual(
       expect.objectContaining({
-        mode: TrainingModeEnum.chunk,
-        retryCount: 50
+        mode: TrainingModeEnum.rebuildIndex,
+        retryCount: 3
       })
     );
     expect(training?.q).toBe('');
   });
 
-  it('should enqueue imageParse mode with VLM model for image data when VLM is configured', async () => {
+  it('should enqueue only rebuild mode for image data when VLM is configured', async () => {
     const { root, dataset, collection } = await createDatasetContext({
       currentVectorModel: visionEmbeddingModel,
       vlmModel: datasetVlmModel
@@ -216,7 +234,12 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
       imageId: 'dataset/team/main.png'
     });
 
-    expect(getVlmModelData({ modelId: datasetVlmModel.modelId })).toEqual(datasetVlmModel);
+    expect(
+      (await modelCatalogService.getSystemModelHandle()).getModelData(
+        { modelId: datasetVlmModel.modelId },
+        { type: 'llm', vision: true }
+      )
+    ).toEqual(datasetVlmModel);
 
     const res = await Call(handler, {
       auth: root,
@@ -231,9 +254,8 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
     expect(res.code).toBe(200);
     expect(training).toEqual(
       expect.objectContaining({
-        mode: TrainingModeEnum.imageParse,
-        imageId: 'dataset/team/main.png',
-        retryCount: 50
+        mode: TrainingModeEnum.rebuildIndex,
+        retryCount: 3
       })
     );
   });
@@ -247,7 +269,7 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
       collectionId: collection._id,
       q: 'pending',
       indexes: [],
-      rebuilding: true
+      indexStatus: 'rebuildIndexPending'
     });
 
     const res = await Call(handler, {
@@ -309,8 +331,33 @@ describe('POST /api/core/dataset/training/rebuildEmbedding', () => {
       vectorModelId: visionEmbeddingModel.modelId
     });
     await expect(MongoDatasetData.findById(data._id).lean()).resolves.toMatchObject({
-      rebuilding: true
+      indexStatus: 'rebuildIndexPending'
     });
     await expect(MongoDatasetTraining.countDocuments({ datasetId: dataset._id })).resolves.toBe(0);
+  });
+
+  it('should reject rebuilding with an unauthorized team vector model', async () => {
+    const { root, dataset } = await createDatasetContext();
+    const unauthorizedTeamEmbedding: EmbeddingModelDataType = {
+      ...visionEmbeddingModel,
+      modelId: '507f1f77bcf86cd799439099',
+      model: 'unauthorized-embedding',
+      name: 'unauthorized-embedding',
+      scope: ModelScopeEnum.team,
+      teamId: '507f1f77bcf86cd799439088',
+      tmbId: '507f1f77bcf86cd799439077'
+    };
+    addModelTestModel(unauthorizedTeamEmbedding);
+
+    const res = await Call(handler, {
+      auth: root,
+      body: {
+        datasetId: String(dataset._id),
+        vectorModelId: unauthorizedTeamEmbedding.modelId
+      }
+    });
+
+    expect(res.error).toBeDefined();
+    expect(res.code).toBe(500);
   });
 });

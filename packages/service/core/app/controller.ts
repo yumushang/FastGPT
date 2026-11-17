@@ -1,25 +1,27 @@
 import { type AppSchemaType } from '@fastgpt/global/core/app/type';
-import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
+import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
-import { SystemToolSecretInputTypeEnum } from '@fastgpt/global/core/app/tool/systemTool/constants';
+import { isSystemOrCommercialToolId } from '@fastgpt/global/core/app/tool/utils';
+import { StoreSecretValueTypeSchema } from '@fastgpt/global/common/secret/type';
+import { HttpToolSetRuntimeConfigSchema } from '@fastgpt/global/core/workflow/type/node';
 import { MongoApp } from './schema';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import { getClientToolPreviewNode } from './tool/utils/client';
-import { formatToolInputSecrets } from './tool/secretConfig';
+import { formatToolConfigHeaderSecrets, formatToolInputSecrets } from './tool/secretConfig';
+import { storeSecretValue } from '../../common/secret/utils';
 import { MongoEvaluation } from './evaluation/evalSchema';
 import { removeEvaluationJob } from './evaluation/mq';
 import { MongoOutLink } from '../../support/outLink/schema';
 import { MongoOpenApi } from '../../support/openapi/schema';
+import { getOpenApiTypeFilter, getOpenApiAppIdFilter } from '../../support/openapi/utils';
+import { ApiKeyTypeEnum } from '@fastgpt/global/support/openapi/constants';
 import { MongoAppVersion } from './version/schema';
 import { MongoChatInputGuide } from '../chat/inputGuide/schema';
 import { MongoChatFavouriteApp } from '../chat/favouriteApp/schema';
 import { MongoChatSetting } from '../chat/setting/schema';
 import { resourcePermissionRepo } from '../../support/permission/repository/resourcePermissionRepo';
-import {
-  PerResourceTypeEnum,
-  ReadPermissionVal
-} from '@fastgpt/global/support/permission/constant';
+import { PerResourceTypeEnum } from '@fastgpt/global/support/permission/constant';
 import { removeImageByPath } from '../../common/file/image/controller';
 import { MongoAppLogKeys } from './logs/logkeysSchema';
 import { MongoAppChatLog } from './logs/chatLogsSchema';
@@ -27,6 +29,7 @@ import { MongoAppRegistration } from '../../support/appRegistration/schema';
 import { MongoMcpKey } from '../../support/mcp/schema';
 import { MongoAppRecord } from './record/schema';
 import { mongoSessionRun } from '../../common/mongo/sessionRun';
+import { type ClientSession } from '../../common/mongo';
 import { getLogger, LogCategories } from '../../common/logger';
 import { deleteAppSandboxes } from '../ai/sandbox/interface/resource/sourceCleanup';
 import { MongoSystemTool } from '../plugin/tool/systemToolSchema';
@@ -35,8 +38,8 @@ import {
   type AppFormEditFormType
 } from '@fastgpt/global/core/app/formEdit/type';
 import z from 'zod';
-import { nodeInputIsReference } from '@fastgpt/global/core/workflow/utils';
-import { authSkillByTmbId } from '../../support/permission/skill/auth';
+import { nodeInputIsReference } from '@fastgpt/global/common/workflow/reference';
+import { normalizeDatasetSelectValue } from '@fastgpt/global/common/workflow/input';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { deleteChatResourcesBySource } from '../chat/delete';
 
@@ -45,48 +48,69 @@ const logger = getLogger(LogCategories.MODULE.APP.FOLDER);
 /**
  * 在更新应用前，对工作流节点数据进行格式化和安全处理。
  * 主要职责：
- * 1. 知识库：统一数据结构为 { datasetId: string }[]。
- * 2. Skill: 统一数据结构为 { skillId: string }[]。
- * 2. 敏感信息（如 Header Secret、密码类型输入、系统工具手动配置的密钥）进行加密存储。
+ * 1. 知识库：仅保存 datasetId，展示信息由应用详情接口实时补全。
+ * 2. Skill: 移除编辑态状态并保留展示快照（skillId, avatar, name, description）。
+ * 3. 密钥输入与 MCP/HTTP 工具集鉴权：使用服务级密钥加密。
  */
 export const beforeUpdateAppFormat = async ({
   nodes,
   teamId
 }: {
   nodes?: StoreNodeItemType[];
-  teamId: string;
+  teamId?: string;
 }) => {
   if (!nodes) return;
 
-  const StoredSelectedDatasetSchema = z.object({
-    datasetId: z.string()
-  });
-
   /**
-   * 格式化数据集选择值，保存阶段只保留 datasetId，移除编辑态快照字段。
+   * 格式化知识库选择值，仅保留 datasetId；详情接口实时补全展示信息，编辑态临时字段不落库。
    * 引用模式由调用处判断并跳过，避免把 [nodeId, key] 误压缩成空数组。
    * 未配置的草稿节点按空数组保存，仍由发布/运行前的工作流校验提示必填。
    * 兼容历史单选格式 { datasetId }，避免旧应用再次保存时丢失知识库配置。
+   * 过滤无效项，避免旧引用值或导入脏数据阻断保存；不展开嵌套数组猜测其业务语义。
    */
   const formatDatasetSelectValue = (value: unknown) => {
-    if (value === undefined || value === null) return [];
-
-    const datasets = z
-      .union([StoredSelectedDatasetSchema, z.array(StoredSelectedDatasetSchema)])
-      .parse(value);
-
-    const datasetList = Array.isArray(datasets) ? datasets : [datasets];
-    return datasetList.map(({ datasetId }) => ({ datasetId }));
+    return normalizeDatasetSelectValue(value).map(({ datasetId }) => ({ datasetId }));
   };
 
   nodes.forEach((node) => {
+    const mcpToolSet = node.toolConfig?.mcpToolSet;
+    if (
+      mcpToolSet &&
+      'url' in mcpToolSet &&
+      mcpToolSet.headerSecret !== null &&
+      mcpToolSet.headerSecret !== undefined
+    ) {
+      mcpToolSet.headerSecret = storeSecretValue(mcpToolSet.headerSecret);
+    }
+    const httpToolSet = node.toolConfig?.httpToolSet;
+    if (httpToolSet && !('toolId' in httpToolSet)) {
+      const headerSecret = StoreSecretValueTypeSchema.safeParse(httpToolSet.headerSecret);
+      if (headerSecret.success) {
+        Object.assign(httpToolSet, { headerSecret: storeSecretValue(headerSecret.data) });
+      }
+
+      const runtimeToolSet = HttpToolSetRuntimeConfigSchema.safeParse(httpToolSet);
+      if (runtimeToolSet.success) {
+        const toolList = runtimeToolSet.data.toolList.map((tool, index) => {
+          if (tool.headerSecret === undefined || tool.headerSecret === null) {
+            return httpToolSet.toolList[index];
+          }
+          return {
+            ...httpToolSet.toolList[index],
+            headerSecret: storeSecretValue(tool.headerSecret)
+          };
+        });
+        Object.assign(httpToolSet, { toolList });
+      }
+    }
+
     const isDatasetNode =
       node.flowNodeType === FlowNodeTypeEnum.datasetSearchNode ||
       node.flowNodeType === FlowNodeTypeEnum.agent;
 
     // Format header secret
     node.inputs.forEach((input) => {
-      formatToolInputSecrets({ inputs: [input] });
+      formatToolInputSecrets({ inputs: [input], flowNodeType: node.flowNodeType });
       if (nodeInputIsReference(input)) return;
       // 知识库
       if (isDatasetNode) {
@@ -125,6 +149,8 @@ export const beforeUpdateAppFormat = async ({
 
       await Promise.all(
         selectedToolsInput.value.map(async (selectedTool: any) => {
+          // 即使工具预览不可用，已确认的鉴权容器也不能保存明文。
+          formatToolConfigHeaderSecrets(selectedTool?.toolConfig);
           if (!selectedTool?.id || !selectedTool.config) return;
 
           try {
@@ -132,6 +158,7 @@ export const beforeUpdateAppFormat = async ({
               appId: selectedTool.id,
               versionId: selectedTool.version,
               source: selectedTool.source,
+              lang: selectedTool.metadataLocale ?? 'en',
               teamId
             });
             const inputMap = new Map(preview.inputs.map((input) => [input.key, input]));
@@ -142,63 +169,27 @@ export const beforeUpdateAppFormat = async ({
             configInputs.forEach((input) => {
               input.value = selectedTool.config[input.key];
             });
-            formatToolInputSecrets({ inputs: configInputs });
+            formatToolInputSecrets({ inputs: configInputs, flowNodeType: preview.flowNodeType });
             configInputs.forEach((input) => {
               selectedTool.config[input.key] = input.value;
             });
           } catch {
-            // 工具已删除或暂时不可用时，至少清理嵌套 system/team 临时值。
-            const systemInput = selectedTool.config.system_input_config;
-            if (
-              systemInput &&
-              typeof systemInput === 'object' &&
-              systemInput.type !== SystemToolSecretInputTypeEnum.manual
-            ) {
-              delete systemInput.value;
-            }
+            // 预览不可用时，只对可确认身份的系统工具清理临时值，不能猜测业务参数。
+            if (!isSystemOrCommercialToolId(selectedTool.id)) return;
+            formatToolInputSecrets({
+              flowNodeType: FlowNodeTypeEnum.tool,
+              inputs: [
+                {
+                  key: NodeInputKeyEnum.systemInputConfig,
+                  renderTypeList: [],
+                  value: selectedTool.config[NodeInputKeyEnum.systemInputConfig]
+                }
+              ]
+            });
           }
         })
       );
     })
-  );
-};
-
-/**
- * 发布应用前校验静态绑定的 Agent Skill 对当前成员可读。
- * 引用输入在发布阶段没有确定值，运行时会按实际值再次过滤。
- */
-export const validatePublishAppAgentSkillReadPermissions = async ({
-  nodes,
-  tmbId,
-  isRoot = false
-}: {
-  nodes?: StoreNodeItemType[];
-  tmbId: string;
-  isRoot?: boolean;
-}) => {
-  if (!nodes) return;
-
-  const skillIds = new Set<string>();
-  for (const node of nodes) {
-    for (const input of node.inputs) {
-      if (input.key !== NodeInputKeyEnum.skills || nodeInputIsReference(input)) continue;
-
-      const skills = z.array(StoredSelectedAgentSkillItemTypeSchema).parse(input.value);
-      for (const skill of skills) {
-        skillIds.add(skill.skillId);
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from(skillIds).map((skillId) =>
-      authSkillByTmbId({
-        tmbId,
-        skillId,
-        per: ReadPermissionVal,
-        isRoot
-      })
-    )
   );
 };
 
@@ -288,20 +279,14 @@ export const deleteAppDataProcessor = async ({
   });
   await MongoAppChatLog.deleteMany({ teamId, appId });
 
-  // 3. 删除应用相关数据（使用事务）
+  // 3. 清理外部引用与快捷入口（分享链接、精选应用、快捷应用、MCP Key 关联，兼容旧 MQ 或补偿执行）
+  await cleanupAppDirectRefs({ teamId, appIds: [appId] });
+
   {
-    // 删除分享链接
-    await MongoOutLink.deleteMany({ appId });
-    // 旧应用 APIKey 保留为系统 APIKey，仅移除 deprecated appId 兼容字段。
-    await MongoOpenApi.updateMany({ appId }, { $unset: { appId: '' } });
     // 删除应用版本
     await MongoAppVersion.deleteMany({ appId });
     // 删除聊天输入引导
     await MongoChatInputGuide.deleteMany({ appId });
-    // 删除精选应用记录
-    await MongoChatFavouriteApp.deleteMany({ teamId, appId });
-    // 从快捷应用中移除对应应用
-    await MongoChatSetting.updateMany({ teamId }, { $pull: { quickAppIds: { $in: [appId] } } });
     // 删除权限记录
     await resourcePermissionRepo.deleteByResource({
       resourceType: PerResourceTypeEnum.app,
@@ -310,47 +295,103 @@ export const deleteAppDataProcessor = async ({
     });
     // 删除日志密钥
     await MongoAppLogKeys.deleteMany({ appId });
-
     // 删除应用注册记录
     await MongoAppRegistration.deleteMany({ appId });
-    // 删除应用从MCP key apps数组中移除
-    await MongoMcpKey.updateMany({ teamId, 'apps.appId': appId }, { $pull: { apps: { appId } } });
 
     // 删除应用本身
     await MongoApp.deleteOne({ _id: appId });
   }
 };
 
-export const deleteAppsImmediate = async ({
+/**
+ * 清理应用的外部引用与快捷入口（分享链接、精选应用、快捷应用、MCP Key 关联）。
+ * 在应用删除时立即执行，并在 MQ 异步清理中幂等兜底执行。
+ */
+export const cleanupAppDirectRefs = async ({
   teamId,
-  appIds
+  appIds,
+  session
 }: {
   teamId: string;
   appIds: string[];
+  session?: ClientSession;
 }) => {
+  if (appIds.length === 0) return;
+
+  // 应用凭证随绑定应用删除，不能解除绑定后提升为个人凭证。
+  await MongoOpenApi.deleteMany(
+    { teamId, ...getOpenApiTypeFilter(ApiKeyTypeEnum.app), ...getOpenApiAppIdFilter(appIds) },
+    { session }
+  );
+  // 个人 Key 的历史 appId 只是默认目标；删除应用时解除默认值，保留凭证及其他资源权限。
+  await MongoOpenApi.updateMany(
+    {
+      teamId,
+      ...getOpenApiTypeFilter(ApiKeyTypeEnum.personal),
+      ...getOpenApiAppIdFilter(appIds)
+    },
+    { $unset: { appId: '', appName: '' } },
+    { session }
+  );
+  // 删除分享链接
+  await MongoOutLink.deleteMany({ teamId, appId: { $in: appIds } }, { session });
+  // 删除精选应用记录
+  await MongoChatFavouriteApp.deleteMany({ teamId, appId: { $in: appIds } }, { session });
+  // 从快捷应用中移除对应应用
+  await MongoChatSetting.updateMany(
+    { teamId },
+    { $pull: { quickAppIds: { $in: appIds } } },
+    { session }
+  );
+  // 从 MCP key apps 数组中移除对应应用
+  await MongoMcpKey.updateMany(
+    { teamId, 'apps.appId': { $in: appIds } },
+    { $pull: { apps: { appId: { $in: appIds } } } },
+    { session }
+  );
+};
+
+/**
+ * 立即移除一些重要的 app 资源
+ */
+export const deleteAppsImmediate = async ({
+  teamId,
+  appIds,
+  session
+}: {
+  teamId: string;
+  appIds: string[];
+  session?: ClientSession;
+}) => {
+  // 解除工作流插件与系统工具的关联
   const workflowToolApps = await MongoApp.find(
     {
       teamId,
       _id: { $in: appIds },
       type: AppTypeEnum.workflowTool
     },
-    '_id'
+    '_id',
+    { session }
   ).lean();
 
   await cleanupWorkflowToolSystemToolAssociation(workflowToolApps.map((app) => String(app._id)));
 
-  // Remove eval job
+  // 立即清理应用访问记录
+  await MongoAppRecord.deleteMany({ teamId, appId: { $in: appIds } }, { session });
+
+  // 立即清理外部引用与快捷入口（分享链接、精选应用、快捷应用、MCP Key 关联，避免 MQ 异步延迟导致仍可访问）
+  await cleanupAppDirectRefs({ teamId, appIds, session });
+
+  // 终止运行中的评测任务
   const evalJobs = await MongoEvaluation.find(
     {
       teamId,
       appId: { $in: appIds }
     },
-    '_id'
+    '_id',
+    { session }
   ).lean();
   await Promise.all(evalJobs.map((evalJob) => removeEvaluationJob(evalJob._id)));
-
-  // Remove app record
-  await MongoAppRecord.deleteMany({ teamId, appId: { $in: appIds } });
 };
 
 export const updateParentFoldersUpdateTime = ({ parentId }: { parentId?: string | null }) => {
@@ -373,4 +414,42 @@ export const updateParentFoldersUpdateTime = ({ parentId }: { parentId?: string 
   }).catch((err) => {
     logger.error('Failed to update parent folder updateTime', { error: err });
   });
+};
+
+/**
+ * 更新应用或文件夹的置顶状态。
+ *
+ * 置顶只影响列表排序，因此刻意不改动任何既有副作用：
+ * - 不刷新 updateTime，否则取消置顶后资源无法回到原排序位置；
+ * - 不刷新父文件夹 updateTime；
+ * - 不写审计日志。
+ *
+ * 重复置顶保持幂等，不刷新 pinnedAt，避免置顶项之间顺序抖动。
+ */
+export const updateAppPin = async ({
+  teamId,
+  appId,
+  isPinned,
+  session
+}: {
+  teamId: string;
+  appId: string;
+  isPinned: boolean;
+  session?: ClientSession;
+}) => {
+  if (isPinned) {
+    // 已置顶的记录不满足条件，因此不会覆盖首次置顶时间
+    await MongoApp.updateOne(
+      { _id: appId, teamId, deleteTime: null, isPinned: { $ne: true } },
+      { $set: { isPinned: true, pinnedAt: new Date() } },
+      { session }
+    );
+    return;
+  }
+
+  await MongoApp.updateOne(
+    { _id: appId, teamId, deleteTime: null },
+    { $set: { isPinned: false }, $unset: { pinnedAt: '' } },
+    { session }
+  );
 };

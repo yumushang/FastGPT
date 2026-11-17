@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { ObjectIdSchema } from '../../../../common/type/mongo';
 import { DatasetCollectionTypeEnum, TrainingModeEnum } from '../../../../core/dataset/constants';
-import { DatasetTrainingSchema } from '../../../../core/dataset/type';
-import { PaginationSchema, PaginationResponseSchema } from '../../../api';
+import { DatasetItemSchema, DatasetTrainingSchema } from '../../../../core/dataset/type';
+import { createPaginationSchema, PaginationResponseSchema } from '../../../api';
+import { IntSchema } from '../../../../common/zod';
 
 /* ============================================================================
  * API: 更新训练数据（或重试所有错误数据）
@@ -24,15 +25,15 @@ export const UpdateTrainingDataBodySchema = z
     }),
     q: z.string().optional().meta({
       example: '什么是 FastGPT？',
-      description: '问题/主文本'
+      description: '问题/主文本，仅非重建任务允许编辑'
     }),
     a: z.string().optional().meta({
       example: 'FastGPT 是一个 AI Agent 构建平台',
-      description: '回答/补充文本'
+      description: '回答/补充文本，仅非重建任务允许编辑，空串表示清空'
     }),
     chunkIndex: z.int().min(0).optional().meta({
       example: 0,
-      description: '块索引'
+      description: '块索引，仅非重建任务允许编辑'
     })
   })
   .superRefine((data, ctx) => {
@@ -51,6 +52,15 @@ export const UpdateTrainingDataBodySchema = z
         message: 'collectionId and datasetId cannot be used together without dataId'
       });
     }
+  })
+  .meta({
+    override: {
+      anyOf: [
+        { required: ['dataId'] },
+        { required: ['datasetId'], not: { required: ['collectionId'] } },
+        { required: ['collectionId'], not: { required: ['datasetId'] } }
+      ]
+    }
   });
 export type UpdateTrainingDataBody = z.infer<typeof UpdateTrainingDataBodySchema>;
 
@@ -66,7 +76,7 @@ export const RebuildEmbeddingBodySchema = z.object({
     example: '68ad85a7463006c963799a05',
     description: '知识库 ID'
   }),
-  vectorModelId: z.string().meta({
+  vectorModelId: z.string().trim().min(1, '索引模型不可清空').meta({
     description: '新的向量模型 ID，不能与当前模型相同'
   })
 });
@@ -125,7 +135,7 @@ export const GetTrainingDataDetailResponseSchema = z
       description: '集合 ID'
     }),
     mode: z.enum(TrainingModeEnum).meta({
-      example: TrainingModeEnum.chunk,
+      example: TrainingModeEnum.index,
       description: '训练模式'
     }),
     q: z.string().optional().meta({
@@ -149,7 +159,7 @@ export type GetTrainingDataDetailResponse = z.infer<typeof GetTrainingDataDetail
  * API: 获取训练错误列表（分页）
  * Route: POST /api/core/dataset/training/getTrainingError
  * ============================================================================ */
-export const GetTrainingErrorBodySchema = PaginationSchema.extend({
+export const GetTrainingErrorBodySchema = createPaginationSchema({
   collectionId: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a06',
     description: '集合 ID'
@@ -188,9 +198,6 @@ export const GetTrainingErrorResponseSchema = PaginationResponseSchema(TrainingE
 export type GetTrainingErrorResponse = z.infer<typeof GetTrainingErrorResponseSchema>;
 
 export const DatasetTrainingErrorPaginationLimits = {
-  maxPageSize: 20,
-  maxOffset: 100000,
-  maxPageNum: 5000,
   defaultItemPageSize: 5,
   maxItemOffset: 100000,
   maxItemPageSize: 20
@@ -200,37 +207,7 @@ export const DatasetTrainingErrorPaginationLimits = {
  * API: 获取知识库训练错误列表（分页）
  * Route: POST /api/core/dataset/training/getDatasetTrainingError
  * ============================================================================ */
-export const GetDatasetTrainingErrorBodySchema = PaginationSchema.extend({
-  pageSize: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(DatasetTrainingErrorPaginationLimits.maxPageSize)
-    .optional()
-    .meta({
-      example: 10,
-      description: `每页集合数量，范围 [1, ${DatasetTrainingErrorPaginationLimits.maxPageSize}]`
-    }),
-  offset: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(DatasetTrainingErrorPaginationLimits.maxOffset)
-    .optional()
-    .meta({
-      example: 0,
-      description: `集合分页偏移量，范围 [0, ${DatasetTrainingErrorPaginationLimits.maxOffset}]`
-    }),
-  pageNum: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(DatasetTrainingErrorPaginationLimits.maxPageNum)
-    .optional()
-    .meta({
-      example: 1,
-      description: `集合分页页码，范围 [1, ${DatasetTrainingErrorPaginationLimits.maxPageNum}]`
-    }),
+export const GetDatasetTrainingErrorBodySchema = createPaginationSchema({
   datasetId: ObjectIdSchema.meta({
     example: '68ad85a7463006c963799a05',
     description: '知识库 ID'
@@ -239,20 +216,13 @@ export const GetDatasetTrainingErrorBodySchema = PaginationSchema.extend({
     example: '68ad85a7463006c963799a06',
     description: '集合 ID。传入时只分页加载该集合内的异常 chunk'
   }),
-  itemOffset: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(DatasetTrainingErrorPaginationLimits.maxItemOffset)
+  itemOffset: IntSchema.max(DatasetTrainingErrorPaginationLimits.maxItemOffset)
     .optional()
     .meta({
       example: 5,
       description: `集合内异常 chunk 偏移量，用于加载更多，范围 [0, ${DatasetTrainingErrorPaginationLimits.maxItemOffset}]`
     }),
-  itemPageSize: z.coerce
-    .number()
-    .int()
-    .min(1)
+  itemPageSize: IntSchema.positive()
     .max(DatasetTrainingErrorPaginationLimits.maxItemPageSize)
     .optional()
     .meta({
@@ -299,13 +269,6 @@ export const GetDatasetTrainingQueueQuerySchema = z.object({
 export type GetDatasetTrainingQueueQuery = z.infer<typeof GetDatasetTrainingQueueQuerySchema>;
 
 export const GetDatasetTrainingQueueResponseSchema = z.object({
-  rebuildingCount: z.number().meta({
-    example: 5,
-    description: '正在重建向量的数据条数'
-  }),
-  trainingCount: z.number().meta({
-    example: 12,
-    description: '训练队列中的数据条数'
-  })
+  hasTrainingTask: DatasetItemSchema.shape.hasTrainingTask
 });
 export type GetDatasetTrainingQueueResponse = z.infer<typeof GetDatasetTrainingQueueResponseSchema>;

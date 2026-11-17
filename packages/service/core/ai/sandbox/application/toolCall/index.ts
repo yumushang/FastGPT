@@ -14,6 +14,7 @@ import {
   SANDBOX_WRITE_FILE_TOOL_NAME,
   sandboxToolMap
 } from '@fastgpt/global/core/ai/sandbox/tools';
+import { SANDBOX_USER_FILES_PATH } from '@fastgpt/global/core/ai/sandbox/constants';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
 import { LangEnum } from '@fastgpt/global/common/i18n/type';
@@ -30,8 +31,13 @@ import { parseJsonArgs } from '../../../utils';
 import { writeUrlFilesToSandbox, type SandboxInputFileReader } from '../file';
 import { preparePackageMirrors, prepareSandbox } from '../runtime/prepare';
 import type { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import {
+  buildSandboxInputFileScopeKey,
+  getSandboxInputFileNameAllocation,
+  getSafeSandboxInputFilename
+} from '../../utils';
 import { getRunningSandboxId, getSandboxUserId } from '../../utils/id';
-import { createToolRunner } from './type';
+import { createToolRunner, type SandboxToolCallValidator } from './type';
 
 const ToolMap = {
   [SANDBOX_EDIT_FILE_TOOL_NAME]: createToolRunner(sandboxEditFileTool),
@@ -56,18 +62,31 @@ export type SandboxToolCallResult = {
  *
  * 这里负责解析 LLM 传入的 JSON 参数、按工具 schema 校验，并复用准备阶段创建的
  * SandboxClient。source/user/chat 上下文由 client 自身持有，单次工具调用不再重复传递。
+ * 调用方可注入执行前校验，拒绝的调用直接返回错误，不接触沙箱。
  */
 export const runSandboxTools = async ({
   toolName,
   args,
-  sandboxClient
+  sandboxClient,
+  validate
 }: {
   toolName: string;
   args: string;
   sandboxClient: SandboxClient;
+  validate?: SandboxToolCallValidator;
 }): Promise<SandboxToolCallResult> => {
   const startTime = Date.now();
   const getDuration = () => +((Date.now() - startTime) / 1000).toFixed(2);
+
+  const validationError = validate?.({ toolName, args });
+  if (validationError) {
+    return {
+      success: false,
+      input: {},
+      response: validationError,
+      durationSeconds: getDuration()
+    };
+  }
 
   const tool = ToolMap[toolName as keyof typeof ToolMap];
 
@@ -145,12 +164,42 @@ export const prepareSandboxToolRuntime = async ({
     },
     preparePackageMirrors()
   );
+  const allocation = getSandboxInputFileNameAllocation({
+    scopeKey: buildSandboxInputFileScopeKey({
+      sourceType,
+      sourceId,
+      userId: sandboxUserId,
+      chatId
+    }),
+    sandbox: instance.provider,
+    workDirectory: runtimePaths.sessionWorkDirectory
+  });
+  const usedNames = new Map<string, number>();
+  const batchUsedFilenames = new Set<string>();
   await writeUrlFilesToSandbox(
     instance.provider,
-    files.map((file) => ({
-      ...file,
-      path: instance.resolveRuntimePath(file.path, { allowAbsolutePath: true })
-    })),
+    files.map((file, index) => {
+      const normalizedPath = file.path.replace(/^\.\//, '');
+      if (normalizedPath.startsWith(SANDBOX_USER_FILES_PATH)) {
+        const rawFilename = normalizedPath.slice(SANDBOX_USER_FILES_PATH.length);
+        const filename = getSafeSandboxInputFilename(rawFilename, index, usedNames, {
+          url: file.url,
+          allocation,
+          batchUsedFilenames
+        });
+        const relativePath = `${SANDBOX_USER_FILES_PATH}${filename}`;
+        file.path = relativePath;
+        return {
+          ...file,
+          path: instance.resolveRuntimePath(relativePath, { allowAbsolutePath: true })
+        };
+      }
+
+      return {
+        ...file,
+        path: instance.resolveRuntimePath(file.path, { allowAbsolutePath: true })
+      };
+    }),
     readInputFile
   );
   return instance;

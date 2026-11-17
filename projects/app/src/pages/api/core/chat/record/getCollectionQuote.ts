@@ -1,6 +1,6 @@
 import { NextAPI } from '@/service/middleware/entry';
 import { authCollectionInChat } from '@/service/support/permission/auth/chat';
-import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@fastgpt/service/core/chat/auth';
 import { type DatasetDataSchemaType } from '@fastgpt/global/core/dataset/type';
 import { MongoDatasetData } from '@fastgpt/service/core/dataset/data/schema';
 import { type ApiRequestProps } from '@fastgpt/next/type';
@@ -22,6 +22,8 @@ type BaseMatchType = FilterQuery<DatasetDataSchemaType>;
 
 async function handler(req: ApiRequestProps): Promise<GetCollectionQuoteResType> {
   const {
+    customUid,
+    authProxy,
     initialId,
     prevId,
     nextId,
@@ -39,6 +41,8 @@ async function handler(req: ApiRequestProps): Promise<GetCollectionQuoteResType>
   const limitedPageSize = pageSize;
 
   const authRes = await authChatTargetCrud({
+    customUid,
+    authProxy,
     req,
     authToken: true,
     authApiKey: true,
@@ -135,7 +139,9 @@ async function handleInitialLoad({
       .lean();
 
     const hasMoreNext = list.length === pageSize;
-    const citeList = await getFormatDatasetCiteList(list);
+    const citeList = await getFormatDatasetCiteList(list, {
+      datasetIds: [String(baseMatch.datasetId)]
+    });
 
     return {
       list: processChatTimeFilter(citeList, chatTime).map((item) => ({
@@ -162,7 +168,9 @@ async function handleInitialLoad({
   );
 
   const resultList = [...prevList, centerNode, ...nextList];
-  const citeList = await getFormatDatasetCiteList(resultList);
+  const citeList = await getFormatDatasetCiteList(resultList, {
+    datasetIds: [String(baseMatch.datasetId)]
+  });
 
   return {
     list: processChatTimeFilter(citeList, chatTime).map((item) => ({
@@ -194,7 +202,9 @@ async function handlePaginatedLoad({
     ? await getPrevNodes(prevId, nextAnchor, pageSize, baseMatch)
     : await getNextNodes(nextId!, nextAnchor, pageSize, baseMatch);
 
-  const citeList = await getFormatDatasetCiteList(list);
+  const citeList = await getFormatDatasetCiteList(list, {
+    datasetIds: [String(baseMatch.datasetId)]
+  });
   const processedList = processChatTimeFilter(citeList, chatTime);
 
   return {

@@ -5,8 +5,9 @@ import {
 } from '@fastgpt/global/core/ai/prompt/agent';
 import json5 from 'json5';
 import { createLLMResponse } from '../llm/request';
+import { checkOutputTextModeration } from '../../plugin/moderation/output';
 import { getLogger, LogCategories } from '../../../common/logger';
-import type { LLMSystemModelDataType } from '@fastgpt/global/core/ai/model.schema';
+import type { LLMModelDataType } from '@fastgpt/global/core/ai/model/schema';
 
 const logger = getLogger(LogCategories.MODULE.AI.FUNCTIONS);
 
@@ -17,7 +18,7 @@ export async function createQuestionGuide({
   teamId
 }: {
   messages: ChatCompletionMessageParam[];
-  model: LLMSystemModelDataType;
+  model: LLMModelDataType;
   customPrompt?: string;
   teamId: string;
 }): Promise<{
@@ -65,8 +66,25 @@ export async function createQuestionGuide({
     .replace(/  /g, '');
 
   try {
+    const parsed = json5.parse(jsonStr);
+    const rawList = Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+    const moderatedList: string[] = [];
+    for (const item of rawList) {
+      const checkRes = await checkOutputTextModeration({
+        text: item,
+        targetField: 'questionGuide',
+        context: { teamId }
+      });
+      if (checkRes.isPass) {
+        moderatedList.push(item);
+      }
+    }
+
     return {
-      result: json5.parse(jsonStr),
+      result: moderatedList,
       inputTokens,
       outputTokens
     };

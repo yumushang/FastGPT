@@ -5,7 +5,7 @@ import type {
   AgentLoopRuntime
 } from '../../../../../ai/llm/agentLoop/interface';
 import { runAgentLoop } from '../../../../../ai/llm/agentLoop/interface';
-import { createAgentLoopCoreAssistantEventCollector } from '../adapter/assistantResponses';
+import { createAgentLoopCoreAssistantEventCollector } from '../adapter/assistantResponses/eventCollector';
 import { summarizeAgentLoopCoreResult, type AgentLoopCoreOutputSummary } from './output/result';
 import { compactAgentLoopCorePlanSnapshots } from './output/assistantResponses';
 import type { AgentLoopCoreResult } from '../domain/result';
@@ -25,6 +25,7 @@ export type RunAgentLoopCoreParams<TChildrenResponse = unknown> = {
       updatePlanToolName?: string;
       askToolName?: string;
     };
+    persistInputContext?: boolean;
   };
 };
 
@@ -48,18 +49,41 @@ export const runAgentLoopCore = async <TChildrenResponse = unknown>({
     getToolInfo: assistantResponses?.getEventToolInfo,
     metaEventNames: assistantResponses?.metaEventNames
   });
-  const wrappedRuntime: AgentLoopRuntime<TChildrenResponse> = {
-    ...runtime,
-    emitEvent: (event) => {
-      assistantEventCollector.emitEvent(event);
-      runtime.emitEvent?.(event);
-    }
-  };
+  let firstTokenTime: number | undefined;
+  let hasRecordedEvents = false;
   const result = await runAgentLoop<TChildrenResponse>({
     provider,
     input,
-    runtime: wrappedRuntime
+    runtime: {
+      ...runtime,
+      recordEvent: (event) => {
+        hasRecordedEvents = true;
+        assistantEventCollector.emitEvent(event);
+        runtime.recordEvent?.(event);
+      },
+      emitEvent: (event) => {
+        if (event.type === 'llm_request_end' && firstTokenTime === undefined) {
+          firstTokenTime = event.firstTokenTime;
+        }
+        // 兼容直接发事件的适配器；标准 application 已通过可信 recordEvent 记录原始上下文。
+        if (!hasRecordedEvents) assistantEventCollector.emitEvent(event);
+        runtime.emitEvent?.(event);
+      }
+    }
   });
+  // 只记录本轮改写后的用户输入；历史 messages、Ask 回答和 provider 快照均不重复保存。
+  const currentInput = input.messages.at(-1);
+  if (assistantResponses?.persistInputContext && currentInput?.role === 'user') {
+    const target = eventAssistantResponses.find(
+      (value) => !value.displayOnly && !value.contextCheckpoint
+    );
+    const inputContext = {
+      content: currentInput.content,
+      ...(currentInput.name ? { name: currentInput.name } : {})
+    };
+    if (target) target.inputContext = inputContext;
+    else eventAssistantResponses.push({ inputContext, hideInUI: true });
+  }
   const assistantResponseValues = compactAgentLoopCorePlanSnapshots([
     ...(assistantResponses?.extraResponses ?? []),
     ...eventAssistantResponses
@@ -68,6 +92,7 @@ export const runAgentLoopCore = async <TChildrenResponse = unknown>({
   if (result.status === 'paused') {
     return {
       ...result,
+      firstTokenTime,
       status: 'interactive',
       assistantResponses: assistantResponseValues
     };
@@ -75,6 +100,7 @@ export const runAgentLoopCore = async <TChildrenResponse = unknown>({
 
   return {
     ...result,
+    firstTokenTime,
     assistantResponses: assistantResponseValues
   };
 };

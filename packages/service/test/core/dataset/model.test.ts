@@ -1,85 +1,99 @@
+import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
+import { ModelScopeEnum, ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { EmbeddingModelDataType } from '@fastgpt/global/core/ai/model/schema';
+import { createModelHandle } from '@fastgpt/service/core/ai/model/catalog/handle';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
-import {
-  findDatasetAgentModel,
-  findDatasetEmbeddingModel,
-  findDatasetVlmModel,
-  getDatasetEmbeddingModel
-} from '../../../core/dataset/model';
 
-const getEmbeddingModelDataMock = vi.hoisted(() => vi.fn());
-const findModelDataMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../../core/ai/model', () => ({
-  findModelData: findModelDataMock,
-  getEmbeddingModelData: getEmbeddingModelDataMock,
-  getLLMModelData: vi.fn(),
-  getOptionalVlmModelData: vi.fn()
+const mocks = vi.hoisted(() => ({
+  findDatasetIndexModelReferences: vi.fn()
 }));
 
-describe('dataset model resolution', () => {
-  beforeEach(() => {
-    getEmbeddingModelDataMock.mockReset();
-    findModelDataMock.mockReset();
+vi.mock('@fastgpt/service/core/dataset/entity', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@fastgpt/service/core/dataset/entity')>()),
+  findDatasetIndexModelReferences: mocks.findDatasetIndexModelReferences
+}));
+
+import {
+  assertAppDatasetIndexModelsAvailable,
+  getAssertedDatasetEmbeddingModel,
+  getDatasetModelReference
+} from '../../../core/dataset/model';
+
+const datasetId = '68ad85a7463006c963799a07';
+const embeddingModel: EmbeddingModelDataType = {
+  modelId: '68ad85a7463006c963799a09',
+  type: ModelTypeEnum.embedding,
+  scope: ModelScopeEnum.system,
+  provider: 'OpenAI',
+  model: 'text-embedding-3-small',
+  name: 'Embedding',
+  isActive: true,
+  config: { defaultToken: 512, maxToken: 8192, weight: 1 }
+};
+
+const createHandle = () =>
+  createModelHandle({
+    models: [embeddingModel],
+    defaultModels: {},
+    configuredDefaultModelIds: {},
+    revision: 0,
+    version: 'test'
   });
 
-  it('uses the legacy model only when vectorModelId is absent', () => {
-    getDatasetEmbeddingModel({ vectorModel: 'text-embedding-3-small' });
-
-    expect(getEmbeddingModelDataMock).toHaveBeenCalledWith({
+describe('getDatasetModelReference', () => {
+  it.each([
+    ['embedding', 'vectorModelId', 'vectorModel'],
+    ['agent', 'agentModelId', 'agentModel'],
+    ['vlm', 'vlmModelId', 'vlmModel']
+  ] as const)('extracts the %s reference without resolving a model', (slot, idKey, nameKey) => {
+    expect(
+      getDatasetModelReference({ [idKey]: 'stable-id', [nameKey]: 'legacy-name' }, slot)
+    ).toEqual({ modelId: 'stable-id', model: 'legacy-name' });
+    expect(getDatasetModelReference({ [nameKey]: 'legacy-name' }, slot)).toEqual({
       modelId: undefined,
-      model: 'text-embedding-3-small'
+      model: 'legacy-name'
+    });
+    expect(getDatasetModelReference({ [idKey]: '' }, slot).modelId).toBe('');
+    expect(getDatasetModelReference({}, slot)).toEqual({ modelId: undefined, model: undefined });
+  });
+});
+
+describe('assertAppDatasetIndexModelsAvailable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findDatasetIndexModelReferences.mockResolvedValue([
+      { _id: datasetId, vectorModelId: embeddingModel.modelId, vectorModel: embeddingModel.model }
+    ]);
+  });
+
+  it('returns the validated embedding model for callers to reuse', async () => {
+    const modelHandle = createHandle();
+    const authorizedIds = new Set([embeddingModel.modelId]);
+    const models = await assertAppDatasetIndexModelsAvailable({
+      resources: [{ type: 'dataset', id: datasetId }],
+      teamId: 'team-id',
+      modelHandle,
+      authorizedIds
+    });
+
+    expect(getAssertedDatasetEmbeddingModel(models, datasetId).modelId).toBe(
+      embeddingModel.modelId
+    );
+    expect(mocks.findDatasetIndexModelReferences).toHaveBeenCalledWith({
+      datasetIds: [datasetId],
+      teamId: 'team-id',
+      session: undefined
     });
   });
 
-  it('does not normalize an empty vectorModelId into an absent field', () => {
-    getDatasetEmbeddingModel({ vectorModelId: '', vectorModel: 'text-embedding-3-small' });
-
-    expect(getEmbeddingModelDataMock).toHaveBeenCalledWith({
-      modelId: '',
-      model: 'text-embedding-3-small'
-    });
-  });
-
-  it('returns inactive embedding models for display without weakening execution lookup', () => {
-    const inactiveModel = {
-      type: ModelTypeEnum.embedding,
-      isActive: false
-    };
-    findModelDataMock.mockReturnValue(inactiveModel);
-
-    expect(findDatasetEmbeddingModel({ vectorModelId: 'embedding-id' })).toBe(inactiveModel);
-    expect(findModelDataMock).toHaveBeenCalledWith({
-      modelId: 'embedding-id',
-      model: undefined
-    });
-    expect(getEmbeddingModelDataMock).not.toHaveBeenCalled();
-  });
-
-  it('treats deleted and wrong-type models as unavailable display data', () => {
-    findModelDataMock.mockReturnValueOnce(undefined).mockReturnValueOnce({
-      type: ModelTypeEnum.llm
-    });
-
-    expect(findDatasetEmbeddingModel({ vectorModelId: 'deleted-id' })).toBeUndefined();
-    expect(findDatasetEmbeddingModel({ vectorModelId: 'wrong-type-id' })).toBeUndefined();
-  });
-
-  it('returns only LLM and vision-capable models for dataset display fields', () => {
-    const llmModel = {
-      type: ModelTypeEnum.llm,
-      config: { vision: true },
-      isActive: false
-    };
-    findModelDataMock.mockReturnValue(llmModel);
-
-    expect(findDatasetAgentModel({ agentModelId: 'llm-id' })).toBe(llmModel);
-    expect(findDatasetVlmModel({ vlmModelId: 'vlm-id' })).toBe(llmModel);
-
-    findModelDataMock.mockReturnValue({
-      type: ModelTypeEnum.llm,
-      config: { vision: false }
-    });
-    expect(findDatasetVlmModel({ vlmModelId: 'text-only-id' })).toBeUndefined();
+  it('rejects an embedding model the actor cannot use', async () => {
+    await expect(
+      assertAppDatasetIndexModelsAvailable({
+        resources: [{ type: 'dataset', id: datasetId }],
+        teamId: 'team-id',
+        modelHandle: createHandle(),
+        authorizedIds: new Set()
+      })
+    ).rejects.toMatchObject({ message: ModelErrEnum.unAuthModel });
   });
 });

@@ -3,20 +3,23 @@ import {
   getSystemPrompt_ChatItemType,
   runtimePrompt2ChatsValue
 } from '@fastgpt/global/core/chat/adapt';
-import type { ChatItemMiniType, UserChatItemFileItemType } from '@fastgpt/global/core/chat/type';
+import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import { SANDBOX_USER_FILES_PATH } from '@fastgpt/global/core/ai/sandbox/constants';
-import { getWorkflowFileMaxAmount, parseUrlToFileType } from '../../../../utils/context';
+import {
+  buildSandboxInputFileScopeKey,
+  getSandboxInputFileNameAllocation,
+  getSafeSandboxInputFilename
+} from '../../../../../ai/sandbox/utils';
+import {
+  getWorkflowFileMaxAmount,
+  prepareWorkflowFiles,
+  WorkflowContext
+} from '../../../../utils/context';
 import {
   rewriteWorkflowAIHistoryMessageWithFiles,
   rewriteWorkflowAIUserMessageWithFiles
 } from '../../fileContext';
 import type { DispatchToolModuleProps, FileInputType } from '../type';
-
-const getUserFilesFromLinks = ({ fileLinks = [] }: { fileLinks?: string[] }) => {
-  return fileLinks
-    .map((url) => parseUrlToFileType(url))
-    .filter(Boolean) as UserChatItemFileItemType[];
-};
 
 export const useToolMessages = async ({
   defaultSystemPrompt,
@@ -28,7 +31,6 @@ export const useToolMessages = async ({
   parseHistoryFiles,
   lastInteractive,
   isEntry,
-  chatConfig,
   useSandbox
 }: {
   defaultSystemPrompt?: string;
@@ -44,7 +46,9 @@ export const useToolMessages = async ({
   useSandbox: boolean;
 }) => {
   const currentInputFiles: FileInputType[] = [];
-  const userFiles = getUserFilesFromLinks({ fileLinks });
+  const userFiles = await prepareWorkflowFiles({
+    files: (fileLinks ?? []).map((url) => ({ url }))
+  });
   const concatenateSystemPrompt = [defaultSystemPrompt, systemPrompt]
     .filter(Boolean)
     .join('\n\n-----\n\n');
@@ -59,27 +63,56 @@ export const useToolMessages = async ({
    * 文件链接会作为 model URL 暴露给 LLM，供 read_files 和其他工具直接使用。
    * 当前轮输入文件额外记录下来，用于 sandbox 场景先上传到隔离目录。
    */
-  const transformFiles = useSandbox
+  const workflowSandboxContext = WorkflowContext.getStore()?.sandboxContext;
+  const historyTransformFiles = useSandbox
     ? (files: FileInputType[]) =>
         files.map((file) => ({
           ...file,
           sandboxPath: `${SANDBOX_USER_FILES_PATH}${file.name}`
         }))
     : undefined;
-  const messages = historyMessages.map(
-    (message) =>
-      rewriteWorkflowAIHistoryMessageWithFiles({
+  const currentTransformFiles = useSandbox
+    ? (files: FileInputType[]) => {
+        const inputFileAllocation = workflowSandboxContext
+          ? getSandboxInputFileNameAllocation({
+              scopeKey: buildSandboxInputFileScopeKey(workflowSandboxContext),
+              contextOwner: workflowSandboxContext
+            })
+          : undefined;
+        const usedNames = new Map<string, number>();
+        const batchUsedFilenames = new Set<string>();
+        return files.map((file, index) => {
+          const filename = inputFileAllocation
+            ? getSafeSandboxInputFilename(file.name, index, usedNames, {
+                url: file.url,
+                allocation: inputFileAllocation,
+                batchUsedFilenames
+              })
+            : file.name;
+          return {
+            ...file,
+            name: filename,
+            sandboxPath: `${SANDBOX_USER_FILES_PATH}${filename}`
+          };
+        });
+      }
+    : undefined;
+  const messages = await Promise.all(
+    historyMessages.map(async (message) => {
+      const res = await rewriteWorkflowAIHistoryMessageWithFiles({
         message,
         maxFileAmount,
         parseHistoryFiles,
-        transformFiles
-      }).message
+        transformFiles: historyTransformFiles
+      });
+      return res.message;
+    })
   );
 
   // child interactive 的用户输入由子 workflow 消费，不作为父模型的新 user message。
   // 历史中的上一条 AI tool_call 必须保留，provider 依赖它恢复原 call 名称和参数。
   if (!isInteractiveResume) {
-    const { message, files } = rewriteWorkflowAIUserMessageWithFiles({
+    const { message, files } = await rewriteWorkflowAIUserMessageWithFiles({
       message: {
         dataId: responseChatItemId,
         obj: ChatRoleEnum.Human,
@@ -89,7 +122,7 @@ export const useToolMessages = async ({
         })
       },
       maxFileAmount,
-      transformFiles
+      transformFiles: currentTransformFiles
     });
     messages.push(message);
     currentInputFiles.push(...files);

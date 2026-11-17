@@ -1,6 +1,27 @@
 import { SearchScoreTypeEnum } from '../constants';
 import { type SearchDataResponseItemType } from '../type';
 
+/** 重排候选数的边界、步长与默认值；UI 与服务端共用，避免两处漂移。 */
+export const rerankCandidateNumRange = {
+  min: 10,
+  max: 100,
+  step: 10,
+  default: 100
+} as const;
+
+/** 仅接受范围内的整数；缺失、非有限数、小数和越界值统一回退默认值，避免中断检索。 */
+export const normalizeRerankCandidateNum = (value?: number | null) => {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < rerankCandidateNumRange.min ||
+    value > rerankCandidateNumRange.max
+  ) {
+    return rerankCandidateNumRange.default;
+  }
+  return value;
+};
+
 /* dataset search result concat */
 export const datasetSearchResultConcat = (
   arr: { weight: number; list: SearchDataResponseItemType[] }[]
@@ -28,7 +49,7 @@ export const datasetSearchResultConcat = (
           if (sameScore) {
             sameScore.value = Math.max(sameScore.value, dataItem.value);
           } else {
-            concatScore.push(dataItem);
+            concatScore.push({ ...dataItem });
           }
         }
 
@@ -40,6 +61,9 @@ export const datasetSearchResultConcat = (
       } else {
         map.set(data.id, {
           ...data,
+          // score 逐项复制：下面合并取最大值、回写 rrf 分数和名次都只改结果自己的对象，
+          // 不能改到调用方传入的列表（重排前的召回快照会和它共用同一批 score 对象）
+          score: data.score.map((item) => ({ ...item })),
           rrfScore: score
         });
       }

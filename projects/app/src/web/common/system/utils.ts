@@ -1,19 +1,13 @@
-import type { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
-import type { MyModelItemType } from '@fastgpt/global/openapi/core/ai/model/api';
 import type {
   FastGPTFeConfigsType,
   FastGPTRegisterMethodType
 } from '@fastgpt/global/common/system/types';
-import { useSystemStore } from './useSystemStore';
-import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
 import { getWebReqUrl } from '@fastgpt/web/common/system/utils';
+import { getErrorMessage } from '@fastgpt/global/common/error/utils';
 import {
-  findClientModelByReference,
-  findClientModelByValue
-} from '@/web/core/ai/model/modelReference';
-
-type MyLLMModelType = Extract<MyModelItemType, { type: ModelTypeEnum.llm }>;
-type MyEmbeddingModelType = Extract<MyModelItemType, { type: ModelTypeEnum.embedding }>;
+  FASTGPT_WEB_REQUEST_HEADER,
+  FASTGPT_WEB_REQUEST_VALUE
+} from '@fastgpt/global/common/system/constants';
 
 /**
  * 获取真实支持的自助注册方式，兼容过滤旧配置中被混入的 sync 团队模式。
@@ -35,6 +29,10 @@ export const getIsMemberSyncMode = (feConfigs?: FastGPTFeConfigsType) => {
   return !!feConfigs?.register_method?.includes('sync');
 };
 
+/**
+ * 下载文件；接口失败时提取 JSON 错误消息，交由调用方翻译和提示。
+ * 非 JSON 错误保留原始文本，空响应回退到 HTTP 状态文案。
+ */
 export const downloadFetch = async ({
   url,
   filename,
@@ -46,21 +44,27 @@ export const downloadFetch = async ({
   body?: Record<string, any>;
   waitResponse?: boolean;
 }) => {
-  if (body || waitResponse) {
+  const shouldFetch = body || waitResponse || url.startsWith('/api');
+  if (shouldFetch) {
     const response = await fetch(getWebReqUrl(url), {
       method: body ? 'POST' : 'GET',
-      ...(body
-        ? {
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(body)
-          }
-        : {})
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        [FASTGPT_WEB_REQUEST_HEADER]: FASTGPT_WEB_REQUEST_VALUE
+      },
+      ...(body ? { body: JSON.stringify(body) } : {})
     });
 
     if (!response.ok) {
-      throw new Error((await response.text()) || response.statusText);
+      const responseText = await response.text();
+      const message = (() => {
+        try {
+          return getErrorMessage(JSON.parse(responseText), response.statusText);
+        } catch {
+          return responseText || response.statusText;
+        }
+      })();
+      throw new Error(message);
     }
 
     const blob = await response.blob();
@@ -83,29 +87,4 @@ export const downloadFetch = async ({
     a.click();
     document.body.removeChild(a);
   }
-};
-
-export const getWebLLMModel = (model?: string, llmList: MyLLMModelType[] = []) => {
-  const defaultModels = useUserModelStore.getState().defaultModels;
-
-  if (!model) return defaultModels.llm;
-  return findClientModelByValue({ models: llmList, value: model });
-};
-export const getWebDefaultLLMModel = (llmList: MyLLMModelType[] = []) => {
-  const defaultModels = useUserModelStore.getState().defaultModels;
-
-  if (llmList.length === 0) return defaultModels.llm;
-  return defaultModels.llm &&
-    findClientModelByReference({ models: llmList, reference: defaultModels.llm })
-    ? defaultModels.llm
-    : llmList[0];
-};
-export const getWebDefaultEmbeddingModel = (embeddingList: MyEmbeddingModelType[] = []) => {
-  const defaultModels = useUserModelStore.getState().defaultModels;
-
-  if (embeddingList.length === 0) return defaultModels.embedding;
-  return defaultModels.embedding &&
-    findClientModelByReference({ models: embeddingList, reference: defaultModels.embedding })
-    ? defaultModels.embedding
-    : embeddingList[0];
 };

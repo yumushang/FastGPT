@@ -3,7 +3,6 @@ import { getNextTimeByCronStringAndTimezone } from '@fastgpt/global/common/strin
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import { batchRun, retryFn } from '@fastgpt/global/common/system/utils';
 import {
-  ChatGenerateStatusEnum,
   ChatRoleEnum,
   ChatSourceEnum,
   ChatSourceTypeEnum
@@ -13,7 +12,7 @@ import type {
   AIChatItemValueItemType,
   UserChatItemValueItemType
 } from '@fastgpt/global/core/chat/type';
-import type { NodeResponseWriteSummary } from '@fastgpt/service/core/chat/nodeResponseStorage';
+import type { WorkflowRuntimeSummaryType } from '@fastgpt/service/core/workflow/dispatch/type';
 import {
   getWorkflowEntryNodeIds,
   storeEdges2RuntimeEdges,
@@ -29,12 +28,12 @@ import {
   type Props as SaveChatProps
 } from '@fastgpt/service/core/chat/saveChat';
 import { preChatRound } from '@fastgpt/service/core/chat/utils/prepare';
-import { updateChatGenerateStatus } from '@fastgpt/service/core/chat/chatGenerateStatus';
-import { WORKFLOW_MAX_RUN_TIMES } from '@fastgpt/service/core/workflow/constants';
+import { getWorkflowMaxRunTimes } from '@fastgpt/service/core/workflow/constants';
 import { dispatchWorkFlow } from '@fastgpt/service/core/workflow/dispatch';
 import { prepareWorkflowFileQuery } from '@fastgpt/service/core/workflow/utils/fileLimits';
 import { getRunningUserInfoByTmbId } from '@fastgpt/service/support/user/team/utils';
 import { createChatUsageRecord } from '@fastgpt/service/support/wallet/usage/controller';
+import { createWorkflowResourceContext } from '@fastgpt/service/core/workflow/resource/context';
 
 const logger = getLogger();
 
@@ -55,7 +54,8 @@ export const getScheduleTriggerApp = async () => {
         scheduledTriggerNextTime: 1,
         name: 1,
         teamId: 1,
-        tmbId: 1
+        tmbId: 1,
+        publishedVersionId: 1
       }
     ).lean();
   });
@@ -71,9 +71,8 @@ export const getScheduleTriggerApp = async () => {
       let chatRoundFinalized = false;
 
       // Get app latest version
-      const { versionId, nodes, edges, chatConfig } = await retryFn(() =>
-        getAppLatestVersion(app._id, app)
-      );
+      const workflowVersion = await retryFn(() => getAppLatestVersion(app._id, app));
+      const { versionId, nodes, edges, chatConfig, resources } = workflowVersion;
       const userQuery: UserChatItemValueItemType[] = [
         {
           text: {
@@ -126,14 +125,14 @@ export const getScheduleTriggerApp = async () => {
         assistantResponses = [],
         system_memories,
         customFeedbacks,
-        nodeResponseSummary
+        workflowRuntimeSummary
       }: {
         error?: any;
         durationSeconds?: number;
         assistantResponses?: AIChatItemValueItemType[];
         system_memories?: Record<string, any>;
         customFeedbacks?: string[];
-        nodeResponseSummary?: NodeResponseWriteSummary;
+        workflowRuntimeSummary?: WorkflowRuntimeSummaryType;
       }) => {
         if (!preparedRound.shouldFinalizePreparedRound) {
           return;
@@ -159,7 +158,7 @@ export const getScheduleTriggerApp = async () => {
           },
           durationSeconds,
           errorMsg: getErrText(error),
-          nodeResponseSummary
+          workflowRuntimeSummary
         };
 
         await finalizeChatRound(saveParams);
@@ -172,7 +171,7 @@ export const getScheduleTriggerApp = async () => {
           durationSeconds,
           system_memories,
           customFeedbacks,
-          nodeResponseSummary
+          workflowRuntimeSummary
         } = await retryFn(async () => {
           return dispatchWorkFlow({
             chatId: preparedRound.chatId,
@@ -190,6 +189,10 @@ export const getScheduleTriggerApp = async () => {
             uid: String(app.tmbId),
             runtimeNodes: storeNodes2RuntimeNodes(nodes, getWorkflowEntryNodeIds(nodes)),
             runtimeEdges: storeEdges2RuntimeEdges(edges),
+            resourceContext: createWorkflowResourceContext({
+              resources,
+              teamId: app.teamId
+            }),
             variables: {},
             query: workflowQuery,
             maxFileAmount,
@@ -197,7 +200,7 @@ export const getScheduleTriggerApp = async () => {
             chatConfig,
             histories: [],
             stream: false,
-            maxRunTimes: WORKFLOW_MAX_RUN_TIMES,
+            maxRunTimes: getWorkflowMaxRunTimes(),
             nodeResponseWriteConfig: {
               persistToDb: true,
               retainInMemory: false
@@ -207,12 +210,12 @@ export const getScheduleTriggerApp = async () => {
 
         // Save chat
         await saveChatRound({
-          error: nodeResponseSummary?.lastError,
+          error: workflowRuntimeSummary?.errorText,
           durationSeconds,
           assistantResponses,
           system_memories,
           customFeedbacks,
-          nodeResponseSummary
+          workflowRuntimeSummary
         });
       } catch (error) {
         logger.error('Schedule trigger workflow run failed', {
@@ -233,27 +236,25 @@ export const getScheduleTriggerApp = async () => {
               responseChatItemId: preparedRound.responseChatItemId,
               error
             }).catch();
-          } else {
-            await updateChatGenerateStatus({
-              ...chatSource,
-              chatId: preparedRound.chatId,
-              status: ChatGenerateStatusEnum.error
-            }).catch();
           }
         }
       } finally {
-        // update next time
-        const nextTime = getNextTimeByCronStringAndTimezone(app.scheduledTriggerConfig);
-        await retryFn(() =>
-          MongoApp.updateOne({ _id: app._id }, { $set: { scheduledTriggerNextTime: nextTime } })
-        ).catch((err) => {
-          logger.error('Schedule trigger update next time failed', {
-            error: err,
-            appId: app._id,
-            appName: app.name,
-            nextTime
+        try {
+          // update next time
+          const nextTime = getNextTimeByCronStringAndTimezone(app.scheduledTriggerConfig);
+          await retryFn(() =>
+            MongoApp.updateOne({ _id: app._id }, { $set: { scheduledTriggerNextTime: nextTime } })
+          ).catch((err) => {
+            logger.error('Schedule trigger update next time failed', {
+              error: err,
+              appId: app._id,
+              appName: app.name,
+              nextTime
+            });
           });
-        });
+        } finally {
+          await preparedRound?.releaseGenerationLease?.();
+        }
       }
     },
     50

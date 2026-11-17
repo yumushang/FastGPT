@@ -24,7 +24,10 @@ export enum SseResponseEventEnum {
 
   // Sandbox lifecycle
   sandboxStatus = 'sandboxStatus', // sandbox lifecycle phase notification
-  skillCall = 'skillCall' // skill invocation announce (when SKILL.md is loaded)
+  skillCall = 'skillCall', // skill invocation announce (when SKILL.md is loaded)
+
+  // Workflow Builder
+  workflowBuilderVersion = 'workflowBuilderVersion'
 }
 
 export const StreamResumePhaseEvent = 'resumePhase';
@@ -47,8 +50,6 @@ export enum DispatchNodeResponseKeyEnum {
 
   skipHandleId = 'skipHandleId', // skip handle id
   nodeResponse = 'responseData', // run node response
-  nodeResponses = 'nodeResponses', // node responses
-  childrenResponses = 'childrenResponses', // Some nodes make recursive calls that need to be returned
   toolResponse = 'toolResponse', // The result is passed back to the tool node for use
   assistantResponses = 'assistantResponses', // assistant response
   rewriteHistories = 'rewriteHistories', // If have the response, workflow histories will be rewrite

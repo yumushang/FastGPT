@@ -1,5 +1,7 @@
 import * as createapi from '@/pages/api/core/app/create';
 import * as transitionapi from '@/pages/api/core/app/transitionWorkflow';
+import { TeamErrEnum } from '@fastgpt/global/common/error/code/team';
+import { configureAgentQuota } from './quotaTestUtils';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import type {
@@ -49,10 +51,14 @@ describe('Transition workflow', () => {
       CreateAppResponseType
     >(createapi.default, {
       auth: user,
-      body: { name: 'simple app', type: AppTypeEnum.simple, modules: [] }
+      body: { name: 'simple app', type: AppTypeEnum.simple, nodes: [] }
     });
     const sourceAppId = createResult.data!;
-    await MongoApp.updateOne({ _id: sourceAppId }, { modules: historicalModules });
+    const copiedResources = [{ type: 'skill' as const, id: 'copied-skill' }];
+    await MongoAppVersion.updateOne(
+      { appId: sourceAppId },
+      { nodes: historicalModules, resources: copiedResources }
+    );
 
     const result = await Call<
       TransitionWorkflowBodyType,
@@ -65,16 +71,51 @@ describe('Transition workflow', () => {
     const appId = createNew ? result.data?.id : sourceAppId;
     const [app, version] = await Promise.all([
       MongoApp.findById(appId).lean(),
-      createNew ? MongoAppVersion.findOne({ appId }).lean() : undefined
+      createNew
+        ? MongoAppVersion.findOne({ appId }).lean()
+        : MongoAppVersion.findOne({ appId, isAutoSave: true }).lean()
     ]);
-    const input = app?.modules[0]?.inputs[0];
+    const input = version?.nodes[0]?.inputs[0];
 
     expect(result.code).toBe(200);
     expect(app?.type).toBe(AppTypeEnum.workflow);
     expect(input?.selectedType).toBe(FlowNodeInputTypeEnum.reference);
     expect(input).not.toHaveProperty('selectedTypeIndex');
-    if (createNew) {
-      expect(version?.nodes).toEqual(app?.modules);
-    }
+    expect(version?.resources).toEqual(createNew ? [] : copiedResources);
+  });
+
+  it('rejects a new workflow at the Agent limit but allows conversion in place', async () => {
+    configureAgentQuota();
+    const { owner } = await getFakeUsers(0);
+    const sourceId = await createapi.onCreateApp({
+      teamId: owner.teamId,
+      tmbId: owner.tmbId,
+      name: 'source',
+      type: AppTypeEnum.simple,
+      nodes: []
+    });
+    await MongoApp.insertMany(
+      Array.from({ length: 9 }, () => ({
+        teamId: owner.teamId,
+        tmbId: owner.tmbId,
+        name: 'existing Agent',
+        type: AppTypeEnum.chatAgent
+      }))
+    );
+
+    const denied = await Call<TransitionWorkflowBodyType>(transitionapi.default, {
+      auth: owner,
+      body: { appId: sourceId, createNew: true }
+    });
+    expect(denied.error).toBe(TeamErrEnum.appAmountNotEnough);
+    expect(await MongoAppVersion.countDocuments()).toBe(1);
+
+    const converted = await Call<TransitionWorkflowBodyType>(transitionapi.default, {
+      auth: owner,
+      body: { appId: sourceId, createNew: false }
+    });
+    expect(converted.code).toBe(200);
+    expect((await MongoApp.findById(sourceId).lean())?.type).toBe(AppTypeEnum.workflow);
+    expect(await MongoApp.countDocuments({ teamId: owner.teamId })).toBe(10);
   });
 });

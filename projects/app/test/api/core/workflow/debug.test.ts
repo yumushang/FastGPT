@@ -7,8 +7,11 @@ const mocks = vi.hoisted(() => ({
   createChatUsageRecord: vi.fn(),
   dispatchWorkFlow: vi.fn(),
   getNanoid: vi.fn(),
+  getAppDraftWorkflow: vi.fn(),
+  getAppDraftVersion: vi.fn(),
   getRunningUserInfoByTmbId: vi.fn(),
   getWorkflowFinalResponseData: vi.fn(),
+  prepareAppWorkflowResources: vi.fn(),
   prepareWorkflowFileQuery: vi.fn()
 }));
 
@@ -26,6 +29,15 @@ vi.mock('@fastgpt/service/support/permission/auth/common', () => ({
 
 vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
   dispatchWorkFlow: mocks.dispatchWorkFlow
+}));
+
+vi.mock('@fastgpt/service/core/app/version/controller', () => ({
+  getAppDraftWorkflow: mocks.getAppDraftWorkflow,
+  getAppDraftVersion: mocks.getAppDraftVersion
+}));
+
+vi.mock('@fastgpt/service/core/app/resource/service', () => ({
+  prepareAppWorkflowResources: mocks.prepareAppWorkflowResources
 }));
 
 vi.mock('@fastgpt/service/core/workflow/utils/fileLimits', () => ({
@@ -55,21 +67,30 @@ vi.mock('@/service/core/workflow/nodeResponse', () => ({
 }));
 
 import handler from '@/pages/api/core/workflow/debug';
+import { resolveSystemInstanceConfig } from '@fastgpt/global/common/system/config/schema';
 
 const appId = '68ad85a7463006c963799a05';
 const app = {
   _id: appId,
   name: 'Workflow app',
-  teamId: 'team-id',
-  tmbId: 'owner-id',
-  chatConfig: { variables: [] }
+  teamId: '68ad85a7463006c963799a06',
+  tmbId: 'owner-id'
 };
+const savedChatConfig = { variables: [] };
 
 describe('workflow debug API chatId', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authCert.mockResolvedValue({ tmbId: 'member-id' });
     mocks.authApp.mockResolvedValue({ app });
+    mocks.getAppDraftWorkflow.mockResolvedValue({
+      nodes: [],
+      edges: [],
+      chatConfig: savedChatConfig,
+      resources: []
+    });
+    mocks.getAppDraftVersion.mockResolvedValue({ resources: [] });
+    mocks.prepareAppWorkflowResources.mockResolvedValue([]);
     mocks.getRunningUserInfoByTmbId.mockResolvedValue({
       teamId: 'team-id',
       tmbId: 'member-id'
@@ -117,6 +138,10 @@ describe('workflow debug API chatId', () => {
     );
     expect(mocks.createChatUsageRecord).not.toHaveBeenCalled();
     expect(mocks.getNanoid).toHaveBeenCalledTimes(1);
+    expect(mocks.getAppDraftWorkflow).toHaveBeenCalledWith(appId, app);
+    expect(mocks.prepareWorkflowFileQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ chatConfig: savedChatConfig })
+    );
   });
 
   it('generates a dispatch chatId when an older client does not provide one', async () => {
@@ -142,5 +167,87 @@ describe('workflow debug API chatId', () => {
     );
     expect(mocks.createChatUsageRecord).toHaveBeenCalledTimes(1);
     expect(mocks.getNanoid).toHaveBeenCalledTimes(2);
+    expect(mocks.getAppDraftWorkflow).toHaveBeenCalledWith(appId, app);
+    expect(mocks.dispatchWorkFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ chatConfig: savedChatConfig })
+    );
+  });
+
+  it('uses request chatConfig without loading the draft workflow', async () => {
+    const requestChatConfig = { variables: [] };
+    mocks.getNanoid.mockReturnValue('response-chat-item-id');
+
+    await handler(
+      {
+        body: { appId, chatConfig: requestChatConfig, usageId: 'usage-id' },
+        headers: {}
+      } as any,
+      {} as any
+    );
+
+    expect(mocks.getAppDraftWorkflow).not.toHaveBeenCalled();
+    expect(mocks.prepareWorkflowFileQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ chatConfig: requestChatConfig })
+    );
+    expect(mocks.dispatchWorkFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ chatConfig: requestChatConfig })
+    );
+  });
+
+  it('preserves client runtime edge statuses when calling workflow dispatch', async () => {
+    const requestEdges = [
+      {
+        source: 'workflowStartNodeId',
+        sourceHandle: 'workflowStartNodeId-source-right',
+        target: 'aiChatNodeId',
+        targetHandle: 'aiChatNodeId-target-left',
+        status: 'active'
+      },
+      {
+        source: 'aiChatNodeId',
+        sourceHandle: 'aiChatNodeId-source-right',
+        target: 'docParserNodeId',
+        targetHandle: 'docParserNodeId-target-left',
+        status: 'waiting'
+      }
+    ];
+
+    await handler(
+      {
+        body: {
+          appId,
+          edges: requestEdges,
+          usageId: 'usage-id'
+        },
+        headers: {}
+      } as any,
+      {} as any
+    );
+
+    expect(mocks.dispatchWorkFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeEdges: requestEdges
+      })
+    );
+  });
+
+  it('passes the current instance execution budget to each debug run', async () => {
+    const previousConfig = global.systemInstanceConfig;
+
+    try {
+      for (const maxRunTimes of [0, 1, 3]) {
+        global.systemInstanceConfig = resolveSystemInstanceConfig({
+          performance: { workflow: { maxRunTimes } }
+        });
+
+        await handler({ body: { appId, usageId: 'usage-id' }, headers: {} } as any, {} as any);
+
+        expect(mocks.dispatchWorkFlow).toHaveBeenLastCalledWith(
+          expect.objectContaining({ maxRunTimes })
+        );
+      }
+    } finally {
+      global.systemInstanceConfig = previousConfig;
+    }
   });
 });

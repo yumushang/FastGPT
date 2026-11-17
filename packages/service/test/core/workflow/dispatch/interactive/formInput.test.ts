@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   NodeInputKeyEnum,
   NodeOutputKeyEnum,
+  VARIABLE_NODE_ID,
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import { dispatchFormInput } from '@fastgpt/service/core/workflow/dispatch/interactive/formInput';
 import { runWithContext } from '@fastgpt/service/core/workflow/utils/context';
+import {
+  UserInputInteractiveSchema,
+  type UserInputFormItemType
+} from '@fastgpt/global/core/workflow/template/system/interactive/type';
 
 const { mockCreateGetChatFileURL } = vi.hoisted(() => ({
   mockCreateGetChatFileURL: vi.fn()
@@ -35,6 +40,116 @@ describe('dispatchFormInput', () => {
   beforeEach(() => {
     mockCreateGetChatFileURL.mockReset();
   });
+
+  it('opens a JSON-persisted form without a current value and resumes with the submitted value', async () => {
+    const params = JSON.parse(
+      JSON.stringify({
+        description: 'Fill form',
+        userInputForms: [
+          {
+            type: FlowNodeInputTypeEnum.input,
+            key: 'name',
+            label: 'Name',
+            value: undefined,
+            valueType: WorkflowIOValueTypeEnum.string,
+            required: false,
+            defaultValue: 'Alice'
+          }
+        ]
+      })
+    );
+    const props = {
+      histories: [],
+      runtimeNodesMap: new Map(),
+      node: { isEntry: false },
+      params,
+      query: []
+    };
+    const first = await dispatchFormInput(props as any);
+    const interactive = UserInputInteractiveSchema.parse(
+      JSON.parse(JSON.stringify(first[DispatchNodeResponseKeyEnum.interactive]))
+    );
+    expect(interactive.params.inputForm[0]).toMatchObject({ key: 'name', defaultValue: 'Alice' });
+    expect(interactive.params.inputForm[0]).not.toHaveProperty('value');
+
+    const resumed = await dispatchFormInput({
+      ...props,
+      node: { isEntry: true },
+      lastInteractive: interactive,
+      query: [{ text: { content: JSON.stringify({ name: 'Bob' }) } }]
+    } as any);
+    expect(resumed.data).toEqual({
+      name: 'Bob',
+      [NodeOutputKeyEnum.formInputResult]: { name: 'Bob' }
+    });
+    expect(params.userInputForms[0]).toEqual(interactive.params.inputForm[0]);
+  });
+
+  /** 用全局变量模拟动态选项来源，保留真实选项解析与交互生成逻辑。 */
+  const dispatchOptionForm = ({
+    type = FlowNodeInputTypeEnum.select,
+    sourceValue,
+    required = true
+  }: {
+    type?: FlowNodeInputTypeEnum;
+    sourceValue: unknown;
+    required?: boolean;
+  }) => {
+    const formItem: UserInputFormItemType = {
+      key: 'city',
+      label: '城市',
+      type,
+      value: '',
+      valueType: WorkflowIOValueTypeEnum.string,
+      required,
+      defaultValue: 'LegacyDefault',
+      listInputType: FlowNodeInputTypeEnum.reference,
+      listReference: [[VARIABLE_NODE_ID, 'cities']]
+    };
+
+    return dispatchFormInput({
+      histories: [],
+      node: { isEntry: false },
+      params: { description: 'Fill form', userInputForms: [formItem] },
+      variableState: { toRuntimeRecord: () => ({ cities: sourceValue }) },
+      query: []
+    } as any);
+  };
+
+  it('resolves dynamic options, trims whitespace, and removes the static default', async () => {
+    const result = await dispatchOptionForm({
+      sourceValue: ['  Beijing  ', '   ', '', 'Shanghai']
+    });
+    expect(result[DispatchNodeResponseKeyEnum.interactive]).toEqual({
+      type: 'userInput',
+      params: {
+        description: 'Fill form',
+        inputForm: [
+          expect.objectContaining({
+            defaultValue: undefined,
+            list: [
+              { label: 'Beijing', value: 'Beijing' },
+              { label: 'Shanghai', value: 'Shanghai' }
+            ]
+          })
+        ]
+      }
+    });
+  });
+
+  it.each([
+    { type: FlowNodeInputTypeEnum.select, required: true, sourceValue: [] },
+    { type: FlowNodeInputTypeEnum.multipleSelect, required: false, sourceValue: [] },
+    { type: FlowNodeInputTypeEnum.select, required: true, sourceValue: ['   ', '\n\t'] }
+  ])(
+    'returns a business failure for empty dynamic $type options (required: $required)',
+    async (props) => {
+      await expect(dispatchOptionForm(props)).resolves.toEqual({
+        error: { [NodeOutputKeyEnum.errorText]: 'workflow:form_input_no_available_options' },
+        responseData: { errorText: 'workflow:form_input_no_available_options' }
+      });
+    }
+  );
 
   it('presigns key-only fileSelect values before exposing form outputs', async () => {
     mockCreateGetChatFileURL.mockResolvedValueOnce({
@@ -265,5 +380,68 @@ describe('dispatchFormInput', () => {
 
     expect(result.data?.upload).toEqual(['https://external.example.com/1.pdf']);
     expect(registerInputFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks the node when formItem description or value violates output moderation', async () => {
+    const outputMod = await import('@fastgpt/service/core/plugin/moderation/output');
+    const spy = vi
+      .spyOn(outputMod, 'checkOutputTextModeration')
+      .mockImplementation(async ({ text, targetField }) => {
+        if (text === 'toxic-desc' || text === 'toxic-val') {
+          return {
+            isPass: false,
+            action: 'block' as any,
+            text,
+            blockErrorMessage: `blocked: ${targetField}`
+          };
+        }
+        return { isPass: true, action: 'pass' as any, text };
+      });
+
+    // Case 1: toxic description in formItem
+    const resultWithToxicDesc = await runWithContext({ mcpClientMemory: {} }, () =>
+      dispatchFormInput({
+        histories: [{ obj: 'Human', value: [] }],
+        node: { isEntry: true },
+        params: {
+          [NodeInputKeyEnum.description]: 'normal description',
+          [NodeInputKeyEnum.userInputForms]: [
+            {
+              key: 'input1',
+              label: 'normal label',
+              description: 'toxic-desc',
+              type: FlowNodeInputTypeEnum.input,
+              valueType: WorkflowIOValueTypeEnum.string,
+              required: false
+            }
+          ]
+        }
+      } as any)
+    );
+    expect(resultWithToxicDesc[DispatchNodeResponseKeyEnum.nodeDispatchResult]).toBeUndefined();
+
+    // Case 2: toxic value in formItem
+    const resultWithToxicVal = await runWithContext({ mcpClientMemory: {} }, () =>
+      dispatchFormInput({
+        histories: [{ obj: 'Human', value: [] }],
+        node: { isEntry: true },
+        params: {
+          [NodeInputKeyEnum.description]: 'normal description',
+          [NodeInputKeyEnum.userInputForms]: [
+            {
+              key: 'input2',
+              label: 'normal label',
+              value: 'toxic-val',
+              type: FlowNodeInputTypeEnum.input,
+              valueType: WorkflowIOValueTypeEnum.string,
+              required: false
+            }
+          ]
+        }
+      } as any)
+    );
+    expect(resultWithToxicVal[DispatchNodeResponseKeyEnum.nodeDispatchResult]).toBeUndefined();
+
+    spy.mockRestore();
   });
 });

@@ -1,3 +1,6 @@
+import { extendChatPublishSources } from '@fastgpt/service/core/chat/publishSource/service';
+import { getChatPublishSourceType } from '@fastgpt/global/common/chat/publishSource';
+import { buildAppChatLogFilter } from '@fastgpt/service/core/app/logs/utils';
 import { MongoChat } from '@fastgpt/service/core/chat/chatSchema';
 import { Types } from '@fastgpt/service/common/mongo';
 import { authApp } from '@fastgpt/service/support/permission/app/auth';
@@ -8,30 +11,27 @@ import {
 import { NextAPI } from '@/service/middleware/entry';
 import { readFromSecondary } from '@fastgpt/service/common/mongo/utils';
 import { parsePaginationRequest } from '@fastgpt/service/common/api/pagination';
-import { addSourceMember } from '@fastgpt/service/support/user/utils';
-import { replaceRegChars } from '@fastgpt/global/common/string/tools';
+import { formatSourceMember } from '@fastgpt/service/support/user/utils';
+import { getTeamMemberMap } from '@fastgpt/service/support/user/team/utils';
 import { getLocationFromIp } from '@fastgpt/service/common/geo';
 import { AppReadChatLogPerVal } from '@fastgpt/global/support/permission/app/constant';
-import { CommonErrEnum } from '@fastgpt/global/common/error/code/common';
 import type { ApiRequestProps } from '@fastgpt/next/type';
 import { getLocale } from '@fastgpt/service/common/middle/i18n';
 import { AppVersionCollectionName } from '@fastgpt/service/core/app/version/schema';
 import {
   GetAppChatLogsBodySchema,
   GetAppChatLogsResponseSchema,
+  type AppLogsListItemType,
   type getAppChatLogsResponseType
 } from '@fastgpt/global/openapi/core/app/log/api';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
-import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { ChatSourceEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { isUnselectedLogUserFilter } from '@fastgpt/global/core/app/logs/utils';
-
-const appChatSourceMatch = {
-  $or: [{ sourceType: ChatSourceTypeEnum.app }, { sourceType: { $exists: false } }]
-};
+import { getDisplayChatTitle } from '@fastgpt/service/core/chat/title';
 
 async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType> {
   const {
-    appId,
+    appId: requestedAppId,
     dateStart,
     dateEnd,
     sources,
@@ -48,16 +48,13 @@ async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType
 
   const { pageSize = 20, offset } = parsePaginationRequest(req);
 
-  if (!appId) {
-    return Promise.reject(CommonErrEnum.missingParams);
-  }
-
   // 凭证校验
-  await authApp({
+  const { teamId, appId } = await authApp({
     req,
     authToken: true,
     authApiKey: true,
-    appId,
+    authAppApiKey: true,
+    appId: requestedAppId,
     per: AppReadChatLogPerVal
   });
 
@@ -65,71 +62,23 @@ async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType
     return GetAppChatLogsResponseSchema.parse({ list: [], total: 0 });
   }
 
-  const where = {
-    appId: new Types.ObjectId(appId),
-    $and: [appChatSourceMatch],
-    // Feedback type filtering (BEFORE pagination for performance)
-    ...(feedbackType === 'has_feedback' &&
-      !unreadOnly && {
-        $or: [{ hasGoodFeedback: true }, { hasBadFeedback: true }]
-      }),
-    ...(feedbackType === 'has_feedback' &&
-      unreadOnly && {
-        $or: [{ hasUnreadGoodFeedback: true }, { hasUnreadBadFeedback: true }]
-      }),
-    ...(feedbackType === 'good' &&
-      !unreadOnly && {
-        hasGoodFeedback: true
-      }),
-    ...(feedbackType === 'good' &&
-      unreadOnly && {
-        hasUnreadGoodFeedback: true
-      }),
-    ...(feedbackType === 'bad' &&
-      !unreadOnly && {
-        hasBadFeedback: true
-      }),
-    ...(feedbackType === 'bad' &&
-      unreadOnly && {
-        hasUnreadBadFeedback: true
-      }),
-    ...(errorFilter === 'has_error' && {
-      errorCount: { $gt: 0 }
-    }),
-    ...(sources && { source: { $in: sources } }),
-    // User filter: tmbIds(排除外链用户) 或 outLinkUids
-    ...((tmbIds?.length || outLinkUids?.length) && {
-      $or: [
-        ...(tmbIds?.length
-          ? [
-              {
-                tmbId: { $in: tmbIds.map((id) => new Types.ObjectId(id)) },
-                outLinkUid: { $in: [null, ''] }
-              }
-            ]
-          : []),
-        ...(outLinkUids?.length ? [{ outLinkUid: { $in: outLinkUids } }] : [])
-      ]
-    }),
-    updateTime: {
-      $gte: new Date(dateStart),
-      $lte: new Date(dateEnd)
-    },
-    ...(chatSearch
-      ? {
-          $or: [
-            { chatId: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } },
-            { title: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } },
-            { customTitle: { $regex: new RegExp(`${replaceRegChars(chatSearch)}`, 'i') } }
-          ]
-        }
-      : undefined)
-  };
+  const where = buildAppChatLogFilter({
+    appId,
+    dateStart,
+    dateEnd,
+    sources,
+    tmbIds,
+    outLinkUids,
+    chatSearch,
+    feedbackType,
+    unreadOnly,
+    errorFilter
+  });
 
   // Execute both queries
   const [listResult, total] = await Promise.all([
     // Execute the main aggregation
-    MongoChat.aggregate(
+    MongoChat.aggregate<AppLogsListItemType>(
       [
         { $match: where },
         { $sort: { updateTime: -1 } },
@@ -299,6 +248,7 @@ async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType
             customTitle: 1,
             source: 1,
             sourceName: 1,
+            publishSource: 1,
             updateTime: 1,
             createTime: 1,
             messageCount: 1,
@@ -328,11 +278,11 @@ async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType
     MongoChat.countDocuments(where, { ...readFromSecondary })
   ]);
 
-  const list = listResult;
+  const list = await extendChatPublishSources({ list: listResult, teamId, appId });
 
   const listWithRegion = list.map((item) => {
     const ip = item.region;
-    const region = getLocationFromIp(ip, getLocale(req));
+    const region = getLocationFromIp(ip ?? undefined, getLocale(req));
 
     return {
       ...item,
@@ -341,12 +291,41 @@ async function handler(req: ApiRequestProps): Promise<getAppChatLogsResponseType
     };
   });
 
-  // 获取有 tmbId 的人员
-  const listWithSourceMember = await addSourceMember({ list: listWithRegion });
-  // 获取没有 tmbId 的人员
-  const listWithoutTmbId = listWithRegion.filter((item) => !item.tmbId);
+  // 一次读取本页鉴权者及分享访客，且限制在已鉴权团队中。
+  const memberIds = listWithRegion
+    .flatMap((item) => [
+      item.tmbId,
+      ...(getChatPublishSourceType(item) === ChatSourceEnum.share && item.outLinkUid
+        ? [item.outLinkUid]
+        : [])
+    ])
+    .filter((id): id is string => typeof id === 'string');
+  const memberMap = await getTeamMemberMap({
+    teamId,
+    memberIds,
+    fields: '_id name avatar status'
+  });
+
+  const finalList = listWithRegion.map((item) => {
+    const member = memberMap.get(String(item.tmbId));
+    const authMember = member ? formatSourceMember(member) : undefined;
+    // sourceMember 保留旧接口语义；authMember 始终属于 tmbId，不被外链访客覆盖。
+    const sourceMember = (() => {
+      if (getChatPublishSourceType(item) !== ChatSourceEnum.share || !item.outLinkUid)
+        return authMember;
+      const visitor = memberMap.get(String(item.outLinkUid));
+      return visitor ? formatSourceMember(visitor) : undefined;
+    })();
+    return {
+      ...item,
+      authMember,
+      sourceMember,
+      title: getDisplayChatTitle({ customTitle: item.customTitle, title: item.title })
+    };
+  });
+
   return GetAppChatLogsResponseSchema.parse({
-    list: listWithSourceMember.concat(listWithoutTmbId),
+    list: finalList,
     total
   });
 }

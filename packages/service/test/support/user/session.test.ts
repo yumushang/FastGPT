@@ -1,4 +1,11 @@
+import {
+  getTestInstanceConfig,
+  createDefaultInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 重新加载模块时保留完整测试快照；会话限制只由配置值驱动。
+(global as any).systemInstanceConfig = createDefaultInstanceConfig();
 
 const mocks = vi.hoisted(() => {
   const cache = {
@@ -27,19 +34,16 @@ import { ERROR_ENUM } from '@fastgpt/global/common/error/errorCode';
 let authUserSession: typeof import('@fastgpt/service/support/user/session').authUserSession;
 let createUserSession: typeof import('@fastgpt/service/support/user/session').createUserSession;
 let delUserAllSession: typeof import('@fastgpt/service/support/user/session').delUserAllSession;
-let serviceEnv: typeof import('@fastgpt/service/env').serviceEnv;
-let originalMaxLoginSession: typeof serviceEnv.MAX_LOGIN_SESSION;
+let originalMaxLoginSession: number;
 
 beforeAll(async () => {
   // test/setup.ts imports the auth chain before this file, so reset it before loading the service.
   vi.resetModules();
   const sessionModule = await import('@fastgpt/service/support/user/session');
-  const envModule = await import('@fastgpt/service/env');
   authUserSession = sessionModule.authUserSession;
   createUserSession = sessionModule.createUserSession;
   delUserAllSession = sessionModule.delUserAllSession;
-  serviceEnv = envModule.serviceEnv;
-  originalMaxLoginSession = serviceEnv.MAX_LOGIN_SESSION;
+  originalMaxLoginSession = getTestInstanceConfig().security.maxLoginSession;
 });
 
 describe('user session service', () => {
@@ -56,7 +60,10 @@ describe('user session service', () => {
     });
     mocks.cache.listByUser.mockResolvedValue([]);
     mocks.cache.set.mockResolvedValue(undefined);
-    serviceEnv.MAX_LOGIN_SESSION = originalMaxLoginSession;
+    getTestInstanceConfig().security.maxLoginSession = originalMaxLoginSession;
+    if ((global as any).systemInstanceConfig?.security) {
+      (global as any).systemInstanceConfig.security.maxLoginSession = originalMaxLoginSession;
+    }
   });
 
   it('returns a typed session and maps a missing session to unauthorized', async () => {
@@ -69,12 +76,14 @@ describe('user session service', () => {
   });
 
   it('creates a session with the historical fields and starts background cleanup', async () => {
-    serviceEnv.MAX_LOGIN_SESSION = 2;
+    getTestInstanceConfig().security.maxLoginSession = 2;
+    (global as any).systemInstanceConfig.security.maxLoginSession = 2;
 
     const sessionId = await createUserSession({
       userId: 'user-1',
       teamId: 'team-1',
       tmbId: 'tmb-1',
+      isRoot: false,
       ip: null
     });
 
@@ -93,6 +102,15 @@ describe('user session service', () => {
     await vi.waitFor(() => expect(mocks.cache.listByUser).toHaveBeenCalledWith('user-1'));
   });
 
+  it('preserves an explicit root identity when creating a session for another team', async () => {
+    await createUserSession({ userId: 'user-1', teamId: 'team-2', tmbId: 'tmb-2', isRoot: true });
+
+    expect(mocks.cache.set).toHaveBeenCalledWith({
+      sessionId: expect.any(String),
+      data: expect.objectContaining({ teamId: 'team-2', tmbId: 'tmb-2', isRoot: true })
+    });
+  });
+
   it('deletes all sessions except explicitly whitelisted session IDs', async () => {
     mocks.cache.listByUser.mockResolvedValue([
       { sessionId: 'user-1:keep', data: {} },
@@ -105,14 +123,15 @@ describe('user session service', () => {
   });
 
   it('removes the oldest sessions in background when the login limit is exceeded', async () => {
-    serviceEnv.MAX_LOGIN_SESSION = 2;
+    getTestInstanceConfig().security.maxLoginSession = 2;
+    (global as any).systemInstanceConfig.security.maxLoginSession = 2;
     mocks.cache.listByUser.mockResolvedValue([
       { sessionId: 'user-1:old', data: { createdAt: 1000 } },
       { sessionId: 'user-1:new', data: { createdAt: 3000 } },
       { sessionId: 'user-1:middle', data: { createdAt: 2000 } }
     ]);
 
-    await createUserSession({ userId: 'user-1', teamId: 'team-1', tmbId: 'tmb-1' });
+    await createUserSession({ userId: 'user-1', teamId: 'team-1', tmbId: 'tmb-1', isRoot: false });
 
     await vi.waitFor(() => expect(mocks.cache.deleteMany).toHaveBeenCalledWith(['user-1:old']));
   });
@@ -122,7 +141,7 @@ describe('user session service', () => {
     mocks.cache.set.mockRejectedValue(error);
 
     await expect(
-      createUserSession({ userId: 'user-1', teamId: 'team-1', tmbId: 'tmb-1' })
+      createUserSession({ userId: 'user-1', teamId: 'team-1', tmbId: 'tmb-1', isRoot: false })
     ).rejects.toBe(error);
   });
 });

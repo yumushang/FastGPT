@@ -1,12 +1,24 @@
 ---
 title: 'V4.14.8'
-description: 'FastGPT V4.14.8 Release Notes'
+description: "FastGPT V4.14.8 release notes covering container image updates, upgrade steps, and feature changes."
 releaseTime: '2026-03-06'
 upgradeTags:
   - CONFIG
 ---
 
 ## Upgrade Guide
+
+### Update Environment Variables
+
+fastgpt-sandbox now supports an optional authentication token. To use it, set the same `SANDBOX_TOKEN` value in fastgpt-sandbox and in the corresponding FastGPT and FastGPT Pro services.
+
+```bash
+# Add the authentication token to fastgpt-sandbox
+SANDBOX_TOKEN=
+
+# Add the same token to fastgpt and fastgpt-pro
+SANDBOX_TOKEN=
+```
 
 ### Update Images
 
@@ -25,7 +37,7 @@ upgradeTags:
 
 ## ⚙️ Improvements
 
-1. MCP JSON Schema `type` fields no longer need to be restricted to enum values.
+1. Improved compatibility with MCP JSON Schema `type` values outside the supported type enumeration.
 2. Updated the variable reference label in Dataset search to use clearer, more intuitive wording.
 
 ## 🐛 Bug Fixes

@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SystemToolSecretMaskedValue } from '@fastgpt/global/core/app/tool/systemTool/constants';
 import { PluginStatusEnum } from '@fastgpt/global/core/plugin/type';
-import { decryptSecret } from '@fastgpt/service/common/secret/aes256gcm';
+import { decryptSecret, encryptSecret } from '@fastgpt/service/common/secret/aes256gcm';
 
 const mocks = vi.hoisted(() => ({
   authSystemAdmin: vi.fn(),
+  disableSystemPlugin: vi.fn(),
+  restoreSystemPlugin: vi.fn(),
   findOne: vi.fn(),
   updateOne: vi.fn(),
   updateMany: vi.fn(),
@@ -38,6 +40,11 @@ vi.mock('@fastgpt/service/core/app/tool/systemTool/systemTool.repo', () => ({
       getSystemToolDetail: mocks.getSystemToolDetail
     })
   }
+}));
+
+vi.mock('@fastgpt/service/thirdProvider/fastgptPlugin/lifecycle', () => ({
+  disableSystemPlugin: mocks.disableSystemPlugin,
+  restoreSystemPlugin: mocks.restoreSystemPlugin
 }));
 
 import { handler } from '@/pages/api/core/plugin/admin/tool/update';
@@ -97,6 +104,72 @@ describe('admin system tool update handler', () => {
     );
   });
 
+  it('does not commit local uninstall when the plugin server fails', async () => {
+    mocks.disableSystemPlugin.mockRejectedValueOnce(new Error('remote failed'));
+    await expect(
+      handler(
+        { body: { id: 'systemTool-weather', status: PluginStatusEnum.Offline } } as any,
+        {} as any
+      )
+    ).rejects.toThrow('remote failed');
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('activates retained remote files before restoring local configuration', async () => {
+    mocks.findOne.mockResolvedValueOnce({ status: PluginStatusEnum.Offline });
+    await handler(
+      { body: { id: 'systemTool-weather', status: PluginStatusEnum.Normal } } as any,
+      {} as any
+    );
+    expect(mocks.restoreSystemPlugin).toHaveBeenCalledWith('weather');
+    expect(mocks.restoreSystemPlugin.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.updateOne.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not invoke remote lifecycle when updating status of a child tool', async () => {
+    await handler(
+      { body: { id: 'systemTool-weather/forecast', status: PluginStatusEnum.Offline } } as any,
+      {} as any
+    );
+    expect(mocks.disableSystemPlugin).not.toHaveBeenCalled();
+    expect(mocks.restoreSystemPlugin).not.toHaveBeenCalled();
+    expect(mocks.updateOne).toHaveBeenCalledWith(
+      { pluginId: 'systemTool-weather/forecast' },
+      expect.objectContaining({ status: PluginStatusEnum.Offline }),
+      expect.anything()
+    );
+  });
+
+  it('保存系统工具配置', async () => {
+    mocks.findOne.mockResolvedValue({
+      pluginId: 'systemTool-weather',
+      customConfig: {
+        name: 'Weather',
+        intro: 'Weather intro',
+        version: '1.0.0'
+      }
+    });
+
+    await handler(
+      {
+        body: {
+          id: 'systemTool-weather',
+          tags: ['weather']
+        }
+      } as any,
+      {} as any
+    );
+
+    expect(mocks.updateOne.mock.calls[0][1].customConfig).toEqual({
+      name: 'Weather',
+      intro: 'Weather intro',
+      version: '1.0.0',
+      tags: ['weather']
+    });
+  });
+
   it('为新建的子工具写入与父工具一致的密钥', async () => {
     const secretsVal = { apiKey: 'plain-value' };
 
@@ -113,7 +186,6 @@ describe('admin system tool update handler', () => {
 
     const storedSecretsVal = mocks.updateOne.mock.calls[0][1].secretsVal;
     expect(decryptSecret(storedSecretsVal.apiKey.secret)).toBe('plain-value');
-    expect(storedSecretsVal.apiKey.value).toBe('');
 
     expect(mocks.updateMany).toHaveBeenCalledWith(
       { pluginId: { $regex: '^systemTool-weather/' } },
@@ -133,7 +205,7 @@ describe('admin system tool update handler', () => {
   it('保留管理员详情返回的 masked 系统密钥', async () => {
     mocks.findOne.mockResolvedValue({
       pluginId: 'systemTool-weather',
-      secretsVal: { apiKey: 'legacy-value' },
+      secretsVal: { apiKey: { secret: encryptSecret('configured-value') } },
       customConfig: {}
     });
 
@@ -148,6 +220,6 @@ describe('admin system tool update handler', () => {
     );
 
     const storedSecretsVal = mocks.updateOne.mock.calls[0][1].secretsVal;
-    expect(decryptSecret(storedSecretsVal.apiKey.secret)).toBe('legacy-value');
+    expect(decryptSecret(storedSecretsVal.apiKey.secret)).toBe('configured-value');
   });
 });

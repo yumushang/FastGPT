@@ -1,3 +1,5 @@
+import { getOutLinkBrandUpdate } from '@fastgpt/service/support/outLink/branding/service';
+import { getTeamCanHideShareBrand } from '@fastgpt/service/support/wallet/sub/service';
 import { MongoOutLink } from '@fastgpt/service/support/outLink/schema';
 import { authOutLinkCrud } from '@fastgpt/service/support/permission/publish/authLink';
 import { ManagePermissionVal } from '@fastgpt/global/support/permission/constant';
@@ -14,6 +16,7 @@ import {
   type OutLinkUpdateBodyType,
   type OutLinkUpdateResponseType
 } from '@fastgpt/global/openapi/support/outLink/api';
+import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
 
 // {
 // _id?: string; // Outlink 的 ID
@@ -25,7 +28,7 @@ import {
 // app?: T; // 平台的配置
 // }
 
-async function handler(
+export async function handler(
   req: ApiRequestProps<OutLinkUpdateBodyType>
 ): Promise<OutLinkUpdateResponseType> {
   const {
@@ -35,6 +38,8 @@ async function handler(
     limit,
     app,
     canDownloadSource,
+    allowAnonymous,
+    isShowBrand,
     showRunningStatus,
     showSkillReferences,
     showFullText
@@ -59,10 +64,19 @@ async function handler(
     per: ManagePermissionVal
   });
 
+  const isShareLink = outLink.type === PublishChannelEnum.share;
+
+  const brandUpdate = await getOutLinkBrandUpdate({
+    outLink,
+    isShowBrand,
+    getTeamCanHideShareBrand
+  });
   const doc = await MongoOutLink.findByIdAndUpdate(_id, {
-    name,
+    ...brandUpdate,
+    ...(name !== undefined ? { name } : {}),
     showCite,
     canDownloadSource,
+    ...(isShareLink && allowAnonymous !== undefined ? { allowAnonymous } : {}),
     showRunningStatus,
     showSkillReferences,
     showFullText,

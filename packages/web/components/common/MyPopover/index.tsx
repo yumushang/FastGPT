@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Popover,
+  PopoverAnchor,
   PopoverTrigger,
   PopoverContent,
   useDisclosure,
@@ -11,8 +12,10 @@ import {
   Portal
 } from '@chakra-ui/react';
 
-interface Props extends PopoverContentProps {
+type Props = PopoverContentProps & {
   Trigger: React.ReactNode;
+  /** 传入时由调用方控制显隐；省略时保持原有 useDisclosure 行为。 */
+  isOpen?: boolean;
   placement?: PlacementWithLogical;
   offset?: [number, number];
   trigger?: 'hover' | 'click';
@@ -24,10 +27,13 @@ interface Props extends PopoverContentProps {
   closeOnBlur?: boolean;
   usePortal?: boolean;
   flip?: boolean;
-}
+  /** hover 模式下仅由 Trigger 控制开关；鼠标进入浮层不会保持打开。 */
+  closeOnTriggerLeave?: boolean;
+};
 
 const MyPopover = ({
   Trigger,
+  isOpen: controlledIsOpen,
   placement,
   offset,
   trigger,
@@ -38,12 +44,27 @@ const MyPopover = ({
   closeOnBlur = false,
   usePortal = true,
   flip = true,
+  closeOnTriggerLeave = false,
   onBackdropClick,
   ...props
 }: Props) => {
   const firstFieldRef = React.useRef(null);
 
-  const { onOpen, onClose, isOpen } = useDisclosure();
+  const {
+    onOpen: onInternalOpen,
+    onClose: onInternalClose,
+    isOpen: internalIsOpen
+  } = useDisclosure();
+  const isControlled = controlledIsOpen !== undefined;
+  const isOpen = controlledIsOpen ?? internalIsOpen;
+  const onOpen = () => {
+    if (!isControlled) onInternalOpen();
+    onOpenFunc?.();
+  };
+  const onClose = () => {
+    if (!isControlled) onInternalClose();
+    onCloseFunc?.();
+  };
 
   const popoverContent = (
     <PopoverContent zIndex={1001} {...props}>
@@ -52,30 +73,34 @@ const MyPopover = ({
     </PopoverContent>
   );
 
+  const triggerOnlyHover = trigger === 'hover' && closeOnTriggerLeave;
+
   return (
     <Popover
       isOpen={isOpen}
       initialFocusRef={firstFieldRef}
-      onOpen={() => {
-        onOpen();
-        onOpenFunc?.();
-      }}
-      onClose={() => {
-        onClose();
-        onCloseFunc?.();
-      }}
+      onOpen={onOpen}
+      onClose={onClose}
       placement={placement}
       offset={offset}
       flip={flip}
       closeOnBlur={closeOnBlur}
-      trigger={trigger}
+      trigger={triggerOnlyHover ? undefined : trigger}
       openDelay={100}
       closeDelay={100}
       isLazy
       lazyBehavior="unmount"
       autoFocus={false}
     >
-      <PopoverTrigger>{Trigger}</PopoverTrigger>
+      {triggerOnlyHover ? (
+        <PopoverAnchor>
+          <Box display="inline-block" onMouseEnter={onOpen} onMouseLeave={onClose}>
+            {Trigger}
+          </Box>
+        </PopoverAnchor>
+      ) : (
+        <PopoverTrigger>{Trigger}</PopoverTrigger>
+      )}
       {isOpen && onBackdropClick && (
         <Portal>
           <Box position="fixed" zIndex={1000} inset={0} onClick={() => onBackdropClick()} />

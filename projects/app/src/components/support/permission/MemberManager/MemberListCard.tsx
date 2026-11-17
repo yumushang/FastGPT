@@ -4,7 +4,7 @@ import { DefaultGroupName } from '@fastgpt/global/support/user/team/group/consta
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import Tag, { type TagProps } from '@fastgpt/web/components/common/Tag';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import React from 'react';
 import { useContextSelector } from 'use-context-selector';
 import { CollaboratorContext } from './context';
@@ -12,16 +12,16 @@ import { CollaboratorContext } from './context';
 export type MemberListCardProps = BoxProps & { tagStyle?: Omit<TagProps, 'children'> };
 
 const MemberListCard = ({ tagStyle, ...props }: MemberListCardProps) => {
-  const { t } = useClientTranslation(['user']);
+  const { t } = useSafeTranslation();
   const { userInfo } = useUserStore();
 
-  const { collaboratorList, isFetchingCollaborator } = useContextSelector(
+  const { collaboratorList, isLoadingCollaborator } = useContextSelector(
     CollaboratorContext,
     (v) => v
   );
 
   return (
-    <MyBox isLoading={isFetchingCollaborator} userSelect={'none'} {...props}>
+    <MyBox isLoading={isLoadingCollaborator} userSelect={'none'} {...props}>
       {collaboratorList?.length === 0 ? (
         <Box p={3} color="myGray.600" fontSize={'xs'} textAlign={'center'}>
           {t('common:permission.Not collaborator')}

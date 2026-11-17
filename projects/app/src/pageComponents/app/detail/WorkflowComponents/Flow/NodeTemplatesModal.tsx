@@ -49,6 +49,7 @@ const NodeTemplatesModal = ({ isOpen, onClose }: ModuleTemplateListProps) => {
     setSearchKey,
     templatesIsLoading,
     templates,
+    TeamScrollData,
     onUpdateTemplateType,
     onUpdateParentId,
     selectedTagIds,
@@ -84,6 +85,7 @@ const NodeTemplatesModal = ({ isOpen, onClose }: ModuleTemplateListProps) => {
       top={[0, '67px']}
       position={'fixed'}
       placement={'left'}
+      animationMode={'slideFromLeft'}
       showMask={false}
       headerProps={{
         minH: 0,
@@ -119,6 +121,7 @@ const NodeTemplatesModal = ({ isOpen, onClose }: ModuleTemplateListProps) => {
         templates={templates}
         templateType={templateType}
         onUpdateParentId={onUpdateParentId}
+        ScrollData={TeamScrollData}
       />
     </AppDetailPanelModal>
   );

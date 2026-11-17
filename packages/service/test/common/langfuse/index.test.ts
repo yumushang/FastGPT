@@ -1,0 +1,206 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { trace } from '@opentelemetry/api';
+
+const mocks = vi.hoisted(() => ({
+  processors: [] as unknown[],
+  construct: vi.fn(),
+  shutdown: vi.fn(async () => undefined),
+  onStart: vi.fn(),
+  onEnd: vi.fn(),
+  forceFlush: vi.fn(async () => undefined),
+  serviceEnv: {
+    LANGFUSE_SECRET_KEY: 'secret-key' as string | undefined,
+    LANGFUSE_PUBLIC_KEY: 'public-key' as string | undefined,
+    LANGFUSE_BASE_URL: 'https://langfuse.example.com' as string | undefined
+  }
+}));
+
+vi.mock('@fastgpt-sdk/otel/tracing', () => ({
+  addSpanProcessor: (processor: unknown) => {
+    if (!mocks.processors.includes(processor)) mocks.processors.push(processor);
+  }
+}));
+
+vi.mock('@langfuse/otel', () => ({
+  LangfuseSpanProcessor: class {
+    constructor(config: unknown) {
+      mocks.construct(config);
+    }
+
+    onStart(...args: unknown[]) {
+      mocks.onStart(...args);
+    }
+    onEnd(...args: unknown[]) {
+      mocks.onEnd(...args);
+    }
+    forceFlush() {
+      return mocks.forceFlush();
+    }
+    shutdown() {
+      return mocks.shutdown();
+    }
+  }
+}));
+
+vi.mock('@fastgpt/service/env', () => ({
+  serviceEnv: mocks.serviceEnv
+}));
+
+import {
+  initLangfuseTracing,
+  isLangfuseEnabled,
+  prepareLangfuseSpan,
+  refreshLangfuseTracing,
+  setActiveLangfuseAttributes,
+  setActiveLangfuseTraceAttributes
+} from '@fastgpt/service/common/langfuse';
+
+describe('initLangfuseTracing', () => {
+  beforeEach(() => {
+    mocks.serviceEnv.LANGFUSE_PUBLIC_KEY = 'public-key';
+    mocks.serviceEnv.LANGFUSE_SECRET_KEY = 'secret-key';
+    mocks.serviceEnv.LANGFUSE_BASE_URL = 'https://langfuse.example.com';
+  });
+
+  it('deduplicates facade registration and rebuilds the processor after shutdown', async () => {
+    expect(isLangfuseEnabled()).toBe(true);
+    await refreshLangfuseTracing();
+    expect(mocks.construct).not.toHaveBeenCalled();
+
+    await initLangfuseTracing();
+    await initLangfuseTracing();
+
+    expect(mocks.processors).toHaveLength(1);
+    expect(mocks.construct).toHaveBeenCalledTimes(1);
+
+    const facade = mocks.processors[0] as {
+      onStart: (...args: unknown[]) => void;
+      onEnd: (...args: unknown[]) => void;
+      forceFlush: () => Promise<void>;
+      shutdown: () => Promise<void>;
+    };
+    const originalSpan = {
+      attributes: { 'fastgpt.workflow.mode': 'chat' },
+      spanContext: () => ({ spanId: 'span-1' })
+    };
+    facade.onStart(originalSpan, 'context');
+    expect(mocks.onStart).not.toHaveBeenCalled();
+
+    prepareLangfuseSpan({ 'langfuse.trace.name': 'message' }, 'trace');
+    facade.onStart(originalSpan, 'context');
+    facade.onStart({ ...originalSpan, spanContext: () => ({ spanId: 'span-2' }) }, 'context');
+    vi.spyOn(trace, 'getActiveSpan').mockReturnValue(originalSpan as never);
+    // 节点级属性写到 trace span 上必须被忽略，避免未建 span 的节点污染父 span。
+    setActiveLangfuseAttributes({ 'langfuse.observation.input': 'should be ignored' });
+    setActiveLangfuseTraceAttributes({ 'langfuse.trace.output': 'private output' });
+    facade.onEnd(originalSpan);
+    await facade.forceFlush();
+    const privateStartedSpan = mocks.onStart.mock.calls[0]?.[0] as {
+      attributes: Record<string, unknown>;
+    };
+    const privateEndedSpan = mocks.onEnd.mock.calls[0]?.[0] as {
+      attributes: Record<string, unknown>;
+    };
+    expect(privateStartedSpan.attributes).toEqual({
+      'fastgpt.workflow.mode': 'chat',
+      'langfuse.trace.name': 'message',
+      'langfuse.trace.output': 'private output'
+    });
+    expect(privateEndedSpan.attributes).toEqual(privateStartedSpan.attributes);
+    expect(originalSpan.attributes).toEqual({ 'fastgpt.workflow.mode': 'chat' });
+    expect(mocks.onStart).toHaveBeenCalledTimes(1);
+    expect(mocks.forceFlush).toHaveBeenCalledTimes(1);
+
+    const firstConfig = mocks.construct.mock.calls[0]?.[0] as {
+      shouldExportSpan: (props: { otelSpan: { attributes: Record<string, unknown> } }) => boolean;
+    };
+    expect(
+      firstConfig.shouldExportSpan({ otelSpan: { attributes: { 'langfuse.trace.name': 'x' } } })
+    ).toBe(true);
+    expect(
+      firstConfig.shouldExportSpan({
+        otelSpan: { attributes: { 'fastgpt.workflow.mode': 'chat' } }
+      })
+    ).toBe(false);
+
+    await facade.shutdown();
+    await initLangfuseTracing();
+
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.construct).toHaveBeenCalledTimes(2);
+
+    mocks.serviceEnv.LANGFUSE_SECRET_KEY = 'runtime-secret';
+    mocks.serviceEnv.LANGFUSE_PUBLIC_KEY = 'runtime-public';
+    mocks.serviceEnv.LANGFUSE_BASE_URL = 'https://runtime.example.com';
+    await refreshLangfuseTracing();
+    expect(mocks.construct).toHaveBeenCalledTimes(3);
+    expect(mocks.construct).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        secretKey: 'runtime-secret',
+        publicKey: 'runtime-public',
+        baseUrl: 'https://runtime.example.com'
+      })
+    );
+
+    mocks.serviceEnv.LANGFUSE_SECRET_KEY = '   ';
+    expect(isLangfuseEnabled()).toBe(false);
+    mocks.serviceEnv.LANGFUSE_SECRET_KEY = undefined;
+    mocks.serviceEnv.LANGFUSE_PUBLIC_KEY = undefined;
+    mocks.serviceEnv.LANGFUSE_BASE_URL = 'https://disabled.example.com';
+    await refreshLangfuseTracing();
+    expect(isLangfuseEnabled()).toBe(false);
+    expect(mocks.shutdown).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares span attributes and refresh state across module instances', async () => {
+    const tracingGlobal = globalThis as typeof globalThis & {
+      langfuseTracingState?: unknown;
+    };
+    const originalSecret = mocks.serviceEnv.LANGFUSE_SECRET_KEY;
+    delete tracingGlobal.langfuseTracingState;
+    mocks.construct.mockClear();
+    mocks.onStart.mockClear();
+    mocks.onEnd.mockClear();
+
+    try {
+      vi.resetModules();
+      const first = await import('@fastgpt/service/common/langfuse');
+      await first.initLangfuseTracing();
+      const facade = mocks.processors.at(-1) as {
+        onStart: (span: unknown, context: unknown) => void;
+        onEnd: (span: unknown) => void;
+      };
+      const span = {
+        attributes: { 'fastgpt.workflow.mode': 'chat' },
+        spanContext: () => ({ spanId: 'shared-span' })
+      };
+
+      vi.resetModules();
+      const second = await import('@fastgpt/service/common/langfuse');
+      second.prepareLangfuseSpan({ 'langfuse.trace.name': 'shared' }, 'trace');
+      facade.onStart(span, 'context');
+      expect(mocks.onStart).toHaveBeenCalledTimes(1);
+      expect(
+        (mocks.onStart.mock.calls[0]?.[0] as { attributes: Record<string, unknown> }).attributes
+      ).toMatchObject({ 'langfuse.trace.name': 'shared' });
+
+      vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span as never);
+      second.setActiveLangfuseTraceAttributes({ 'langfuse.trace.output': 'shared output' });
+      facade.onEnd(span);
+      expect(mocks.onEnd).toHaveBeenCalledTimes(1);
+      expect(
+        (mocks.onEnd.mock.calls[0]?.[0] as { attributes: Record<string, unknown> }).attributes
+      ).toMatchObject({
+        'langfuse.trace.name': 'shared',
+        'langfuse.trace.output': 'shared output'
+      });
+
+      mocks.serviceEnv.LANGFUSE_SECRET_KEY = 'rotated-secret';
+      await second.refreshLangfuseTracing();
+      expect(mocks.construct).toHaveBeenCalledTimes(2);
+    } finally {
+      mocks.serviceEnv.LANGFUSE_SECRET_KEY = originalSecret;
+      delete tracingGlobal.langfuseTracingState;
+    }
+  });
+});

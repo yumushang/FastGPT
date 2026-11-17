@@ -7,12 +7,14 @@ import { DEFAULT_PRESIGNED_URL_EXPIRED_SECONDS } from '../constants';
 import {
   bindAbortSignalToReadable,
   encodeObjectKeyPath,
+  formatHttpByteRangeHeader,
   throwIfStorageAborted,
   throwIfStorageDownloadAborted
 } from '../utils';
 import {
   assertStorageObjectKey,
   assertStorageObjectKeys,
+  assertStorageDownloadRange,
   assertStorageObjectPrefix,
   assertRequiredStorageObjectPrefix,
   assertMultipartContentLength,
@@ -39,10 +41,7 @@ export class OssStorageAdapter implements IStorage {
       bucket: options.bucket,
       cname: options.cname,
       internal: options.internal,
-      secure: options.secure,
-
-      // @ts-expect-error ali-oss SDK 类型未定义但存在此属性
-      enableProxy: options.proxy ? true : false
+      secure: options.secure
     });
   }
 
@@ -144,8 +143,11 @@ export class OssStorageAdapter implements IStorage {
     await this.client.put(key, uploadBody, {
       headers,
       mime: contentType,
-      meta
-    });
+      meta,
+      // ali-oss 对 Readable body 会走 putStream：未传 contentLength 时额外写入
+      // Transfer-Encoding: chunked，与上面的 Content-Length 冲突，provider 会直接拒绝请求。
+      ...(uploadBody instanceof Readable && contentLength !== undefined ? { contentLength } : {})
+    } as OSS.PutObjectOptions & { contentLength?: number });
 
     return {
       key,
@@ -260,11 +262,18 @@ export class OssStorageAdapter implements IStorage {
   async downloadObject(
     params: Storage.DownloadObjectParams
   ): Promise<Storage.DownloadObjectResult> {
-    const { key, abortSignal } = params;
+    const { key, range, abortSignal } = params;
     assertStorageObjectKey(key);
+    assertStorageDownloadRange(range);
     throwIfStorageDownloadAborted(abortSignal);
 
-    const result = await this.client.getStream(key);
+    const result = range
+      ? await this.client.getStream(key, {
+          headers: {
+            Range: formatHttpByteRangeHeader(range)
+          }
+        })
+      : await this.client.getStream(key);
     const stream = result.stream as Readable;
     bindAbortSignalToReadable({ readable: stream, abortSignal });
 

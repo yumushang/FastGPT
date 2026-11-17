@@ -1,11 +1,13 @@
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'http';
 import os from 'os';
+import dns from 'dns/promises';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 // --- Hoisted mocks ---
-const { mockDereference, mockMongoAppFind } = vi.hoisted(() => ({
-  mockDereference: vi.fn(),
-  mockMongoAppFind: vi.fn()
+const { mockDereference } = vi.hoisted(() => ({
+  mockDereference: vi.fn()
 }));
 
 vi.mock('@apidevtools/json-schema-ref-parser', () => ({
@@ -14,24 +16,22 @@ vi.mock('@apidevtools/json-schema-ref-parser', () => ({
   }
 }));
 
-vi.mock('../../../core/app/schema', () => ({
-  MongoApp: {
-    find: mockMongoAppFind
-  }
-}));
-
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
   MCPClient,
   assertMCPUrlNotInternal,
+  createMcpSseFetch,
   createMcpSafeFetch,
   getMCPChildren
 } from '../../../core/app/mcp';
 import type { AppSchemaType } from '@fastgpt/global/core/app/type';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { MongoApp } from '../../../core/app/schema';
+import type { AppPublishedWorkflow } from '../../../core/app/version/controller';
 import { PRIVATE_URL_TEXT } from '../../../common/system/utils';
-import { serviceEnv } from '../../../env';
-import { getSecretValue, storeSecretValue } from '../../../common/secret/utils';
+import { getLogger, LogCategories } from '../../../common/logger';
 
 // Access private client via prototype for spying
 const getPrivateClient = (mcpClient: MCPClient) =>
@@ -47,11 +47,11 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-const mutableServiceEnv = serviceEnv as { CHECK_INTERNAL_IP: boolean };
-const originalCheckInternalIp = serviceEnv.CHECK_INTERNAL_IP;
+const originalCheckInternalIp = getTestInstanceConfig().security.checkInternalIp;
 
 afterEach(() => {
-  mutableServiceEnv.CHECK_INTERNAL_IP = originalCheckInternalIp;
+  getTestInstanceConfig().security.checkInternalIp = originalCheckInternalIp;
+  vi.unstubAllEnvs();
 });
 
 const listen = (handler: http.RequestListener, host = '127.0.0.1') =>
@@ -142,6 +142,22 @@ describe('MCPClient', () => {
 
       await expect(mcpClient.closeConnection()).resolves.toBeUndefined();
     });
+
+    it('should close the MCP fetch dispatcher with the client', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      client.close = vi.fn().mockResolvedValue(undefined);
+      client.connect = vi.fn().mockResolvedValue(undefined);
+
+      await (mcpClient as any).getConnection();
+      const safeFetch = (mcpClient as any).safeFetch;
+      const close = vi.spyOn(safeFetch, 'close');
+
+      await mcpClient.closeConnection();
+
+      expect(close).toHaveBeenCalledOnce();
+      expect((mcpClient as any).safeFetch).toBeNull();
+    });
   });
 
   describe('getTools', () => {
@@ -185,6 +201,31 @@ describe('MCPClient', () => {
       client.listTools.mockResolvedValue({ tools: 'not-array' });
 
       await expect(mcpClient.getTools()).rejects.toThrow('Get tools response is not an array');
+    });
+
+    it('preserves configuration errors for the centralized logger', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = stubConnection(mcpClient);
+      const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+      const errorLog = vi.spyOn(logger, 'error');
+      const warnLog = vi.spyOn(logger, 'warn');
+      client.listTools.mockRejectedValue(new StreamableHTTPError(401, 'Invalid MCP credentials'));
+
+      await expect(mcpClient.getTools()).rejects.toMatchObject({
+        name: 'UserConfigError'
+      });
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warnLog).toHaveBeenCalledWith(
+        'MCP client failed to get tools',
+        expect.objectContaining({
+          urlHost: 'example.com',
+          error: expect.objectContaining({
+            name: 'UserConfigError',
+            cause: expect.objectContaining({ code: 401 })
+          })
+        })
+      );
     });
 
     it('should fallback to original schema when dereference fails', async () => {
@@ -378,6 +419,47 @@ describe('MCPClient', () => {
       expect(tagsSchema.items).not.toHaveProperty('$ref');
     });
 
+    it('should keep recursive $ref schema JSON-serializable', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = stubConnection(mcpClient);
+
+      // 递归 $ref：request -> properties -> children -> items -> 回到根
+      const recursiveSchema = {
+        type: 'object',
+        properties: {
+          request: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              children: { type: 'array', items: { $ref: '#' } }
+            }
+          }
+        }
+      };
+      client.listTools.mockResolvedValue({
+        tools: [{ name: 'recursive', description: 'recursive ref', inputSchema: recursiveSchema }]
+      });
+
+      // 交给真实解析器执行 getTools 传入的选项，验证递归 $ref 不会产出循环引用对象
+      const actual = await vi.importActual<typeof import('@apidevtools/json-schema-ref-parser')>(
+        '@apidevtools/json-schema-ref-parser'
+      );
+      mockDereference.mockImplementation((schema, options) =>
+        actual.default.dereference(schema, options)
+      );
+
+      const tools = await mcpClient.getTools();
+
+      expect(() => JSON.stringify(tools)).not.toThrow();
+      expect(tools[0]!.inputSchema!.properties!['request']).toEqual({
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          children: { type: 'array', items: { $ref: '#' } }
+        }
+      });
+    });
+
     it('should handle tool with no description', async () => {
       const mcpClient = new MCPClient(config);
       const client = stubConnection(mcpClient);
@@ -480,12 +562,67 @@ describe('MCPClient', () => {
       );
       expect(closeSpy).toHaveBeenCalled();
     });
+
+    it.each([
+      { code: 410, message: 'Url is expired', protocol: false },
+      { code: 404, message: 'Session not found', protocol: false },
+      { code: -32003, message: 'MCP error -32003: unsupported protocol version', protocol: true }
+    ])(
+      'preserves external failure $code for centralized log classification',
+      async ({ code, message, protocol }) => {
+        const mcpClient = new MCPClient(config);
+        const client = stubConnection(mcpClient);
+        const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+        const errorLog = vi.spyOn(logger, 'error');
+        const warnLog = vi.spyOn(logger, 'warn');
+        const error = protocol
+          ? Object.assign(new Error(message), { name: 'McpError', code })
+          : new StreamableHTTPError(code, message);
+        client.callTool.mockRejectedValue(error);
+
+        await expect(mcpClient.toolCall({ toolName: 'bad', params: {} })).rejects.toMatchObject({
+          name: 'UserConfigError',
+          cause: error
+        });
+        expect(errorLog).not.toHaveBeenCalled();
+        expect(warnLog).toHaveBeenCalledWith(
+          'MCP client tool call failed',
+          expect.objectContaining({
+            error: expect.objectContaining({ name: 'UserConfigError', cause: error })
+          })
+        );
+      }
+    );
+
+    it('treats unexpected internal error without MCP codes as system error without double error logging', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = stubConnection(mcpClient);
+      const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+      const errorLog = vi.spyOn(logger, 'error');
+      const warnLog = vi.spyOn(logger, 'warn');
+      const error = new Error('unexpected internal runtime bug');
+      client.callTool.mockRejectedValue(error);
+
+      await expect(mcpClient.toolCall({ toolName: 'bad', params: {} })).rejects.toBe(error);
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warnLog).toHaveBeenCalledWith(
+        'MCP client tool call failed',
+        expect.objectContaining({
+          urlHost: 'example.com',
+          error
+        })
+      );
+    });
   });
 
   describe('getConnection', () => {
     it('should fallback to SSE when server rejects Streamable HTTP with a 4xx', async () => {
       const mcpClient = new MCPClient(config);
       const client = getPrivateClient(mcpClient);
+      const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+      const errorLog = vi.spyOn(logger, 'error');
+      const warnLog = vi.spyOn(logger, 'warn');
       // StreamableHTTP rejected with 405 (server speaks legacy SSE), SSE succeeds
       client.connect = vi
         .fn()
@@ -495,6 +632,8 @@ describe('MCPClient', () => {
       const result = await (mcpClient as any).getConnection();
       expect(client.connect).toHaveBeenCalledTimes(2);
       expect(result).toBe(client);
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warnLog).not.toHaveBeenCalled();
     });
 
     it('should pass custom headers once to the SSE fallback transport', async () => {
@@ -525,18 +664,43 @@ describe('MCPClient', () => {
       expect(client.connect).toHaveBeenCalledTimes(1);
     });
 
-    it('should not fallback to SSE when Streamable HTTP fails with a 5xx', async () => {
+    it.each([
+      {
+        kind: 'external server',
+        error: new StreamableHTTPError(500, 'Internal Server Error'),
+        external: true
+      },
+      { kind: 'internal', error: new TypeError('Internal connection failure'), external: false }
+    ])(
+      'keeps $kind connection diagnostics without attempting SSE fallback',
+      async ({ error, external }) => {
+        const mcpClient = new MCPClient(config);
+        const client = getPrivateClient(mcpClient);
+        const infoLog = vi.spyOn(getLogger(LogCategories.MODULE.APP.MCP_TOOLS), 'info');
+        client.connect = vi.fn().mockRejectedValue(error);
+
+        await expect((mcpClient as any).getConnection()).rejects.toBe(error);
+        expect(client.connect).toHaveBeenCalledTimes(1);
+        expect(infoLog).toHaveBeenCalledWith('Streamable HTTP error', {
+          error,
+          ...(external ? { otel: false } : {})
+        });
+      }
+    );
+
+    it('should not hide Streamable HTTP 429 behind an SSE probe', async () => {
       const mcpClient = new MCPClient(config);
       const client = getPrivateClient(mcpClient);
       client.connect = vi
         .fn()
-        .mockRejectedValue(new StreamableHTTPError(500, 'Internal Server Error'));
+        .mockRejectedValueOnce(new StreamableHTTPError(429, 'Too Many Requests'))
+        .mockRejectedValueOnce(new StreamableHTTPError(404, 'Not Found'));
 
-      await expect((mcpClient as any).getConnection()).rejects.toThrow('Internal Server Error');
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({ code: 429 });
       expect(client.connect).toHaveBeenCalledTimes(1);
     });
 
-    it('should surface both errors when the SSE fallback also fails', async () => {
+    it('surfaces both errors as user config error when SSE fallback also fails with handshake error', async () => {
       const mcpClient = new MCPClient(config);
       const client = getPrivateClient(mcpClient);
       client.connect = vi
@@ -544,11 +708,138 @@ describe('MCPClient', () => {
         .mockRejectedValueOnce(new StreamableHTTPError(404, 'Not Found'))
         .mockRejectedValueOnce(new Error('SSE handshake failed'));
 
-      await expect((mcpClient as any).getConnection()).rejects.toThrow(
+      const request = (mcpClient as any).getConnection();
+
+      await expect(request).rejects.toMatchObject({ name: 'UserConfigError' });
+      await expect(request).rejects.toThrow(
         /Streamable HTTP:.*Not Found.*SSE:.*SSE handshake failed/s
       );
       expect(client.connect).toHaveBeenCalledTimes(2);
     });
+
+    it('classifies network unreachable SSE failure as a user config error', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      client.connect = vi
+        .fn()
+        .mockRejectedValueOnce(new StreamableHTTPError(410, 'Url is expired'))
+        .mockRejectedValueOnce(new Error('SSE network unreachable'));
+
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({
+        name: 'UserConfigError'
+      });
+      expect(client.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it('classifies HTTP 405 Method Not Allowed as a user config error', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      client.connect = vi
+        .fn()
+        .mockRejectedValueOnce(new StreamableHTTPError(405, 'Method Not Allowed'))
+        .mockRejectedValueOnce(
+          new Error('SSE error: Invalid content type, expected "text/event-stream"')
+        );
+
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({
+        name: 'UserConfigError'
+      });
+      expect(client.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it('should classify the final SSE failure as a user config error', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      client.connect = vi
+        .fn()
+        .mockRejectedValueOnce(new StreamableHTTPError(404, 'Not Found'))
+        .mockRejectedValueOnce(new StreamableHTTPError(410, 'Url is expired'));
+
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({
+        name: 'UserConfigError'
+      });
+      expect(client.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['Not Found', 'fetch failed during protocol probe'])(
+      'keeps the final internal SSE failure observable after an HTTP probe returns %s',
+      async (probeMessage) => {
+        const mcpClient = new MCPClient(config);
+        const client = getPrivateClient(mcpClient);
+        const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+        const warnLog = vi.spyOn(logger, 'warn');
+        const internalError = new TypeError(
+          'Cannot read properties of undefined (reading capabilities)'
+        );
+        client.connect = vi
+          .fn()
+          .mockRejectedValueOnce(new StreamableHTTPError(404, probeMessage))
+          .mockRejectedValueOnce(internalError);
+
+        const request = mcpClient.toolCall({ toolName: 'test', params: {} });
+        await expect(request).rejects.toBe(internalError);
+        await expect(request).rejects.not.toMatchObject({ name: 'UserConfigError' });
+        expect(client.connect).toHaveBeenCalledTimes(2);
+        expect(warnLog).toHaveBeenCalledWith(
+          'MCP client tool call failed',
+          expect.objectContaining({ error: internalError })
+        );
+      }
+    );
+
+    it.each([
+      { code: 'EMFILE', external: false },
+      { code: 'ECONNREFUSED', external: true },
+      { code: 'ENOTFOUND', external: true },
+      { code: undefined, external: false },
+      { code: 'EMFILE', outerCode: 'UND_ERR_SOCKET', external: false }
+    ])(
+      'classifies fetch cause $code under wrapper $outerCode',
+      async ({ code, outerCode, external }) => {
+        // 使用真实 fetch 包装连接器异常，验证通用 TypeError 文案不会覆盖结构化原因。
+        const rootCause = Object.assign(new Error(code ?? 'unknown local failure'), { code });
+        const dispatcher = new Agent({
+          connect: (_options, callback) => callback(rootCause, null)
+        });
+        const fetchError = await undiciFetch('http://example.com/mcp', { dispatcher }).catch(
+          (error: unknown) => error
+        );
+        await dispatcher.close();
+        expect(fetchError).toBeInstanceOf(TypeError);
+        expect(fetchError).toMatchObject({ message: 'fetch failed', cause: rootCause });
+        const error = outerCode
+          ? Object.assign(new Error('network unreachable', { cause: fetchError }), {
+              code: outerCode
+            })
+          : fetchError;
+
+        const mcpClient = new MCPClient(config);
+        const client = getPrivateClient(mcpClient);
+        const logger = getLogger(LogCategories.MODULE.APP.MCP_TOOLS);
+        const warnLog = vi.spyOn(logger, 'warn');
+        const infoLog = vi.spyOn(logger, 'info');
+        client.connect = vi.fn().mockRejectedValue(error);
+
+        const request = mcpClient.toolCall({ toolName: 'test', params: {} });
+        if (external) {
+          await expect(request).rejects.toMatchObject({ name: 'UserConfigError', cause: error });
+        } else {
+          await expect(request).rejects.toBe(error);
+        }
+        expect(warnLog).toHaveBeenCalledWith(
+          'MCP client tool call failed',
+          expect.objectContaining({
+            error: external
+              ? expect.objectContaining({ name: 'UserConfigError', cause: error })
+              : error
+          })
+        );
+        expect(infoLog).toHaveBeenCalledWith('Streamable HTTP error', {
+          error,
+          ...(external ? { otel: false } : {})
+        });
+      }
+    );
 
     it('should return client on StreamableHTTP success', async () => {
       const mcpClient = new MCPClient(config);
@@ -559,12 +850,231 @@ describe('MCPClient', () => {
       expect(client.connect).toHaveBeenCalledTimes(1);
       expect(result).toBe(client);
     });
+
+    it('should convert ZodError to UserConfigError when MCP server returns invalid JSON-RPC response', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      // 模拟 MCP SDK 在收到不合规响应时抛出的 ZodError
+      const zodError = new Error('Invalid input: unrecognized_keys: "status", "info", "infocode"');
+      zodError.name = 'ZodError';
+      client.connect = vi.fn().mockRejectedValue(zodError);
+
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({
+        name: 'UserConfigError',
+        message: 'MCP server returned invalid response',
+        displayMessage: expect.stringContaining('JSON-RPC 2.0'),
+        cause: zodError
+      });
+      expect(client.connect).toHaveBeenCalledTimes(1);
+    });
+
+    it('should convert protocol error in SSE fallback to UserConfigError', async () => {
+      const mcpClient = new MCPClient(config);
+      const client = getPrivateClient(mcpClient);
+      // Streamable HTTP 失败但 fallback 条件满足
+      const httpError = new StreamableHTTPError(405, 'Method Not Allowed');
+      // SSE fallback 也遇到协议错误
+      const zodError = new Error('Invalid input: invalid_union');
+      zodError.name = 'ZodError';
+      client.connect = vi.fn().mockRejectedValueOnce(httpError).mockRejectedValueOnce(zodError);
+
+      await expect((mcpClient as any).getConnection()).rejects.toMatchObject({
+        name: 'UserConfigError',
+        message: 'MCP server returned invalid response',
+        cause: zodError
+      });
+      expect(client.connect).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
+describe('createMcpSseFetch', () => {
+  const url = new URL('https://example.com/mcp');
+
+  it.each([401, 403, 404, 410])(
+    'preserves SSE GET handshake status %s through the real SDK',
+    async (status) => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        new Response('expired', {
+          status,
+          statusText: 'MCP request rejected'
+        })
+      );
+      const transport = new SSEClientTransport(url, {
+        fetch: createMcpSseFetch(fetchImpl)
+      });
+
+      await expect(transport.start()).rejects.toMatchObject({
+        code: status
+      });
+      await transport.close();
+    }
+  );
+
+  it.each([401, 403, 410])(
+    'preserves SSE POST status %s for MCP error classification',
+    async (status) => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        new Response('expired', {
+          status,
+          statusText: 'MCP request rejected'
+        })
+      );
+      const transport = new SSEClientTransport(url, {
+        fetch: createMcpSseFetch(fetchImpl)
+      });
+      (transport as any)._endpoint = url;
+
+      await expect(
+        (transport as any).send({
+          jsonrpc: '2.0',
+          id: 'status-test',
+          method: 'ping'
+        })
+      ).rejects.toMatchObject({
+        code: status,
+        responseBody: 'expired',
+        message: expect.stringContaining('expired')
+      });
+    }
+  );
+});
+
 describe('createMcpSafeFetch', () => {
+  beforeEach(() => {
+    // pnpm may inject npm_config_*_proxy into the test process; isolate direct-connect tests.
+    for (const key of [
+      'HTTP_PROXY',
+      'http_proxy',
+      'HTTPS_PROXY',
+      'https_proxy',
+      'ALL_PROXY',
+      'all_proxy',
+      'npm_config_http_proxy',
+      'npm_config_https_proxy',
+      'npm_config_proxy'
+    ]) {
+      vi.stubEnv(key, '');
+    }
+  });
+
+  it('should reject a DNS rebinding answer before sending the request', async () => {
+    getTestInstanceConfig().security.checkInternalIp = true;
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '127.0.0.1', family: 4 }]);
+    const fetchImpl = vi.fn();
+    const safeFetch = createMcpSafeFetch({ fetchImpl });
+
+    try {
+      await expect(safeFetch('http://rebind.example.test/mcp')).rejects.toThrow(PRIVATE_URL_TEXT);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await safeFetch.close();
+    }
+  });
+
+  it('should reject mixed public and private DNS answers', async () => {
+    getTestInstanceConfig().security.checkInternalIp = true;
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    vi.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '198.51.100.12', family: 4 },
+      { address: '169.254.169.254', family: 4 }
+    ]);
+    const fetchImpl = vi.fn();
+    const safeFetch = createMcpSafeFetch({ fetchImpl });
+
+    try {
+      await expect(safeFetch('http://mixed.example.test/mcp')).rejects.toThrow(PRIVATE_URL_TEXT);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await safeFetch.close();
+    }
+  });
+
+  it('should validate the socket address again for every redirect target', async () => {
+    getTestInstanceConfig().security.checkInternalIp = true;
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    vi.spyOn(dns, 'lookup')
+      .mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }])
+      .mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('redirect', {
+        status: 302,
+        headers: { Location: 'http://redirected.example.test/mcp' }
+      })
+    );
+    const safeFetch = createMcpSafeFetch({ fetchImpl });
+
+    try {
+      await expect(safeFetch('http://initial.example.test/mcp')).rejects.toThrow(PRIVATE_URL_TEXT);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      await safeFetch.close();
+    }
+  });
+
+  it('should reject unexpected non-IP lookup results rather than resolving them again', async () => {
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: 'unexpected.example.test', family: 4 }]);
+    const fetchImpl = vi.fn();
+    const safeFetch = createMcpSafeFetch({ fetchImpl });
+
+    try {
+      await expect(safeFetch('http://invalid.example.test/mcp')).rejects.toThrow(
+        'DNS lookup returned an invalid address'
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await safeFetch.close();
+    }
+  });
+
+  it('should connect using the validated IP without another DNS lookup', async () => {
+    getTestInstanceConfig().security.checkInternalIp = false;
+    const carrierHost = getReachablePrivateHost();
+    if (!carrierHost) return;
+
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['8.8.8.8']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    const lookup = vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: carrierHost, family: 4 }]);
+    const server = await listen((req, res) => res.end(req.headers.host), '0.0.0.0');
+    const safeFetch = createMcpSafeFetch();
+    const hostname = 'pinned.example.test';
+
+    try {
+      const response = await safeFetch(`http://${hostname}:${getServerPort(server)}/mcp`);
+      expect(await response.text()).toBe(`${hostname}:${getServerPort(server)}`);
+      expect(lookup).toHaveBeenCalledTimes(1);
+    } finally {
+      await safeFetch.close();
+      await closeServer(server);
+    }
+  });
+
+  it('should fail closed when an HTTP proxy would resolve the target', async () => {
+    vi.stubEnv('HTTP_PROXY', 'http://127.0.0.1:3128');
+    vi.stubEnv('NO_PROXY', '');
+    vi.spyOn(dns, 'resolve4').mockResolvedValue(['198.51.100.12']);
+    vi.spyOn(dns, 'resolve6').mockResolvedValue([]);
+    const fetchImpl = vi.fn();
+    const safeFetch = createMcpSafeFetch({ fetchImpl });
+
+    try {
+      await expect(safeFetch('http://proxy.example.test/mcp')).rejects.toThrow(
+        'MCP requests through an HTTP proxy are not supported by SSRF protection'
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await safeFetch.close();
+    }
+  });
+
   it('should follow safe redirects hop by hop', async () => {
-    mutableServiceEnv.CHECK_INTERNAL_IP = false;
+    getTestInstanceConfig().security.checkInternalIp = false;
     const carrierHost = getReachablePrivateHost();
     if (!carrierHost) {
       return;
@@ -593,7 +1103,7 @@ describe('createMcpSafeFetch', () => {
   });
 
   it('should block redirects to loopback addresses', async () => {
-    mutableServiceEnv.CHECK_INTERNAL_IP = false;
+    getTestInstanceConfig().security.checkInternalIp = false;
     const carrierHost = getReachablePrivateHost();
     if (!carrierHost) {
       return;
@@ -622,7 +1132,7 @@ describe('createMcpSafeFetch', () => {
   });
 
   it('should enforce max redirect count', async () => {
-    mutableServiceEnv.CHECK_INTERNAL_IP = false;
+    getTestInstanceConfig().security.checkInternalIp = false;
     const carrierHost = getReachablePrivateHost();
     if (!carrierHost) {
       return;
@@ -646,7 +1156,7 @@ describe('createMcpSafeFetch', () => {
   });
 
   it('should drop sensitive headers when redirect target changes', async () => {
-    mutableServiceEnv.CHECK_INTERNAL_IP = false;
+    getTestInstanceConfig().security.checkInternalIp = false;
     const carrierHost = getReachablePrivateHost();
     if (!carrierHost) {
       return;
@@ -687,39 +1197,47 @@ describe('createMcpSafeFetch', () => {
 });
 
 describe('getMCPChildren', () => {
+  const createMcpWorkflow = (
+    toolConfig?: NonNullable<AppPublishedWorkflow['nodes'][number]['toolConfig']>
+  ): AppPublishedWorkflow => ({
+    nodes: [
+      {
+        nodeId: 'mcp-toolset',
+        flowNodeType: FlowNodeTypeEnum.toolSet,
+        name: 'MCP toolset',
+        toolConfig,
+        inputs: [],
+        outputs: []
+      }
+    ]
+  });
+
   it('should return tool list from new MCP format', async () => {
     const app = {
       _id: 'app123',
       avatar: '/icon.png',
       teamId: 'team1',
-      type: AppTypeEnum.mcpToolSet,
-      modules: [
-        {
-          toolConfig: {
-            mcpToolSet: {
-              toolId: 'tid',
-              url: 'http://mcp.test',
-              toolList: [
-                {
-                  name: 'tool_a',
-                  description: 'A',
-                  inputSchema: { type: 'object', properties: {} }
-                },
-                {
-                  name: 'tool_b',
-                  description: 'B',
-                  inputSchema: { type: 'object', properties: {} }
-                }
-              ]
-            }
+      type: AppTypeEnum.mcpToolSet
+    } as AppSchemaType;
+    const workflow = createMcpWorkflow({
+      mcpToolSet: {
+        url: 'http://mcp.test',
+        toolList: [
+          {
+            name: 'tool_a',
+            description: 'A',
+            inputSchema: { type: 'object', properties: {} }
           },
-          inputs: [],
-          outputs: []
-        }
-      ]
-    } as unknown as AppSchemaType;
+          {
+            name: 'tool_b',
+            description: 'B',
+            inputSchema: { type: 'object', properties: {} }
+          }
+        ]
+      }
+    });
 
-    const result = await getMCPChildren(app);
+    const result = await getMCPChildren(app, workflow);
 
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({
@@ -739,156 +1257,96 @@ describe('getMCPChildren', () => {
       _id: 'app123',
       avatar: '/icon.png',
       teamId: 'team1',
-      type: AppTypeEnum.mcpToolSet,
-      modules: [
-        {
-          toolConfig: {
-            mcpToolSet: {
-              toolId: 'tid',
-              url: 'http://mcp.test',
-              toolList: []
-            }
-          },
-          inputs: [],
-          outputs: []
-        }
-      ]
-    } as unknown as AppSchemaType;
+      type: AppTypeEnum.mcpToolSet
+    } as AppSchemaType;
+    const workflow = createMcpWorkflow({
+      mcpToolSet: {
+        url: 'http://mcp.test',
+        toolList: []
+      }
+    });
 
-    const result = await getMCPChildren(app);
+    const result = await getMCPChildren(app, workflow);
     expect(result).toEqual([]);
   });
 
-  it.each([
-    { headerSecret: undefined, expected: undefined, headers: {} },
-    { headerSecret: null, expected: undefined, headers: {} },
-    { headerSecret: {}, expected: {}, headers: {} },
-    {
-      headerSecret: { value: 'legacy-token' },
-      expected: { Authorization: { value: 'legacy-token' } },
-      headers: { Authorization: 'legacy-token' }
-    },
-    {
-      headerSecret: { Authorization: { value: 'legacy-token' }, 'X-Key': { value: 'api-key' } },
-      expected: { Authorization: { value: 'legacy-token' }, 'X-Key': { value: 'api-key' } },
-      headers: { Authorization: 'legacy-token', 'X-Key': 'api-key' }
-    },
-    {
-      headerSecret: { value: { value: 'header-named-value' } },
-      expected: { value: { value: 'header-named-value' } },
-      headers: { value: 'header-named-value' }
-    }
-  ])(
-    'normalizes legacy child headers without wrapping an existing map: %j',
-    async ({ headerSecret, expected, headers }) => {
-      const children = [
-        {
-          name: 'search',
-          modules: [
-            {
-              inputs: [
-                {
-                  value: {
-                    name: 'search',
-                    description: 'Search',
-                    url: 'https://mcp.example.com',
-                    headerSecret,
-                    inputSchema: { type: 'object' }
-                  }
-                }
-              ]
-            }
-          ]
-        }
-      ];
-      const original = structuredClone(children);
-      mockMongoAppFind.mockReturnValueOnce({ lean: async () => children });
-      const [tool] = await getMCPChildren({
-        _id: 'legacy-set',
-        teamId: 'team',
-        type: AppTypeEnum.mcpToolSet,
-        avatar: '',
-        modules: [{ inputs: [] }]
-      } as unknown as AppSchemaType);
-      expect(tool.headerSecret).toEqual(expected);
-      expect(getSecretValue({ storeSecret: tool.headerSecret })).toEqual(headers);
-      expect(children).toEqual(original);
-    }
-  );
-
-  it.each(['map', 'single'] as const)(
-    'keeps encrypted legacy %s headers decryptable',
-    async (shape) => {
-      const encrypted = storeSecretValue({
-        Authorization: { value: 'legacy-token' },
-        'X-Key': { value: 'api-key' }
-      });
-      const headerSecret = shape === 'map' ? encrypted : encrypted.Authorization;
-      mockMongoAppFind.mockReturnValueOnce({
-        lean: async () => [
-          {
-            name: 'search',
-            modules: [
-              {
-                inputs: [
-                  {
-                    value: {
-                      name: 'search',
-                      description: 'Search',
-                      url: 'https://mcp.example.com',
-                      headerSecret
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      });
-      const [tool] = await getMCPChildren({
-        _id: 'legacy-set',
-        teamId: 'team',
-        type: AppTypeEnum.mcpToolSet,
-        avatar: '',
-        modules: [{ inputs: [] }]
-      } as unknown as AppSchemaType);
-      expect(tool.headerSecret).toEqual(
-        shape === 'map' ? encrypted : { Authorization: encrypted.Authorization }
-      );
-      expect(getSecretValue({ storeSecret: tool.headerSecret })).toEqual(
-        shape === 'map'
-          ? { Authorization: 'legacy-token', 'X-Key': 'api-key' }
-          : { Authorization: 'legacy-token' }
-      );
-    }
-  );
-
-  it('should query MongoApp for old MCP format', async () => {
+  it('should query MongoApp for legacy MCP format when parent has no inline toolSet', async () => {
+    const parentId = '65f000000000000000000081';
+    const teamId = '65f000000000000000000082';
     const app = {
-      _id: 'app456',
-      avatar: '/old-icon.png',
-      teamId: 'team2',
+      _id: parentId,
+      avatar: '/legacy-icon.png',
+      teamId,
       type: AppTypeEnum.mcpToolSet,
-      modules: [
-        {
-          toolConfig: undefined,
-          inputs: [],
-          outputs: []
-        }
-      ]
+      modules: [{ inputs: [], outputs: [] }]
     } as unknown as AppSchemaType;
 
     const childApps = [
       {
-        name: 'child_tool',
+        name: 'child_tool_1',
+        intro: 'Child Tool 1 Intro',
         modules: [
           {
             inputs: [
               {
                 value: {
-                  name: 'child_tool',
-                  description: 'child desc',
-                  url: 'http://child.mcp',
+                  name: 'child_tool_1',
+                  description: 'Desc 1',
+                  url: 'http://child1.mcp',
+                  headerSecret: { Authorization: { value: 'tok-1' } },
+                  inputSchema: { type: 'object', properties: { q: { type: 'string' } } }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'child_tool_2',
+        intro: 'Child Tool 2 Intro',
+        modules: [
+          {
+            inputs: [
+              {
+                value: {
+                  name: 'child_tool_2',
+                  description: 'Desc 2',
+                  url: 'http://child1.mcp',
+                  headerSecret: { value: 'single-legacy-token' },
+                  inputSchema: { type: 'object', properties: {} }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'child_tool_3',
+        modules: [
+          {
+            inputs: [
+              {
+                value: {
+                  name: 'child_tool_3',
+                  url: 'http://child1.mcp',
+                  headerSecret: { Authorization: { value: '', secret: 'encrypted-map-token' } },
+                  inputSchema: { type: 'object', properties: {} }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'child_tool_4',
+        modules: [
+          {
+            inputs: [
+              {
+                value: {
+                  name: 'child_tool_4',
+                  url: 'http://child1.mcp',
+                  headerSecret: { value: '', secret: 'encrypted-single-token' },
                   inputSchema: { type: 'object', properties: {} }
                 }
               }
@@ -897,57 +1355,60 @@ describe('getMCPChildren', () => {
         ]
       }
     ];
-    mockMongoAppFind.mockReturnValue({ lean: () => Promise.resolve(childApps) });
+
+    const findSpy = vi.spyOn(MongoApp, 'find').mockReturnValue({
+      lean: () => Promise.resolve(childApps)
+    } as any);
 
     const result = await getMCPChildren(app);
 
-    expect(mockMongoAppFind).toHaveBeenCalledWith({ teamId: 'team2', parentId: 'app456' });
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      avatar: '/old-icon.png',
-      id: 'mcp-app456/child_tool',
-      name: 'child_tool'
+    expect(findSpy).toHaveBeenCalledWith({
+      teamId,
+      parentId
+    });
+    expect(result).toHaveLength(4);
+    expect(result[0]).toEqual({
+      name: 'child_tool_1',
+      description: 'Desc 1',
+      id: `mcp-${parentId}/child_tool_1`,
+      avatar: '/legacy-icon.png',
+      url: 'http://child1.mcp',
+      headerSecret: { Authorization: { value: 'tok-1' } },
+      inputSchema: { type: 'object', properties: { q: { type: 'string' } } }
+    });
+    expect(result[1]).toEqual({
+      name: 'child_tool_2',
+      description: 'Desc 2',
+      id: `mcp-${parentId}/child_tool_2`,
+      avatar: '/legacy-icon.png',
+      url: 'http://child1.mcp',
+      headerSecret: { Authorization: { value: 'single-legacy-token' } },
+      inputSchema: { type: 'object', properties: {} }
+    });
+    expect(result[2].headerSecret).toEqual({
+      Authorization: { secret: 'encrypted-map-token' }
+    });
+    expect(result[3].headerSecret).toEqual({
+      Authorization: { secret: 'encrypted-single-token' }
     });
   });
 
-  it('should return empty array for old MCP with no children', async () => {
+  it('should return empty array for legacy MCP with no children in MongoApp', async () => {
+    const parentId = '65f000000000000000000083';
+    const teamId = '65f000000000000000000084';
     const app = {
-      _id: 'app789',
+      _id: parentId,
       avatar: '/icon.png',
-      teamId: 'team3',
+      teamId,
       type: AppTypeEnum.mcpToolSet,
-      modules: [{ toolConfig: undefined, inputs: [], outputs: [] }]
+      modules: [{ inputs: [], outputs: [] }]
     } as unknown as AppSchemaType;
 
-    mockMongoAppFind.mockReturnValue({ lean: () => Promise.resolve([]) });
+    vi.spyOn(MongoApp, 'find').mockReturnValue({
+      lean: () => Promise.resolve([])
+    } as any);
 
     const result = await getMCPChildren(app);
     expect(result).toEqual([]);
-  });
-
-  it('should ignore a non-MCP app even when its modules contain an MCP config', async () => {
-    const app = {
-      _id: 'workflow-app',
-      avatar: '/icon.png',
-      teamId: 'team3',
-      type: AppTypeEnum.workflow,
-      modules: [
-        {
-          toolConfig: {
-            mcpToolSet: {
-              url: 'https://mcp.test',
-              toolList: []
-            }
-          },
-          inputs: [],
-          outputs: []
-        }
-      ]
-    } as unknown as AppSchemaType;
-
-    const result = await getMCPChildren(app);
-
-    expect(result).toEqual([]);
-    expect(mockMongoAppFind).not.toHaveBeenCalled();
   });
 });

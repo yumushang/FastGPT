@@ -1,17 +1,10 @@
 import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/constants';
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall
-} from '@fastgpt/global/core/ai/llm/type';
-import type { AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
+import type { ChatCompletionMessageParam } from '@fastgpt/global/core/ai/llm/type';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { parseJsonArgs } from '../../../../../utils';
 import { runAgentLoop } from './base';
-import {
-  formatAgentAskToolResponse,
-  parseAgentAskToolCall,
-  type AgentAskPayload
-} from '../../../domain/systemTool/ask';
+import { parseAgentAskToolCall } from '../../../domain/systemTool/ask';
+import type { AgentAskInteractive } from '@fastgpt/global/core/ai/agent/type';
 import { applyPlanUpdate, applySetPlan } from '../../../domain/systemTool/plan';
 import type { AgentLoopEvent } from './type';
 import { normalizeAgentLoopUsages, type AgentLoopUsage } from '../../../domain';
@@ -23,11 +16,19 @@ import type {
   AgentLoopRuntime,
   AgentLoopToolExecutionResult,
   FastAgentLoopInput,
-  FastAgentLoopResult,
-  PendingMainContext
+  FastAgentLoopResult
 } from './type';
-import { runSandboxTools } from '../../../../../sandbox/interface/toolCall';
-import { normalizeToolResponseContent } from '@fastgpt/global/core/ai/llm/utils';
+import { runSandboxTools } from '../../../../../sandbox/application/toolCall';
+import {
+  isModerationBlockErrorMessage,
+  MODERATION_BLOCKED_REPLACE_TEXT
+} from '@fastgpt/global/core/plugin/moderation/constants';
+import {
+  checkToolResultModeration,
+  isToolResultModerated,
+  markToolResultModerated,
+  sanitizeModeratedToolNodeResponse
+} from '../../../../../../plugin/moderation/modelInput';
 
 /**
  * 创建工具执行结果的最小结构。
@@ -107,47 +108,6 @@ const buildInitialMessages = ({ input }: { input: FastAgentLoopInput }) => [
 ];
 
 /**
- * ask_user 暂停时保存恢复所需上下文。
- * 恢复后用户回答会作为同一个 ask tool_call 的 Tool message 追加，继续原消息链而不是开启新轮对话。
- */
-const buildAskPendingContext = ({
-  messages,
-  call,
-  assistantMessage,
-  activePlan
-}: {
-  messages: ChatCompletionMessageParam[];
-  call: ChatCompletionMessageToolCall;
-  assistantMessage?: ChatCompletionMessageParam;
-  activePlan?: AgentPlanType;
-}): PendingMainContext => {
-  const assistantFields =
-    assistantMessage?.role === ChatCompletionRequestMessageRoleEnum.Assistant
-      ? {
-          ...(('content' in assistantMessage && assistantMessage.content
-            ? { content: assistantMessage.content }
-            : {}) as Pick<typeof assistantMessage, 'content'>),
-          ...(assistantMessage.reasoning_content
-            ? { reasoning_content: assistantMessage.reasoning_content }
-            : {})
-        }
-      : {};
-
-  return {
-    messages: [
-      ...messages,
-      {
-        role: ChatCompletionRequestMessageRoleEnum.Assistant,
-        ...assistantFields,
-        tool_calls: [call]
-      }
-    ],
-    askToolCallId: call.id,
-    activePlan
-  };
-};
-
-/**
  * 单主 Agent Loop。
  * Main Agent 在同一条消息链中直接使用 runtime tools、ask_user、set_plan 和 update_plan；
  * answer/reasoning delta 和 plan 状态始终实时透传给前端。
@@ -166,36 +126,9 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
     toolCatalog: normalized
   };
 
-  let pendingAsk:
-    | {
-        ask: AgentAskPayload;
-        askId: string;
-        context: PendingMainContext;
-      }
-    | undefined;
-
-  // ask_user 暂停时会把当时的 LLM messages 保存到 pendingMainContext。
-  // 恢复时追加用户回答作为对应 ask tool 的 Tool message，延续同一条消息链。
-  const messages =
-    input.pendingMainContext && input.userAnswer !== undefined
-      ? [
-          ...input.pendingMainContext.messages,
-          {
-            role: ChatCompletionRequestMessageRoleEnum.Tool,
-            tool_call_id: input.pendingMainContext.askToolCallId,
-            content: normalizeToolResponseContent(
-              formatAgentAskToolResponse({
-                messages: input.pendingMainContext.messages,
-                askToolCallId: input.pendingMainContext.askToolCallId,
-                answer: input.userAnswer
-              })
-            )
-          } as ChatCompletionMessageParam
-        ]
-      : buildInitialMessages({ input });
-  // 普通续轮通过 input.activePlan 恢复结构化 plan；ask_user 续跑则优先使用暂停时的完整快照。
-  // 历史 checkpoint 只负责给模型提供上下文，不再作为运行时状态的反序列化来源。
-  let activePlan = input.pendingMainContext?.activePlan ?? input.activePlan;
+  // FastAgent 完全使用 ChatItem 重建后的消息；旧 providerState 不参与恢复。
+  const messages = buildInitialMessages({ input });
+  let activePlan = input.activePlan;
   // control 工具只影响 Agent 内部状态，不作为普通工具卡片向前端展示。
   // read_files/sandbox 是内置执行器，但需要走普通工具事件链路供前端和运行详情展示。
   const askToolName = runtime.toolCatalog.askTool?.function.name;
@@ -221,9 +154,42 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
   );
   const isSandboxSystemTool = (name: string) => sandboxToolNames.has(name);
 
+  // 统一普通工具与交互工具的结果审核及敏感字段脱敏，避免两处入口规则分叉
+  const moderateFastAgentToolResult = async <TResult>(
+    toolResult: AgentLoopToolExecutionResult<TResult> | undefined
+  ) => {
+    if (!toolResult || isToolResultModerated(toolResult)) {
+      return;
+    }
+
+    const originalResponse = toolResult.response;
+    const moderatedResponse = originalResponse
+      ? await checkToolResultModeration({
+          response: originalResponse,
+          context: { teamId: runtime.teamId }
+        })
+      : originalResponse;
+    const hitModeration =
+      moderatedResponse !== originalResponse ||
+      isModerationBlockErrorMessage(toolResult.errorMessage);
+    if (hitModeration) {
+      toolResult.response = MODERATION_BLOCKED_REPLACE_TEXT;
+      toolResult.errorMessage = undefined;
+      toolResult.assistantMessages = [];
+      toolResult.assistantResponses = undefined;
+      toolResult.skipResponseCompress = true;
+      toolResult.metadata = sanitizeModeratedToolNodeResponse(toolResult.metadata);
+    }
+    markToolResultModerated(toolResult);
+  };
+
   const result = await runAgentLoop({
     maxRunAgentTimes: runtime.maxRunAgentTimes ?? 100,
+    lang: runtime.lang,
+    completionPolicy: runtime.completionPolicy,
+    getCheckpointContext: runtime.getCheckpointContext,
     batchToolSize: runtime.batchToolSize ?? 5,
+    fileContext: runtime.fileContext,
     childrenInteractiveParams: input.childrenInteractiveParams,
     body: {
       model: runtime.model,
@@ -264,9 +230,10 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
         contextCheckpoint
       });
     },
-    onLLMRequestStart: ({ requestIndex, modelName }) =>
+    onLLMRequestStart: ({ requestIndex, modelName, responseId }) =>
       runtime.emitEvent?.({
         type: 'llm_request_start',
+        responseId,
         requestIndex,
         modelName
       }),
@@ -280,7 +247,10 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
       toolCalls,
       usage,
       seconds,
-      error
+      firstTokenTime,
+      error,
+      responseId,
+      assistantMessage
     }) => {
       const agentCallUsage = usage
         ? {
@@ -294,6 +264,8 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
       pushAgentLoopUsages(runtime, [agentCallUsage]);
       emitAgentLoopEvent(runtime, {
         type: 'llm_request_end',
+        responseId,
+        assistantMessage,
         requestIndex,
         modelName,
         requestId,
@@ -303,6 +275,7 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
         toolCalls,
         usages: normalizeAgentLoopUsages([agentCallUsage]),
         seconds,
+        firstTokenTime,
         error
       });
     },
@@ -334,26 +307,31 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
         call
       });
     },
+    onUserMessage: (event) => emitAgentLoopEvent(runtime, { type: 'user_message', ...event }),
     onToolRunEnd: ({
       call,
-      rawResponse,
       response,
       assistantMessages,
+      assistantResponses,
       seconds,
       errorMessage,
       usages,
       toolResponseCompress,
-      metadata
+      metadata,
+      hideInUI,
+      resumed,
+      interactive
     }) => {
-      if (controlToolNames.has(call.function.name)) return;
-
       pushAgentLoopUsages(runtime, usages);
+      if (interactive) emitAgentLoopEvent(runtime, { type: 'tool_interactive', call, interactive });
       emitAgentLoopEvent(runtime, {
         type: 'tool_run_end',
+        resumed,
+        hideInUI: hideInUI || controlToolNames.has(call.function.name),
         call,
-        rawResponse,
         response,
         assistantMessages,
+        assistantResponses,
         seconds,
         errorMessage,
         usages,
@@ -361,182 +339,163 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
         metadata
       });
     },
-    onRunTool: async ({ call, messages, assistantMessage }) => {
-      // 先处理会改变 agent-loop 本地状态的内置工具，再落到外部 runtime tool。
-      if (call.function.name === askToolName) {
-        const parsed = parseAgentAskToolCall(call);
-        if (!parsed.success) {
-          return createToolResponse(parsed.error, { skipResponseCompress: true });
+    onRunTool: async ({ call, messages }) => {
+      const toolResult = await (async (): Promise<
+        AgentLoopToolExecutionResult<TChildrenResponse | AgentAskInteractive>
+      > => {
+        // 先处理会改变 agent-loop 本地状态的内置工具，再落到外部 runtime tool。
+        if (call.function.name === askToolName) {
+          const parsed = parseAgentAskToolCall(call);
+          if (!parsed.success) {
+            return createToolResponse(parsed.error, { skipResponseCompress: true });
+          }
+
+          const validationError = await runtime.systemTools?.ask?.validate?.(parsed.ask);
+          if (validationError) {
+            return createToolResponse(validationError, { skipResponseCompress: true });
+          }
+
+          return createToolResponse<AgentAskInteractive>('Waiting for user answer.', {
+            interactive: {
+              type: 'agentAsk',
+              params: { toolCallId: call.id, arguments: call.function.arguments }
+            },
+            skipResponseCompress: true
+          });
         }
 
-        emitAgentLoopEvent(runtime, {
-          type: 'ask_start',
-          ask: parsed.ask,
-          id: call.id,
-          params: call.function.arguments,
-          seconds: 0
-        });
-        pendingAsk = {
-          ask: parsed.ask,
-          askId: call.id,
-          context: buildAskPendingContext({
-            messages,
+        if (call.function.name === setPlanToolName || call.function.name === updatePlanToolName) {
+          const args = parseJsonArgs(call.function.arguments);
+          const updateResult =
+            call.function.name === setPlanToolName
+              ? applySetPlan({ input: args })
+              : applyPlanUpdate({
+                  plan: activePlan,
+                  update: args
+                });
+          const operation =
+            call.function.name === setPlanToolName ? 'set_plan' : getPlanOperationFromArgs(args);
+
+          if (updateResult.success) {
+            activePlan = updateResult.plan;
+            emitAgentLoopEvent(runtime, {
+              type: 'plan_operation',
+              operation,
+              success: true,
+              message: updateResult.message,
+              id: call.id,
+              params: call.function.arguments,
+              seconds: 0,
+              plan: updateResult.plan
+            });
+          } else {
+            emitAgentLoopEvent(runtime, {
+              type: 'plan_operation',
+              operation,
+              success: false,
+              message: updateResult.message,
+              id: call.id,
+              params: call.function.arguments,
+              seconds: 0
+            });
+          }
+
+          return createToolResponse(updateResult.message, { skipResponseCompress: true });
+        }
+
+        if (isSandboxSystemTool(call.function.name)) {
+          const sandboxToolName = toSandboxToolName(call.function.name);
+
+          if (!runtime.sandboxToolContext) {
+            const response = 'Sandbox client is not available.';
+            return createToolResponse(response, { skipResponseCompress: true });
+          }
+
+          const sandboxResult = await runSandboxTools({
+            toolName: sandboxToolName,
+            args: call.function.arguments ?? '',
+            sandboxClient: runtime.sandboxToolContext.client,
+            validate: runtime.sandboxToolContext.validate
+          });
+          return createToolResponse(sandboxResult.response, {
+            skipResponseCompress: true,
+            errorMessage: sandboxResult.success ? undefined : sandboxResult.response
+          });
+        }
+
+        if (call.function.name === readFileToolName) {
+          if (!runtime.executeReadFileTool) {
+            const response = 'Read file executor is not available.';
+            return createToolResponse(response, { skipResponseCompress: true });
+          }
+
+          const fileResult = await runtime.executeReadFileTool({
             call,
-            assistantMessage,
-            activePlan
-          })
-        };
-
-        return createToolResponse('Waiting for user answer.', {
-          stop: true,
-          skipResponseCompress: true
-        });
-      }
-
-      if (call.function.name === setPlanToolName || call.function.name === updatePlanToolName) {
-        const args = parseJsonArgs(call.function.arguments);
-        const updateResult =
-          call.function.name === setPlanToolName
-            ? applySetPlan({ input: args })
-            : applyPlanUpdate({
-                plan: activePlan,
-                update: args
-              });
-        const operation =
-          call.function.name === setPlanToolName ? 'set_plan' : getPlanOperationFromArgs(args);
-
-        if (updateResult.success) {
-          activePlan = updateResult.plan;
-          emitAgentLoopEvent(runtime, {
-            type: 'plan_operation',
-            operation,
-            success: true,
-            message: updateResult.message,
-            id: call.id,
-            params: call.function.arguments,
-            seconds: 0,
-            plan: updateResult.plan
+            messages
           });
-        } else {
-          emitAgentLoopEvent(runtime, {
-            type: 'plan_operation',
-            operation,
-            success: false,
-            message: updateResult.message,
-            id: call.id,
-            params: call.function.arguments,
-            seconds: 0
+
+          return createToolResponse(fileResult.response, {
+            usages: fileResult.usages,
+            skipResponseCompress: true,
+            errorMessage: fileResult.error ? getErrText(fileResult.error) : undefined,
+            metadata: fileResult.metadata
           });
         }
 
-        return createToolResponse(updateResult.message, { skipResponseCompress: true });
-      }
+        if (call.function.name === datasetSearchToolName) {
+          if (!runtime.executeDatasetSearchTool) {
+            const response = 'Dataset search executor is not available.';
+            return createToolResponse(response, { skipResponseCompress: true });
+          }
 
-      if (isSandboxSystemTool(call.function.name)) {
-        const sandboxToolName = toSandboxToolName(call.function.name);
+          const patchedArgs = patchDatasetSearchParams({
+            args: call.function.arguments ?? '',
+            currentInputFiles: runtime.datasetSearchCurrentInputFiles
+          });
+          const patchedCall = {
+            ...call,
+            function: {
+              ...call.function,
+              arguments: JSON.stringify(patchedArgs)
+            }
+          };
+          const datasetResult = await runtime.executeDatasetSearchTool({
+            call: patchedCall,
+            messages
+          });
 
-        if (!runtime.sandboxToolContext) {
-          const response = 'Sandbox executor is not available.';
-          return createToolResponse(response, { skipResponseCompress: true });
+          return createToolResponse(datasetResult.response, {
+            usages: datasetResult.usages,
+            skipResponseCompress: true,
+            errorMessage: datasetResult.error ? getErrText(datasetResult.error) : undefined,
+            metadata: datasetResult.metadata
+          });
         }
 
-        const sandboxResult = await runSandboxTools({
-          toolName: sandboxToolName,
-          args: call.function.arguments ?? '',
-          sandboxClient: runtime.sandboxToolContext.client
-        });
-        return createToolResponse(sandboxResult.response, {
-          skipResponseCompress: true,
-          errorMessage: sandboxResult.success ? undefined : sandboxResult.response
-        });
-      }
-
-      if (call.function.name === readFileToolName) {
-        if (!runtime.executeReadFileTool) {
-          const response = 'Read file executor is not available.';
-          return createToolResponse(response, { skipResponseCompress: true });
-        }
-
-        const fileResult = await runtime.executeReadFileTool({
+        const toolResult = await runtime.executeTool({
           call,
           messages
         });
 
-        return createToolResponse(fileResult.response, {
-          usages: fileResult.usages,
-          skipResponseCompress: true,
-          errorMessage: fileResult.error ? getErrText(fileResult.error) : undefined,
-          metadata: fileResult.metadata
-        });
-      }
+        return toolResult;
+      })();
 
-      if (call.function.name === datasetSearchToolName) {
-        if (!runtime.executeDatasetSearchTool) {
-          const response = 'Dataset search executor is not available.';
-          return createToolResponse(response, { skipResponseCompress: true });
-        }
-
-        const patchedArgs = patchDatasetSearchParams({
-          args: call.function.arguments ?? '',
-          currentInputFiles: runtime.datasetSearchCurrentInputFiles
-        });
-        const patchedCall = {
-          ...call,
-          function: {
-            ...call.function,
-            arguments: JSON.stringify(patchedArgs)
-          }
-        };
-        const datasetResult = await runtime.executeDatasetSearchTool({
-          call: patchedCall,
-          messages
-        });
-
-        return createToolResponse(datasetResult.response, {
-          usages: datasetResult.usages,
-          skipResponseCompress: true,
-          errorMessage: datasetResult.error ? getErrText(datasetResult.error) : undefined,
-          metadata: datasetResult.metadata
-        });
-      }
-
-      const toolResult = await runtime.executeTool({
-        call,
-        messages
-      });
+      await moderateFastAgentToolResult(toolResult);
 
       return toolResult;
     },
     onRunInteractiveTool: async (params) => {
-      return runtime.executeInteractiveTool
+      const result = runtime.executeInteractiveTool
         ? await runtime.executeInteractiveTool(params)
         : createToolResponse<TChildrenResponse>(
             'Interactive tool is not supported in fastAgent loop yet.'
           );
+
+      await moderateFastAgentToolResult(result);
+
+      return result;
     }
   });
-
-  // 触发了 ask 模式
-  if (pendingAsk) {
-    return {
-      status: 'paused',
-      pause: {
-        type: 'ask',
-        ask: pendingAsk.ask,
-        askId: pendingAsk.askId
-      },
-      activePlan,
-      pendingMainContext: pendingAsk.context,
-      completeMessages: result.completeMessages,
-      assistantMessages: result.assistantMessages,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      llmTotalPoints: result.llmTotalPoints,
-      finishReason: result.finish_reason,
-      requestIds: result.requestIds,
-      contextCheckpoint: result.contextCheckpoint
-    };
-  }
 
   // 用户 abort
   if (runtime.checkIsStopping?.()) {
@@ -554,14 +513,10 @@ export const runFastAgentMainLoop = async <TChildrenResponse = unknown>({
     };
   }
 
-  if (result.toolChildPause) {
+  if (result.pause) {
     return {
       status: 'paused',
-      pause: {
-        type: 'tool_child',
-        childrenResponse: result.toolChildPause.childrenResponse,
-        toolCallId: result.toolChildPause.toolCallId
-      },
+      pause: result.pause,
       activePlan,
       completeMessages: result.completeMessages,
       assistantMessages: result.assistantMessages,

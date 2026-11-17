@@ -1,6 +1,15 @@
+import {
+  getTestInstanceConfig,
+  createDefaultInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+(global as any).systemInstanceConfig = createDefaultInstanceConfig();
+
 import { serviceEnv } from '@fastgpt/service/env';
 import { Types } from '@fastgpt/service/common/mongo';
+import { getLogger, LogCategories } from '@fastgpt/service/common/logger';
+import { UserConfigError } from '@fastgpt/global/common/error/utils';
 import {
   MongoDatasetSynonym,
   MongoDatasetSynonymMapping
@@ -8,6 +17,7 @@ import {
 
 const mockQueryExtension = vi.hoisted(() => vi.fn());
 const mockGetImageBase64 = vi.hoisted(() => vi.fn());
+const mockGetDatasetBase64Image = vi.hoisted(() => vi.fn());
 
 vi.mock('@fastgpt/service/core/ai/functions/queryExtension', () => ({
   queryExtension: mockQueryExtension
@@ -17,16 +27,23 @@ vi.mock('@fastgpt/service/common/file/image/utils', () => ({
   getImageBase64: mockGetImageBase64
 }));
 
+vi.mock('@fastgpt/service/common/s3/sources/dataset', () => ({
+  getS3DatasetSource: () => ({
+    getDatasetBase64Image: mockGetDatasetBase64Image
+  })
+}));
+
 import {
   computeFilterIntersection,
   datasetSearchQueryExtension,
   isValidImageEmbeddingSource,
   mergeDatasetSynonymQueryMatches,
   normalizeImageToBase64,
+  normalizeDatasetIndexImageToModelInput,
   standardizeDatasetSearchQueries
 } from '../../../../core/dataset/search/utils';
 
-const originalMultipleDataToBase64 = serviceEnv.MULTIPLE_DATA_TO_BASE64;
+const originalMultipleDataToBase64 = getTestInstanceConfig().feature.multipleDataToBase64;
 const originalDatasetSynonymEnabled = serviceEnv.DATASET_SYNONYM_ENABLED;
 
 beforeEach(() => {
@@ -35,7 +52,7 @@ beforeEach(() => {
 
 afterEach(() => {
   serviceEnv.DATASET_SYNONYM_ENABLED = originalDatasetSynonymEnabled;
-  serviceEnv.MULTIPLE_DATA_TO_BASE64 = originalMultipleDataToBase64;
+  getTestInstanceConfig().feature.multipleDataToBase64 = originalMultipleDataToBase64;
 });
 
 describe('mergeDatasetSynonymQueryMatches', () => {
@@ -141,7 +158,7 @@ describe('normalizeImageToBase64', () => {
   });
 
   it('should keep image url unchanged when base64 conversion is disabled', async () => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = false;
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
 
     const result = await normalizeImageToBase64('https://example.com/image.png');
 
@@ -150,7 +167,7 @@ describe('normalizeImageToBase64', () => {
   });
 
   it('should keep internal object keys unchanged when base64 conversion is disabled', async () => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = false;
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
 
     const keys = ['dataset/team/file.png', 'temp/team/file.png', 'chat/app/user/chat/file.png'];
 
@@ -163,7 +180,7 @@ describe('normalizeImageToBase64', () => {
   });
 
   it('should convert image url to base64 when base64 conversion is enabled', async () => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = true;
+    getTestInstanceConfig().feature.multipleDataToBase64 = true;
     mockGetImageBase64.mockResolvedValue({
       completeBase64: 'data:image/png;base64,converted'
     });
@@ -175,7 +192,7 @@ describe('normalizeImageToBase64', () => {
   });
 
   it('should treat internal object keys as plain inputs when base64 conversion is enabled', async () => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = true;
+    getTestInstanceConfig().feature.multipleDataToBase64 = true;
     mockGetImageBase64.mockResolvedValue({
       completeBase64: 'data:image/png;base64,converted'
     });
@@ -187,7 +204,7 @@ describe('normalizeImageToBase64', () => {
   });
 
   it('should keep data image unchanged regardless of base64 conversion flag', async () => {
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = false;
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
 
     const result = await normalizeImageToBase64('data:image/png;base64,input');
 
@@ -196,16 +213,125 @@ describe('normalizeImageToBase64', () => {
   });
 });
 
+describe('normalizeDatasetIndexImageToModelInput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetDatasetBase64Image.mockResolvedValue('data:image/png;base64,dataset_img');
+  });
+
+  it('should read S3 base64 image when datasetId matches key and MULTIPLE_DATA_TO_BASE64 is true', async () => {
+    getTestInstanceConfig().feature.multipleDataToBase64 = true;
+    const key = 'dataset/507f1f77bcf86cd799439011/image.png';
+    const result = await normalizeDatasetIndexImageToModelInput({
+      imageUrl: key,
+      datasetId: '507f1f77bcf86cd799439011'
+    });
+
+    expect(result).toBe('data:image/png;base64,dataset_img');
+    expect(mockGetDatasetBase64Image).toHaveBeenCalledWith(key);
+  });
+
+  it('should create signed S3 download URL when datasetId matches key and MULTIPLE_DATA_TO_BASE64 is false', async () => {
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
+    const key = 'dataset/507f1f77bcf86cd799439011/image.png';
+    const result = await normalizeDatasetIndexImageToModelInput({
+      imageUrl: key,
+      datasetId: '507f1f77bcf86cd799439011'
+    });
+
+    expect(result).toMatch(/\/api\/system\/file\/d\//);
+    expect(mockGetDatasetBase64Image).not.toHaveBeenCalled();
+  });
+
+  it('should throw error when datasetId does not match key', async () => {
+    const key = 'dataset/507f1f77bcf86cd799439099/foreign.png';
+    await expect(
+      normalizeDatasetIndexImageToModelInput({
+        imageUrl: key,
+        datasetId: '507f1f77bcf86cd799439011'
+      })
+    ).rejects.toThrow('Invalid dataset file key');
+    expect(mockGetDatasetBase64Image).not.toHaveBeenCalled();
+  });
+
+  it('should reject dataset S3 image when datasetId is omitted', async () => {
+    const key = 'dataset/507f1f77bcf86cd799439011/image.png';
+
+    await expect(normalizeDatasetIndexImageToModelInput({ imageUrl: key })).rejects.toThrow(
+      'Invalid dataset file key'
+    );
+    expect(mockGetDatasetBase64Image).not.toHaveBeenCalled();
+  });
+
+  it.each(['temp/team/file.png', 'chat/app/user/chat/file.png'])(
+    'should reject %s without reading private S3 data',
+    async (key) => {
+      await expect(
+        normalizeDatasetIndexImageToModelInput({
+          imageUrl: key,
+          datasetId: '507f1f77bcf86cd799439011'
+        })
+      ).rejects.toThrow('Invalid dataset file key');
+      expect(mockGetDatasetBase64Image).not.toHaveBeenCalled();
+    }
+  );
+
+  it('should accept data URL and external http image sources', async () => {
+    const dataUrl = 'data:image/png;base64,inline';
+    await expect(
+      normalizeDatasetIndexImageToModelInput({
+        imageUrl: dataUrl,
+        datasetId: '507f1f77bcf86cd799439011'
+      })
+    ).resolves.toBe(dataUrl);
+
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
+    const httpUrl = 'https://example.com/pic.png';
+    await expect(
+      normalizeDatasetIndexImageToModelInput({
+        imageUrl: httpUrl,
+        datasetId: '507f1f77bcf86cd799439011'
+      })
+    ).resolves.toBe(httpUrl);
+  });
+
+  it('should reject local or arbitrary non-url image paths', async () => {
+    await expect(
+      normalizeDatasetIndexImageToModelInput({
+        imageUrl: '/local/file.png',
+        datasetId: '507f1f77bcf86cd799439011'
+      })
+    ).rejects.toThrow('Invalid dataset file key');
+  });
+
+  it('honors explicit toBase64 pass-through on the http branch (batch entry snapshot)', async () => {
+    // 批量入口一次求值下传：显式 toBase64=true 时 HTTP 分支也必须转 base64，
+    // 不得回读实时配置（防止同批 S3 与外部 URL 混合形态）
+    getTestInstanceConfig().feature.multipleDataToBase64 = false;
+    mockGetImageBase64.mockResolvedValue({ completeBase64: 'data:image/png;base64,x' });
+
+    const httpUrl = 'https://example.com/pic.png';
+    const result = await normalizeDatasetIndexImageToModelInput({
+      imageUrl: httpUrl,
+      datasetId: '507f1f77bcf86cd799439011',
+      toBase64: true
+    });
+
+    expect(result).toBe('data:image/png;base64,x');
+    expect(mockGetImageBase64).toHaveBeenCalledWith(httpUrl);
+  });
+});
+
 describe('isValidImageEmbeddingSource', () => {
   it('should accept model-readable image sources', () => {
     expect(isValidImageEmbeddingSource('data:image/png;base64,input')).toBe(true);
     expect(isValidImageEmbeddingSource('dataset/team/file.png')).toBe(true);
-    expect(isValidImageEmbeddingSource('temp/team/file.png')).toBe(true);
-    expect(isValidImageEmbeddingSource('chat/app/user/file.png')).toBe(true);
     expect(isValidImageEmbeddingSource('https://example.com/file.png')).toBe(true);
   });
 
-  it('should reject empty or local non-url image sources', () => {
+  it('should reject non-dataset internal keys and non-url image sources', () => {
+    expect(isValidImageEmbeddingSource('temp/team/file.png')).toBe(false);
+    expect(isValidImageEmbeddingSource('chat/app/user/file.png')).toBe(false);
     expect(isValidImageEmbeddingSource('')).toBe(false);
     expect(isValidImageEmbeddingSource('/local/file.png')).toBe(false);
   });
@@ -349,4 +475,28 @@ describe('datasetSearchQueryExtension', () => {
     expect(result.searchQueries).toEqual(['怎么退钱 退款']);
     expect(result.reRankQuery).toBe('怎么退钱');
   });
+
+  it.each([new UserConfigError('Invalid OpenAI key'), new Error('unexpected failure')])(
+    'falls back to the original query and delegates error classification to the logger: %s',
+    async (error) => {
+      const logger = getLogger(LogCategories.MODULE.DATASET.DATA);
+      const errorLog = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      mockQueryExtension.mockRejectedValue(error);
+
+      const result = await datasetSearchQueryExtension({
+        query: 'original query',
+        llmModel: 'mock-llm',
+        embeddingModel: 'mock-embedding',
+        userKey: { key: 'invalid-key' },
+        teamId: 'team-id'
+      });
+
+      expect(result.searchQueries).toEqual(['original query']);
+      expect(result.reRankQuery).toBe('original query');
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith('Failed to generate extension queries', {
+        error
+      });
+      errorLog.mockRestore();
+    }
+  );
 });

@@ -22,20 +22,21 @@ import {
   mergeResumeCompletedChatRecords,
   shouldCheckChatResumeStatus,
   shouldCreateResumeAiPlaceholder,
+  shouldReleaseResumeTarget,
   shouldReplaceResumeAiValue,
   shouldResetResumeAiPlaceholder,
   waitForConflictRecoveryRecords
 } from '../utils/resume';
 import type { ChatGeneratingConflictRecovery, ChatSiteItemType } from '../type';
 import type { generatingMessageProps } from '../../type';
-import type { ChatAuthTargetInput } from '@/web/core/chat/utils';
+import type { ResolvedChatAuthTargetInput } from '@/web/core/chat/type';
 import { useChatAuthApiTarget } from '@/web/core/chat/utils';
 import { getChatHistoryStatus } from '@/web/core/chat/history/api';
 
 type FinishChatGenerateStatus = (params: {
   status: ChatGenerateStatusEnum;
   finishedInActiveChat: boolean;
-  targetChatTarget?: ChatAuthTargetInput;
+  targetChatTarget?: ResolvedChatAuthTargetInput;
   targetSourceKey?: string;
   targetChatId?: string;
   shouldUpdateChatBoxData?: (state: {
@@ -242,6 +243,19 @@ export const useChatResume = ({
 
   useEffect(() => {
     if (
+      shouldReleaseResumeTarget({
+        chatGenerateStatus,
+        resumedChatTarget: resumedChatTargetRef.current,
+        sourceKey,
+        chatId
+      })
+    ) {
+      resumedChatTargetRef.current = undefined;
+    }
+  }, [chatGenerateStatus, chatId, resumedChatTargetRef, sourceKey]);
+
+  useEffect(() => {
+    if (
       !enableAutoResume ||
       !isReady ||
       !isChatRecordsLoaded ||
@@ -327,7 +341,6 @@ export const useChatResume = ({
         return [
           ...state,
           {
-            id: responseChatId,
             dataId: responseChatId,
             obj: ChatRoleEnum.AI,
             value: [
@@ -482,10 +495,12 @@ export const useChatResume = ({
           setChatRecords((state) =>
             mergeResumeCompletedChatRecords({
               currentRecords: state,
-              completedRecords: completedChat.records.list.map((item) => ({
-                ...item,
-                status: ChatStatusEnum.finish
-              })),
+              completedRecords: completedChat.records.list.map(
+                ({ id: _deprecatedId, ...item }) => ({
+                  ...item,
+                  status: ChatStatusEnum.finish
+                })
+              ),
               responseChatId
             })
           );
@@ -529,9 +544,11 @@ export const useChatResume = ({
         flushGeneratingMessages();
 
         const isStreamError = (error as ResumeStreamErrorType | undefined)?.isStreamError === true;
+        // 只有恢复流明确返回业务错误时才能结束本轮生成。
+        // 网络、鉴权或 target 传输错误不能把服务端仍为 generating 的会话误解锁。
         resumeFinalStatus = isStreamError
-          ? ChatGenerateStatusEnum.error
-          : ChatGenerateStatusEnum.done;
+          ? ChatGenerateStatusEnum.done
+          : ChatGenerateStatusEnum.generating;
 
         finishResumeAiRecord({ mergeResponseData: false });
         scrollToBottom('auto');

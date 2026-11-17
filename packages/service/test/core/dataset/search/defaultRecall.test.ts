@@ -1,13 +1,23 @@
+import {
+  getTestInstanceConfig,
+  createDefaultInstanceConfig
+} from '@test/utils/instanceConfigSnapshot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getDomainDefaultConfig } from '@fastgpt/global/common/system/config/schema';
+
+(global as any).systemInstanceConfig = createDefaultInstanceConfig();
+
 import { DatasetSearchModeEnum, SearchScoreTypeEnum } from '@fastgpt/global/core/dataset/constants';
 import type { FullTextSearchProps } from '@fastgpt/service/common/vectorDB/type';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { ModelScopeEnum, ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { EmbeddingModelDataType } from '@fastgpt/global/core/ai/model/schema';
 import { serviceEnv } from '@fastgpt/service/env';
+import { pushTrack } from '@fastgpt/service/common/middle/tracks/utils';
 
 const mockGetVectors = vi.hoisted(() => vi.fn());
-const mockIsImageEmbeddingModel = vi.hoisted(() => vi.fn());
 const mockRecallFromVectorStore = vi.hoisted(() => vi.fn());
 const mockCreateLLMResponse = vi.hoisted(() => vi.fn());
+const mockReRankRecall = vi.hoisted(() => vi.fn());
 const mockMongoDatasetCollectionFind = vi.hoisted(() => vi.fn());
 const mockMongoDatasetDataFind = vi.hoisted(() => vi.fn());
 const mockMongoDatasetDataTextAggregate = vi.hoisted(() => vi.fn());
@@ -26,21 +36,21 @@ const mockCreateS3DownloadAccessUrls = vi.hoisted(() =>
   )
 );
 
-const originalMultipleDataToBase64 = serviceEnv.MULTIPLE_DATA_TO_BASE64;
+const originalMultipleDataToBase64 = getTestInstanceConfig().feature.multipleDataToBase64;
 
-const embeddingModel = {
+const embeddingModel: EmbeddingModelDataType = {
   modelId: '507f1f77bcf86cd799439017',
   provider: 'openai',
   model: 'mock-embedding-model',
   name: 'Mock Embedding Model',
   type: ModelTypeEnum.embedding,
-  scope: 'system' as const,
+  scope: ModelScopeEnum.system,
   isActive: true,
-  isCustom: false,
   config: {
     defaultToken: 100,
     maxToken: 100,
-    weight: 0
+    weight: 0,
+    vision: false
   }
 };
 
@@ -52,7 +62,6 @@ const vlmModel = {
   type: ModelTypeEnum.llm,
   scope: 'system' as const,
   isActive: true,
-  isCustom: false,
   config: {
     maxContext: 128000,
     maxResponse: 4096,
@@ -61,12 +70,12 @@ const vlmModel = {
   }
 };
 
-vi.mock('@fastgpt/service/core/ai/embedding', () => ({
-  getVectors: mockGetVectors
+vi.mock('@fastgpt/service/core/dataset/vectorData/service', () => ({
+  getDatasetVectorSearchData: vi.fn(async () => undefined)
 }));
 
-vi.mock('@fastgpt/service/core/ai/model', () => ({
-  isImageEmbeddingModel: mockIsImageEmbeddingModel
+vi.mock('@fastgpt/service/core/ai/embedding', () => ({
+  getVectors: mockGetVectors
 }));
 
 vi.mock('@fastgpt/service/common/vectorDB/controller', () => ({
@@ -75,6 +84,11 @@ vi.mock('@fastgpt/service/common/vectorDB/controller', () => ({
 
 vi.mock('@fastgpt/service/core/ai/llm/request', () => ({
   createLLMResponse: mockCreateLLMResponse
+}));
+
+// reRankSearchResults 会把 rerank 异常吞成 usingReRank:false，不 mock 就无法走到「重排生效」分支。
+vi.mock('@fastgpt/service/core/ai/rerank', () => ({
+  reRankRecall: mockReRankRecall
 }));
 
 vi.mock('@fastgpt/service/common/file/image/utils', () => ({
@@ -146,25 +160,29 @@ vi.mock('@fastgpt/service/core/dataset/data/textStore', async (importOriginal) =
 });
 
 import { searchDatasetData } from '../../../../core/dataset/search/defaultRecall';
+import { reRankSearchResults } from '../../../../core/dataset/search/defaultRecall/rerank';
+import { filterSearchResultsByScore } from '../../../../core/dataset/search/defaultRecall/result';
 import { fullTextRecall } from '../../../../core/dataset/search/defaultRecall/fullTextRecall';
 
 afterEach(() => {
-  serviceEnv.MULTIPLE_DATA_TO_BASE64 = originalMultipleDataToBase64;
+  getTestInstanceConfig().feature.multipleDataToBase64 = originalMultipleDataToBase64;
 });
 
 describe('default recall dataset search', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    global.systemInstanceConfig!.vector = getDomainDefaultConfig('vector');
+    global.systemInstanceConfig!.feature.multipleDataToBase64 = originalMultipleDataToBase64;
     // 重置 getFullTextStore 可切换 mock(ISSUE-015):默认走 mongo 委托,避免 milvus 用例污染
     mockUseMilvusStore.value = false;
     mockFullTextStoreSearch.mockReset();
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = originalMultipleDataToBase64;
+    getTestInstanceConfig().feature.multipleDataToBase64 = originalMultipleDataToBase64;
     mockCountPromptTokensBatch.mockImplementation(async (prompts: string[]) =>
       prompts.map((prompt) => prompt.length)
     );
     mockCountPromptTokens.mockImplementation(async (prompt: string) => prompt.length);
 
-    mockIsImageEmbeddingModel.mockReturnValue(false);
+    embeddingModel.config.vision = false;
     mockGetVectors.mockResolvedValue({
       tokens: 10,
       vectors: [
@@ -176,7 +194,7 @@ describe('default recall dataset search', () => {
       results: []
     });
     mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
-      if (query?.forbid) return [];
+      if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
       return {
         lean: vi.fn().mockResolvedValue([])
       };
@@ -188,6 +206,98 @@ describe('default recall dataset search', () => {
       lean: vi.fn().mockResolvedValue([])
     });
     mockMongoDatasetDataTextAggregate.mockResolvedValue([]);
+  });
+
+  it.each([
+    { configured: undefined, expected: 200 },
+    { configured: 99, expected: 100 },
+    { configured: 100, expected: 100 },
+    { configured: 400, expected: 400 },
+    { configured: 1000, expected: 1000 },
+    { configured: 1001, expected: 1000 }
+  ])('bounds HNSW search width once for all recall tasks: %j', async ({ configured, expected }) => {
+    if (configured !== undefined) global.systemInstanceConfig!.vector.hnswEfSearch = configured;
+    mockRecallFromVectorStore.mockImplementation(async () => {
+      // 首个 query 执行后配置变化，本轮其他 query 仍需使用入口读取的同一份参数。
+      global.systemInstanceConfig!.vector.hnswEfSearch = 800;
+      return { results: [] };
+    });
+
+    await searchDatasetData({
+      metadataFilterEnabled: false,
+      histories: [],
+      teamId: '507f1f77bcf86cd799439011',
+      model: embeddingModel,
+      datasetIds: ['507f1f77bcf86cd799439012'],
+      reRankQuery: 'first query',
+      textQueries: ['first query', 'second query'],
+      imageQueries: [],
+      limit: 5000,
+      searchMode: DatasetSearchModeEnum.mixedRecall,
+      embeddingWeight: 0.5,
+      usingReRank: false
+    });
+
+    expect(mockRecallFromVectorStore).toHaveBeenCalledTimes(2);
+    expect(mockRecallFromVectorStore.mock.calls[0][0].limit).toBe(80);
+    expect(mockRecallFromVectorStore.mock.calls.map(([props]) => props.hnswEfSearch)).toEqual([
+      expected,
+      expected
+    ]);
+  });
+
+  it('applies topk before formatting without counting tokens, while token-only calls keep their budget', async () => {
+    embeddingModel.config.vision = false;
+    const data = Array.from({ length: 8 }, (_, index) => ({
+      _id: String(index + 1).padStart(24, '0'),
+      datasetId: '507f1f77bcf86cd799439011',
+      collectionId: '507f1f77bcf86cd799439013',
+      updateTime: new Date('2026-01-01'),
+      q: `chunk ${index} ` + 'long content '.repeat(100),
+      a: 'answer',
+      chunkIndex: index,
+      indexes: []
+    }));
+    mockMongoDatasetDataTextAggregate.mockResolvedValue(
+      data.map((row, index) => ({
+        dataId: row._id,
+        collectionId: row.collectionId,
+        score: 10 - index
+      }))
+    );
+    mockMongoDatasetDataFind.mockReturnValue({ lean: vi.fn().mockResolvedValue(data) });
+    mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, unknown>) => ({
+      lean: vi
+        .fn()
+        .mockResolvedValue(
+          query.forbid ? [] : [{ _id: '507f1f77bcf86cd799439013', name: 'Fixture' }]
+        )
+    }));
+    const props = {
+      metadataFilterEnabled: false,
+      histories: [],
+      teamId: '507f1f77bcf86cd799439012',
+      model: embeddingModel,
+      datasetIds: ['507f1f77bcf86cd799439011'],
+      reRankQuery: 'question',
+      textQueries: ['question'],
+      limit: 1,
+      searchMode: DatasetSearchModeEnum.fullTextRecall,
+      usingReRank: false
+    };
+    for (const topk of [1, 3, 100]) {
+      const result = await searchDatasetData({ ...props, topk });
+      expect(result.searchRes.map((row) => row.id)).toEqual(
+        data.slice(0, topk).map((row) => row._id)
+      );
+      expect(mockCountPromptTokensBatch).not.toHaveBeenCalled();
+    }
+    const tokenResult = await searchDatasetData(props);
+    expect(tokenResult.searchRes.map((row) => row.id)).toEqual([data[0]._id]);
+    expect(mockCountPromptTokensBatch).toHaveBeenCalledOnce();
+    mockMongoDatasetDataTextAggregate.mockResolvedValue([]);
+    const empty = await searchDatasetData({ ...props, topk: 100 });
+    expect(empty.searchRes).toEqual([]);
   });
 
   it('should ignore failed image caption and continue dataset search', async () => {
@@ -203,6 +313,7 @@ describe('default recall dataset search', () => {
     });
 
     const result = await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -218,6 +329,7 @@ describe('default recall dataset search', () => {
       usingReRank: false
     });
 
+    expect(pushTrack.datasetSearch).not.toHaveBeenCalled();
     expect(result.imageCaptionResult).toEqual({
       model: 'mock-vlm-model',
       inputTokens: 3,
@@ -249,7 +361,7 @@ describe('default recall dataset search', () => {
   });
 
   it('should request text and image embeddings in one getVectors call', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(true);
+    embeddingModel.config.vision = true;
     mockGetVectors.mockResolvedValueOnce({
       tokens: 12,
       vectors: [
@@ -259,6 +371,7 @@ describe('default recall dataset search', () => {
     });
 
     await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -291,7 +404,7 @@ describe('default recall dataset search', () => {
   });
 
   it('should skip blank embedding recall inputs while preserving valid task order', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(true);
+    embeddingModel.config.vision = true;
     mockGetVectors.mockResolvedValueOnce({
       tokens: 12,
       vectors: [
@@ -301,6 +414,7 @@ describe('default recall dataset search', () => {
     });
 
     await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -331,7 +445,7 @@ describe('default recall dataset search', () => {
   });
 
   it('should pass overlong text queries to centralized embedding fallback without creating extra queries', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(false);
+    embeddingModel.config.vision = false;
     const smallEmbeddingModel = {
       ...embeddingModel,
       config: { ...embeddingModel.config, maxToken: 12 }
@@ -342,6 +456,7 @@ describe('default recall dataset search', () => {
     }));
 
     await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: smallEmbeddingModel,
@@ -368,8 +483,9 @@ describe('default recall dataset search', () => {
   });
 
   it('should ignore failed image embedding normalization and keep text recall', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(true);
-    serviceEnv.MULTIPLE_DATA_TO_BASE64 = true;
+    embeddingModel.config.vision = true;
+    getTestInstanceConfig().feature.multipleDataToBase64 = true;
+    global.systemInstanceConfig!.feature.multipleDataToBase64 = true;
     mockGetImageBase64.mockRejectedValueOnce(new Error('expired image'));
     mockGetVectors.mockResolvedValueOnce({
       tokens: 12,
@@ -380,6 +496,7 @@ describe('default recall dataset search', () => {
     });
 
     await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -413,9 +530,10 @@ describe('default recall dataset search', () => {
   });
 
   it('should skip blank full-text queries before Mongo text search', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(false);
+    embeddingModel.config.vision = false;
 
     const result = await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -434,8 +552,8 @@ describe('default recall dataset search', () => {
     expect(result.searchRes).toEqual([]);
   });
 
-  it('should only batch-sign S3 keys from results that survive score filtering', async () => {
-    mockIsImageEmbeddingModel.mockReturnValue(false);
+  it('should only batch-sign authorized dataset S3 keys from results that survive score filtering', async () => {
+    embeddingModel.config.vision = false;
     mockGetVectors.mockResolvedValueOnce({
       tokens: 5,
       vectors: [[0.1, 0.2]]
@@ -447,11 +565,12 @@ describe('default recall dataset search', () => {
       ]
     });
     mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
-      if (query?.forbid) return [];
+      if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
       return {
         lean: vi.fn().mockResolvedValue([{ _id: 'collection-1', name: 'Source' }])
       };
     });
+    // 命中结果同时内嵌本库 key 与外库 key：只有归属于召回 datasetIds 的 key 才签发短链。
     mockMongoDatasetDataFind.mockReturnValueOnce({
       lean: vi.fn().mockResolvedValue([
         {
@@ -459,7 +578,7 @@ describe('default recall dataset search', () => {
           datasetId: 'dataset-1',
           collectionId: 'collection-1',
           updateTime: new Date('2026-01-01'),
-          q: 'Keep ![image](dataset/team/keep.png)',
+          q: 'Keep ![image](dataset/dataset-1/keep.png) leak ![image](dataset/foreign-dataset/secret.png)',
           a: '',
           chunkIndex: 0,
           indexes: [{ dataId: 'index-keep' }]
@@ -469,7 +588,7 @@ describe('default recall dataset search', () => {
           datasetId: 'dataset-1',
           collectionId: 'collection-1',
           updateTime: new Date('2026-01-01'),
-          q: 'Filtered ![image](dataset/team/filtered.png)',
+          q: 'Filtered ![image](dataset/dataset-1/filtered.png)',
           a: '',
           chunkIndex: 1,
           indexes: [{ dataId: 'index-filtered' }]
@@ -478,6 +597,7 @@ describe('default recall dataset search', () => {
     });
 
     const result = await searchDatasetData({
+      metadataFilterEnabled: false,
       histories: [],
       teamId: 'team-1',
       model: embeddingModel,
@@ -491,11 +611,180 @@ describe('default recall dataset search', () => {
     });
 
     expect(result.searchRes).toHaveLength(1);
-    expect(result.searchRes[0]?.q).toContain('https://files.test/dataset/team/keep.png');
+    // 本库 key 被签发为短链，外库 key 保持原文本不替换
+    expect(result.searchRes[0]?.q).toContain('https://files.test/dataset/dataset-1/keep.png');
+    expect(result.searchRes[0]?.q).toContain('dataset/foreign-dataset/secret.png');
+    // 被相似度过滤的候选不产生任何 alias 查询
     expect(mockCreateS3DownloadAccessUrls).toHaveBeenCalledTimes(1);
     expect(mockCreateS3DownloadAccessUrls.mock.calls[0][0].map((item) => item.objectKey)).toEqual([
-      'dataset/team/keep.png'
+      'dataset/dataset-1/keep.png'
     ]);
+  });
+
+  describe('retrievalResults 快照产出条件', () => {
+    const rerankModel = {
+      modelId: 'rerank-model',
+      provider: 'openai',
+      model: 'rerank-model',
+      name: 'Rerank Model',
+      type: ModelTypeEnum.rerank,
+      scope: 'system' as const,
+      isActive: true,
+      config: {}
+    };
+
+    // 一条 text query 对应一个向量，向量召回返回两条候选，rerank 命中其中一条，
+    // 制造「候选集 != 最终结果」的场景。
+    const arrangeTwoCandidates = () => {
+      embeddingModel.config.vision = false;
+      mockGetVectors.mockResolvedValue({
+        tokens: 5,
+        vectors: [[0.1, 0.2]]
+      });
+      mockRecallFromVectorStore.mockResolvedValue({
+        results: [
+          { id: 'index-a', collectionId: 'collection-1', score: 0.9 },
+          { id: 'index-b', collectionId: 'collection-1', score: 0.8 }
+        ]
+      });
+      mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
+        if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
+        return { lean: vi.fn().mockResolvedValue([{ _id: 'collection-1', name: 'Source' }]) };
+      });
+      mockMongoDatasetDataFind.mockReturnValue({
+        lean: vi.fn().mockResolvedValue([
+          {
+            _id: 'data-a',
+            teamId: 'team-1',
+            datasetId: 'dataset-1',
+            collectionId: 'collection-1',
+            updateTime: new Date('2026-01-01'),
+            q: 'A',
+            a: 'alpha',
+            chunkIndex: 0,
+            indexes: [{ dataId: 'index-a' }]
+          },
+          {
+            _id: 'data-b',
+            teamId: 'team-1',
+            datasetId: 'dataset-1',
+            collectionId: 'collection-1',
+            updateTime: new Date('2026-01-01'),
+            q: 'B',
+            a: 'beta',
+            chunkIndex: 1,
+            indexes: [{ dataId: 'index-b' }]
+          }
+        ])
+      });
+      // rerank 只保留 data-a
+      mockReRankRecall.mockResolvedValue({
+        results: [{ id: 'data-a', score: 0.99 }],
+        inputTokens: 7
+      });
+    };
+
+    const runSearch = (params: Record<string, unknown> = {}) =>
+      searchDatasetData({
+        metadataFilterEnabled: false,
+        histories: [],
+        teamId: 'team-1',
+        model: embeddingModel,
+        datasetIds: ['dataset-1'],
+        reRankQuery: 'query',
+        textQueries: ['query'],
+        limit: 5000,
+        searchMode: DatasetSearchModeEnum.embedding,
+        embeddingWeight: 1,
+        rerankModel: rerankModel as any,
+        ...params
+      });
+
+    const originalLimit = serviceEnv.RETRIEVAL_RESULTS_LIMIT;
+    const originalSynonymEnabled = serviceEnv.DATASET_SYNONYM_ENABLED;
+    afterEach(() => {
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = originalLimit;
+      serviceEnv.DATASET_SYNONYM_ENABLED = originalSynonymEnabled;
+    });
+
+    it('重排生效时产出重排前的召回快照，含被重排淘汰的候选，且同义词只装饰最终结果', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 20;
+      serviceEnv.DATASET_SYNONYM_ENABLED = true;
+
+      const result = await runSearch({ usingReRank: true, rerankWeight: 1 });
+
+      expect(result.usingReRank).toBe(true);
+      expect(mockReRankRecall).toHaveBeenCalled();
+      // quoteList / searchRes 是重排后的结果，只剩 data-a，且携带同义词装饰
+      expect(result.searchRes.map((item) => item.id)).toEqual(['data-a']);
+      expect(result.searchRes[0]?.synonymMappings).toEqual({});
+      // 快照取自重排前的 textRecallResults，被重排淘汰的 data-b 仍在其中，且不携带同义词装饰
+      expect(result.retrievalResults?.map((item) => item.id).sort()).toEqual(['data-a', 'data-b']);
+      expect(result.retrievalResults?.every((item) => item.synonymMappings === undefined)).toBe(
+        true
+      );
+    });
+
+    it('为召回候选写入 retrievalRank，重排后最终结果仍可回溯召回位置', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 20;
+
+      const result = await runSearch({ usingReRank: true, rerankWeight: 1 });
+
+      // 快照顺序即重排前召回顺序，retrievalRank 从 0 起
+      expect(result.retrievalResults?.map((item) => [item.id, item.retrievalRank])).toEqual([
+        ['data-a', 0],
+        ['data-b', 1]
+      ]);
+      // 重排淘汰 data-b，但保留的 data-a 仍能回溯到召回位置
+      expect(result.searchRes.map((item) => [item.id, item.retrievalRank])).toEqual([
+        ['data-a', 0]
+      ]);
+    });
+
+    it('重排未生效时不产出候选集，避免占用内存又最终不用', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 20;
+
+      const result = await runSearch({ usingReRank: false });
+
+      expect(result.usingReRank).toBe(false);
+      expect(result.retrievalResults).toBeUndefined();
+      // 未开重排时没有多余开销：rerank 未被调用
+      expect(mockReRankRecall).not.toHaveBeenCalled();
+    });
+
+    it('重排请求但 rerank 模型缺失时不产出候选集', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 20;
+
+      const result = await runSearch({ usingReRank: true, rerankModel: undefined });
+
+      // 无模型时 usingReRank 意图即为 false，不会走重排也不会产出快照
+      expect(result.usingReRank).toBe(false);
+      expect(result.retrievalResults).toBeUndefined();
+      expect(mockReRankRecall).not.toHaveBeenCalled();
+    });
+
+    it('RETRIEVAL_RESULTS_LIMIT 为 0 时不产出候选集', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 0;
+
+      const result = await runSearch({ usingReRank: true, rerankWeight: 1 });
+
+      expect(result.usingReRank).toBe(true);
+      expect(result.retrievalResults).toBeUndefined();
+    });
+
+    it('候选数超过上限时按上限截断', async () => {
+      arrangeTwoCandidates();
+      serviceEnv.RETRIEVAL_RESULTS_LIMIT = 1;
+
+      const result = await runSearch({ usingReRank: true, rerankWeight: 1 });
+
+      expect(result.retrievalResults).toHaveLength(1);
+    });
   });
 });
 
@@ -532,7 +821,7 @@ describe('fullTextRecall engine dispatch', () => {
       ])
     });
     mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
-      if (query?.forbid) return [];
+      if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
       return {
         lean: vi.fn().mockResolvedValue([{ _id: 'col1', name: 'Source' }])
       };
@@ -577,7 +866,7 @@ describe('fullTextRecall engine dispatch', () => {
       ])
     });
     mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
-      if (query?.forbid) return [];
+      if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
       return {
         lean: vi.fn().mockResolvedValue([{ _id: 'col1', name: 'Source' }])
       };
@@ -626,7 +915,7 @@ describe('fullTextRecall engine dispatch', () => {
       ])
     });
     mockMongoDatasetCollectionFind.mockImplementation((query: Record<string, any>) => {
-      if (query?.forbid) return [];
+      if (query?.forbid) return { lean: vi.fn().mockResolvedValue([]) };
       return {
         lean: vi.fn().mockResolvedValue([{ _id: 'col1', name: 'Source' }])
       };
@@ -642,5 +931,103 @@ describe('fullTextRecall engine dispatch', () => {
 
     expect(mockFullTextStoreSearch).toHaveBeenCalledTimes(1);
     expect(res.imageCaptionFullTextRecallResults[0].id).toBe('68ad85a7463006c963799a05');
+  });
+});
+
+describe('reRankSearchResults rerank candidate limit', () => {
+  const rerankModel = {
+    modelId: 'rerank-model',
+    provider: 'openai',
+    model: 'rerank-model',
+    name: 'Rerank Model',
+    type: ModelTypeEnum.rerank,
+    scope: 'system' as const,
+    isActive: true,
+    config: {}
+  } as any;
+
+  const candidates = Array.from({ length: 150 }, (_, index) => ({
+    id: `data-${index}`,
+    datasetId: 'dataset-1',
+    collectionId: 'collection-1',
+    q: `Q${index}`,
+    a: `A${index}`,
+    chunkIndex: index,
+    updateTime: new Date('2026-01-01'),
+    score: []
+  }));
+
+  const run = (rerankCandidateNum?: number, textRecallResults = candidates) =>
+    reRankSearchResults({
+      usingReRank: true,
+      textRecallResults: textRecallResults as any,
+      rerankModel,
+      query: 'query',
+      rerankWeight: 1,
+      rerankCandidateNum,
+      teamId: 'team-1'
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReRankRecall.mockResolvedValue({
+      results: candidates.map((item) => ({ id: item.id, score: 0.9 })),
+      inputTokens: 1
+    });
+  });
+
+  it('只把融合列表按顺序的前 N 条送入重排', async () => {
+    await run(20);
+
+    expect(mockReRankRecall.mock.calls[0][0].documents.map((item: any) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `data-${index}`)
+    );
+  });
+
+  it('召回少于限制时全部送入重排', async () => {
+    await run(100, candidates.slice(0, 80));
+
+    expect(mockReRankRecall.mock.calls[0][0].documents).toHaveLength(80);
+  });
+
+  it('缺省时按默认 100 截断超过 100 的召回', async () => {
+    await run();
+
+    expect(mockReRankRecall.mock.calls[0][0].documents).toHaveLength(100);
+  });
+
+  it.each([0, 9, 101, 55.7, Number.NaN])('非法候选数 %s 按默认 100 执行重排', async (value) => {
+    await run(value);
+    expect(mockReRankRecall.mock.calls[0][0].documents).toHaveLength(100);
+  });
+
+  it('重排权重小于 1 时，超出候选数的召回不进入融合结果，不能绕过重排分数过滤', async () => {
+    mockReRankRecall.mockResolvedValue({
+      results: candidates.slice(0, 20).map((item) => ({ id: item.id, score: 0.1 })),
+      inputTokens: 1
+    });
+
+    const { results } = await reRankSearchResults({
+      usingReRank: true,
+      textRecallResults: candidates.slice(0, 30) as any,
+      rerankModel,
+      query: 'query',
+      rerankWeight: 0.5,
+      rerankCandidateNum: 20,
+      teamId: 'team-1'
+    });
+
+    // 20 条重排结果都低于阈值，没有候选应该通过相似度过滤
+    expect(
+      filterSearchResultsByScore({
+        data: results,
+        usingReRank: true,
+        searchMode: DatasetSearchModeEnum.mixedRecall,
+        similarity: 0.4
+      }).results.map((item) => item.id)
+    ).toEqual([]);
+    expect(results.map((item) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `data-${index}`)
+    );
   });
 });

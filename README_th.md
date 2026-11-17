@@ -109,7 +109,7 @@ docker compose up -d
 
 ## 💪 โปรเจกต์และลิงก์ของเรา
 
-- [เริ่มต้นพัฒนาในเครื่อง](https://doc.fastgpt.io/self-host/dev/)
+- [เริ่มต้นพัฒนาในเครื่อง](https://doc.fastgpt.io/self-host/dev)
 - [เอกสาร OpenAPI](https://cloud.fastgpt.io/apidoc/systemopenapi)
 - [FastGPT-plugin](https://github.com/labring/fastgpt-plugin)
 - [AI Proxy: บริการ Load Balancing การรวมโมเดล](https://github.com/labring/aiproxy)
@@ -122,6 +122,7 @@ docker compose up -d
 ## 🌿 ระบบนิเวศของบุคคลที่สาม
 
 - [AI Proxy: บริการรวมโมเดลขนาดใหญ่](https://sealos.run/aiproxy/?k=fastgpt-github/)
+- [TokenDance - เกตเวย์ AI API แบบครบวงจร](https://tokendance.space/)
 - [SiliconCloud - แพลตฟอร์มประสบการณ์โมเดล Open Source ออนไลน์](https://cloud.siliconflow.cn/i/TR9Ym0c4)
 
 <a href="#readme">

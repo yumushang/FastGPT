@@ -5,7 +5,6 @@
  */
 import type { ISandbox } from '@fastgpt-sdk/sandbox-adapter';
 import { shellQuote } from '@fastgpt/global/common/string/utils';
-import { MongoAgentSkills } from '../../../../skill/model/schema';
 import { MongoAgentSkillsVersion } from '../../../../skill/version/schema';
 import { downloadSkillPackageStream } from '../../../../skill/package';
 import { parseSkillMarkdown } from '../../../../skill/utils';
@@ -13,12 +12,15 @@ import { getLogger, LogCategories } from '../../../../../../common/logger';
 import type { DeployedSkillInfo, DeployedSkillVersion } from './types';
 import { getAgentSandboxSkillMaxBytes } from '../../../config';
 import { joinSandboxPath } from '../../../utils';
-import { authSkillByTmbId } from '../../../../../../support/permission/skill/auth';
-import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
-import { SkillErrEnum } from '@fastgpt/global/common/error/code/skill';
+import type { AgentSkillSchemaType } from '@fastgpt/global/core/ai/skill/type';
 import { Readable } from 'node:stream';
-
-export type { DeployedSkillInfo, DeployedSkillVersion } from './types';
+import { SKILL_ENTRYPOINT_STATE_LIST_KEY } from '../../../constants';
+import {
+  getRuntimeStateValue,
+  readSandboxRuntimeState,
+  setRuntimeStateValue,
+  writeSandboxRuntimeState
+} from '../state';
 
 const logger = getLogger(LogCategories.MODULE.AI.AGENT);
 const parseCommandOutputNulls = (stdout: string) => stdout.split('\0').filter(Boolean);
@@ -128,21 +130,18 @@ export const getAgentSkillInfos = async ({
 /**
  * 将已发布的 skill 包注入到调用方传入的 sandbox 实例。
  *
- * 该函数不创建、不复用、不释放 sandbox，只负责把 skill 文件写入已有实例。
+ * skills 必须由调用方完成授权；这里不读取工作流上下文，也不执行成员权限判断。
+ * 该函数只负责把 skill 文件写入已有实例。
  * 这样 skill 模块与 sandbox 生命周期保持平级：sandbox 决定何时存在，
- * skill 只在拿到实例后完成文件注入。
+ * skill 只在拿到实例后完成文件注入。正式版本保留到缓存或沙盒被显式清理，只有临时目录会自动回收。
  */
 export const injectAgentSkillFilesToSandbox = async ({
   sandbox,
-  skillIds,
-  teamId,
-  tmbId,
+  skills,
   workDirectory
 }: {
   sandbox: ISandbox;
-  skillIds: string[];
-  teamId: string;
-  tmbId: string;
+  skills: AgentSkillSchemaType[];
   workDirectory: string;
 }): Promise<DeployedSkillVersion[]> => {
   const skillsRootPath = getRuntimeSkillsRootPath(workDirectory);
@@ -161,63 +160,8 @@ export const injectAgentSkillFilesToSandbox = async ({
     });
   }
 
-  const cleanupStaleDirs = async (expectedTargetDirs: Set<string>) => {
-    const staleDirs = existingDirs.filter((dir) => !expectedTargetDirs.has(dir));
-    if (staleDirs.length === 0) return;
-
-    await sandbox.deleteDirectories(staleDirs).catch((error) => {
-      logger.warn('[Agent Skills] Failed to cleanup stale skill version directories', {
-        staleDirs,
-        error
-      });
-    });
-  };
-
-  if (skillIds.length === 0) {
-    await cleanupStaleDirs(new Set());
-    return [];
-  }
-
-  const teamSkills = await MongoAgentSkills.find({
-    _id: { $in: skillIds },
-    teamId,
-    deleteTime: null
-  });
-  if (teamSkills.length === 0) {
-    logger.warn('[Agent Skills] No valid skills found from input skillIds', { skillIds });
-    await cleanupStaleDirs(new Set());
-    return [];
-  }
-
-  const skills = (
-    await Promise.all(
-      teamSkills.map(async (skill) => {
-        try {
-          await authSkillByTmbId({
-            tmbId,
-            skillId: String(skill._id),
-            per: ReadPermissionVal
-          });
-          return skill;
-        } catch (error) {
-          if (error !== SkillErrEnum.unAuthSkill && error !== SkillErrEnum.unExist) {
-            throw error;
-          }
-
-          logger.warn('[Agent Skills] Skip unauthorized skill during runtime injection', {
-            skillId: String(skill._id),
-            tmbId
-          });
-          return null;
-        }
-      })
-    )
-  ).filter((skill): skill is (typeof teamSkills)[number] => !!skill);
-
-  if (skills.length === 0) {
-    await cleanupStaleDirs(new Set());
-    return [];
-  }
+  // 已发布版本按 versionId 缓存；其他节点和会话可能仍在使用，初始化只追加，不回收正式目录。
+  if (skills.length === 0) return [];
 
   const currentVersionIds = skills
     .map((skill) => skill.currentVersionId)
@@ -252,13 +196,11 @@ export const injectAgentSkillFilesToSandbox = async ({
   if (deployableSkills.length === 0) {
     logger.warn(
       '[Agent Skills] No deployable skills found (missing current versions) from input skillIds',
-      { skillIds }
+      { skillIds: skills.map((skill) => String(skill._id)) }
     );
-    await cleanupStaleDirs(new Set());
     return [];
   }
 
-  const expectedTargetDirs = new Set(deployableSkills.map(({ targetDir }) => targetDir));
   const deployableTargetDirs = new Set(existingDirs);
   const missingSkills = deployableSkills.filter(
     ({ targetDir }) => !deployableTargetDirs.has(targetDir)
@@ -340,6 +282,24 @@ export const injectAgentSkillFilesToSandbox = async ({
       await sandbox.moveFiles(
         results.map(({ tempDir, targetDir }) => ({ source: tempDir, destination: targetDir }))
       );
+      // 目录重建后清理对应版本的旧初始化标记，确保下次执行重新触发版本 entrypoint。
+      const stateContext = await readSandboxRuntimeState({ sandbox });
+      const oldEntrypoints = getRuntimeStateValue(
+        stateContext.state,
+        SKILL_ENTRYPOINT_STATE_LIST_KEY
+      );
+      if (Array.isArray(oldEntrypoints)) {
+        const installedVersionIds = new Set(missingSkills.map(({ versionId }) => versionId));
+        const keptEntrypoints = oldEntrypoints.filter((id) => !installedVersionIds.has(id));
+        if (keptEntrypoints.length !== oldEntrypoints.length) {
+          setRuntimeStateValue(
+            stateContext.state,
+            SKILL_ENTRYPOINT_STATE_LIST_KEY,
+            keptEntrypoints
+          );
+          await writeSandboxRuntimeState(sandbox, stateContext);
+        }
+      }
     } catch (error) {
       await Promise.all([
         cleanupTempDirs(),
@@ -348,8 +308,6 @@ export const injectAgentSkillFilesToSandbox = async ({
       throw error;
     }
   }
-
-  await cleanupStaleDirs(expectedTargetDirs);
 
   return deployableSkills.map(({ skill, versionId, targetDir }) => ({
     skillId: String(skill._id),

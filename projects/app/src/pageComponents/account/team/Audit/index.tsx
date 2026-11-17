@@ -1,11 +1,16 @@
-import { Box, Flex, Table, TableContainer, Tbody, Td, Th, Thead, Tr } from '@chakra-ui/react';
-import { useMemo, useCallback, useRef, useState } from 'react';
-import { useClientTranslation } from '@fastgpt/web/i18n/useClientTranslation';
+import { getLocalDateRange } from '@fastgpt/global/common/time/dateRange';
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
+import { Box, Button, Flex, Table, Tbody, Td, Th, Thead, Tr } from '@chakra-ui/react';
+import { useMemo, useRef, useState } from 'react';
+import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import { usePagination } from '@fastgpt/web/hooks/usePagination';
 import { getOperationLogs } from '@/web/support/user/team/operantionLog/api';
 import { auditLogMap } from '@fastgpt/web/support/user/audit/constants';
-import { AuditEventEnum } from '@fastgpt/global/support/user/audit/constants';
+import {
+  TeamAuditEventList,
+  type TeamAuditEvent
+} from '@fastgpt/global/support/user/audit/constants';
 import { formatTime2YMDHMS } from '@fastgpt/global/common/string/time';
 import UserBox from '@fastgpt/web/components/common/UserBox';
 import {
@@ -15,41 +20,54 @@ import {
   type MultiSelectFilterValue,
   useCommonFilterLabels
 } from '@fastgpt/web/components/common/TagFilter';
-import { specialProcessors } from './processors';
-import { defaultMetadataProcessor } from './processors/commonProcessor';
+import { processAuditMetadata } from '@fastgpt/web/support/user/audit/processors';
 import TeamMemberFilter from '@/components/support/user/TeamMemberFilter';
+import DateRangePicker, {
+  type DateRangeType
+} from '@fastgpt/web/components/common/DateRangePicker';
+import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
+import { formatToISOWithTimezone } from '@fastgpt/global/common/string/time';
+import { downloadFetch } from '@/web/common/system/utils';
+import { useRequest } from '@fastgpt/web/hooks/useRequest';
+import { parseLocale } from '@fastgpt/global/common/i18n/utils';
+import dayjs from 'dayjs';
+
 function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
-  const { t } = useClientTranslation(['account_team', 'user']);
+  /** 最近七个本地自然日含今天，按日历日期计算并补齐首尾边界。 */
+  const getDefaultAuditDateRange = (now = new Date()): DateRangeType => {
+    const from = new Date(now);
+    from.setDate(from.getDate() - 6);
+    return getLocalDateRange(from, now);
+  };
+
+  const { t, i18n } = useSafeTranslation();
   const labels = useCommonFilterLabels();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [dateRange, setDateRange] = useState(getDefaultAuditDateRange);
+  const exportInProgress = useRef(false);
   const [memberFilter, setMemberFilter] = useState(createMultiSelectFilter());
   const [eventFilter, setEventFilter] =
-    useState<MultiSelectFilterValue<AuditEventEnum>>(createMultiSelectFilter());
+    useState<MultiSelectFilterValue<TeamAuditEvent>>(createMultiSelectFilter());
 
+  // 筛选项包含成员事件与知识库事件；只列出 auditLogMap 中存在文案的事件，避免历史枚举缺文案时报错
   const eventOptions = useMemo(
     () =>
-      Object.values(AuditEventEnum).map((event) => ({
+      TeamAuditEventList.filter((event) => auditLogMap[event]).map((event) => ({
         label: t(auditLogMap[event].typeLabel),
         value: event
       })),
     [t]
   );
 
-  const processMetadataByEvent = useCallback(
-    (event: string, metadata: any) => {
-      const defaultFormat = defaultMetadataProcessor(metadata, t);
-      const specialFormat = specialProcessors[event as AuditEventEnum]?.(defaultFormat, t);
-      return specialFormat || defaultFormat;
-    },
-    [t]
-  );
-
   const searchParams = useMemo(
     () => ({
+      dateStart: formatToISOWithTimezone(dateRange.from),
+      dateEnd: formatToISOWithTimezone(dateRange.to),
       tmbIds: toMultiSelectFilterQuery(memberFilter),
       events: toMultiSelectFilterQuery(eventFilter)
     }),
-    [eventFilter, memberFilter]
+    [dateRange, eventFilter, memberFilter]
   );
 
   const {
@@ -59,14 +77,27 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
     pageSize,
     Pagination
   } = usePagination(getOperationLogs, {
-    defaultPageSize: 100,
-    pageSizeOptions: [50, 100, 200],
+    defaultPageSize: 20,
+    pageSizeOptions: [20, 50, 100, 200],
     pageSizeCacheKey: 'account-team-audit',
     refreshDeps: [searchParams],
     params: searchParams,
     scrollContainerRef
   });
 
+  const { run: exportLogs, loading: exporting } = useRequest(async () => {
+    if (exportInProgress.current) return;
+    exportInProgress.current = true;
+    try {
+      await downloadFetch({
+        url: '/api/proApi/support/user/team/audit/export',
+        filename: `${t('account_team:audit_export_filename')}_${dayjs(dateRange.from).format('YYYY-MM-DD')}_${dayjs(dateRange.to).format('YYYY-MM-DD')}_${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.csv`,
+        body: { ...searchParams, locale: parseLocale(i18n.language) ?? 'en' }
+      });
+    } finally {
+      exportInProgress.current = false;
+    }
+  });
   const isLoading = loadingLogs;
 
   return (
@@ -89,7 +120,15 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
           gap={2}
           wrap={'wrap'}
         >
+          <DateRangePicker
+            formLabel={t('account_team:log_time')}
+            dateRange={dateRange}
+            defaultDate={dateRange}
+            historyLimitDays={null}
+            onSuccess={setDateRange}
+          />
           <TeamMemberFilter
+            activeOnly={false}
             title={t('account_team:log_user')}
             value={memberFilter}
             onChange={setMemberFilter}
@@ -102,6 +141,18 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
             labels={labels}
             showSearch
           />
+          <MyTooltip label={total === 0 ? t('account_team:audit_empty') : ''}>
+            <Box>
+              <Button
+                variant={'whitePrimary'}
+                isLoading={exporting}
+                isDisabled={isLoading || total === 0}
+                onClick={exportLogs}
+              >
+                {t('common:Export')}
+              </Button>
+            </Box>
+          </MyTooltip>
         </Flex>
       </Flex>
 
@@ -113,15 +164,23 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
         display={'flex'}
         flexDirection={'column'}
       >
-        <TableContainer
+        <FixedTableContainer
+          maxH="none"
           ref={scrollContainerRef}
-          px={6}
+          px={4}
           flex={['0 0 auto', '1 0 0']}
-          h={['auto', 0]}
+          h={['60dvh', 0]}
           minH={0}
-          overflowX={['auto', 'hidden']}
-          overflowY={['visible', 'auto']}
           fontSize={'sm'}
+          footer={
+            <>
+              {total > pageSize && (
+                <Flex flexShrink={0} mt={3} px={6} justifyContent={'center'}>
+                  <Pagination />
+                </Flex>
+              )}
+            </>
+          }
         >
           <Table w={'100%'} minW={['900px', '100%']} sx={{ tableLayout: 'fixed' }}>
             <Thead>
@@ -141,9 +200,33 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
               </Tr>
             </Thead>
             <Tbody>
+              {auditLog.length === 0 && !isLoading && (
+                <Tr>
+                  <Td colSpan={4}>
+                    <EmptyTip
+                      text={
+                        <>
+                          <Box>{t('account_team:audit_empty')}</Box>
+                          <Button
+                            variant={'link'}
+                            mt={3}
+                            onClick={() => setDateRange(getDefaultAuditDateRange())}
+                          >
+                            {t('account_team:audit_reset_time')}
+                          </Button>
+                        </>
+                      }
+                    />
+                  </Td>
+                </Tr>
+              )}
               {auditLog.map((log) => {
                 const i18nData = auditLogMap[log.event];
-                const metadata = processMetadataByEvent(log.event, { ...log.metadata });
+                const metadata: Record<string, unknown> = processAuditMetadata({
+                  event: log.event,
+                  metadata: log.metadata,
+                  t
+                });
 
                 return i18nData ? (
                   <Tr key={log._id} overflow={'unset'}>
@@ -162,19 +245,14 @@ function AuditLog({ Tabs }: { Tabs: React.ReactNode }) {
                       wordBreak={['normal', 'break-word']}
                       overflowWrap={['normal', 'anywhere']}
                     >
-                      {t(i18nData.content as any, metadata)}
+                      {t(i18nData.content, metadata)}
                     </Td>
                   </Tr>
                 ) : null;
               })}
             </Tbody>
           </Table>
-        </TableContainer>
-        {total > pageSize && (
-          <Flex flexShrink={0} mt={3} px={6} justifyContent={'center'}>
-            <Pagination />
-          </Flex>
-        )}
+        </FixedTableContainer>
       </MyBox>
     </>
   );

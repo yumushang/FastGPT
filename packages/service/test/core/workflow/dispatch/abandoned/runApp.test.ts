@@ -3,11 +3,15 @@ import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { NodeInputKeyEnum, WorkflowIOValueTypeEnum } from '@fastgpt/global/core/workflow/constants';
 import { VariableInputEnum } from '@fastgpt/global/core/workflow/constants';
 import { WorkflowVariableState } from '../../../../../core/workflow/dispatch/utils/variables';
-import { summarizeRuntimeNodeResponses } from '../../../../../core/workflow/dispatch/utils';
+import {
+  createNodeSummary,
+  summarizeRuntimeNodeResponses
+} from '../../../../../core/workflow/dispatch/utils/summary';
 
 const runWorkflowMock = vi.fn();
 const authAppByTmbIdMock = vi.fn();
 const getUserChatInfoMock = vi.fn();
+const getAppVersionByIdMock = vi.fn();
 
 vi.mock('../../../../../core/workflow/dispatch/index', () => ({
   runWorkflow: (args: any) => runWorkflowMock(args)
@@ -19,6 +23,11 @@ vi.mock('../../../../../support/permission/app/auth', () => ({
 
 vi.mock('../../../../../support/user/team/utils', () => ({
   getUserChatInfo: (...args: any[]) => getUserChatInfoMock(...args)
+}));
+
+vi.mock('../../../../../core/app/version/controller', () => ({
+  getAppVersionById: (...args: any[]) => getAppVersionByIdMock(...args),
+  getAppPublishedWorkflowMap: vi.fn(async () => new Map())
 }));
 
 import { dispatchAppRequest } from '../../../../../core/workflow/dispatch/abandoned/runApp';
@@ -60,16 +69,7 @@ describe('abandoned dispatchAppRequest', () => {
         teamId: 'team',
         tmbId: 'child-tmb',
         modules: [],
-        edges: [],
-        chatConfig: {
-          variables: [
-            {
-              key: 'shared',
-              type: VariableInputEnum.input,
-              valueType: WorkflowIOValueTypeEnum.string
-            }
-          ]
-        }
+        edges: []
       }
     });
     getUserChatInfoMock.mockResolvedValue({
@@ -77,7 +77,27 @@ describe('abandoned dispatchAppRequest', () => {
         externalWorkflowVariables: {}
       }
     });
+    getAppVersionByIdMock.mockResolvedValue({
+      versionId: '',
+      versionName: 'child',
+      nodes: [],
+      edges: [],
+      chatConfig: {
+        variables: [
+          {
+            key: 'shared',
+            type: VariableInputEnum.input,
+            valueType: WorkflowIOValueTypeEnum.string
+          }
+        ]
+      },
+      resources: []
+    });
     runWorkflowMock.mockImplementation(async (args: any) => {
+      expect(args.lastInteractive).toBeUndefined();
+      expect(args.query).toEqual(
+        expect.arrayContaining([expect.objectContaining({ text: { content: 'hello' } })])
+      );
       childInitialValue = args.variableState.get('shared');
       await args.variableState.set('shared', 'child-value');
       return {
@@ -90,7 +110,7 @@ describe('abandoned dispatchAppRequest', () => {
         ],
         assistantResponses: [],
         system_memories: [],
-        runtimeNodeResponseSummary: summarizeRuntimeNodeResponses(undefined, [
+        workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
           {
             id: 'child-root',
             moduleType: FlowNodeTypeEnum.chatNode,
@@ -102,6 +122,7 @@ describe('abandoned dispatchAppRequest', () => {
       };
     });
 
+    const nodeSummary = createNodeSummary();
     const result = await dispatchAppRequest({
       runningAppInfo: {
         id: 'parent-app',
@@ -109,9 +130,14 @@ describe('abandoned dispatchAppRequest', () => {
         tmbId: 'parent-tmb',
         name: 'parent'
       },
+      runningUserInfo: {
+        tmbId: 'parent-tmb',
+        teamId: 'team'
+      },
       workflowStreamResponse: vi.fn(),
       histories: [],
-      query: [],
+      query: [{ text: { content: 'parent selection' } }],
+      lastInteractive: { type: 'userInput', entryNodeIds: ['parent-input'] },
       variableState: parentVariableState,
       params: {
         [NodeInputKeyEnum.userChatInput]: 'hello',
@@ -124,6 +150,7 @@ describe('abandoned dispatchAppRequest', () => {
       chatId: 'chat',
       responseChatItemId: 'response',
       usagePush,
+      nodeSummary,
       chatConfig: {
         variables: []
       }
@@ -141,6 +168,7 @@ describe('abandoned dispatchAppRequest', () => {
         totalPoints: 5
       }
     ]);
-    expect(result.responseData?.totalPoints).toBe(5);
+    expect(result.responseData?.totalPoints).toBeUndefined();
+    expect(nodeSummary.totalPoints).toBe(5);
   });
 });

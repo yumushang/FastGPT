@@ -6,6 +6,7 @@ export enum FlowNodeTemplateTypeEnum {
   ai = 'ai',
   interactive = 'interactive',
   tools = 'tools',
+  toolCall = 'toolCall',
   other = 'other',
 
   // Team app type
@@ -127,6 +128,7 @@ export enum NodeInputKeyEnum {
   scheduleTrigger = 'scheduleTrigger',
   chatInputGuide = 'chatInputGuide',
   autoExecute = 'autoExecute',
+  entryPoints = 'entryPoints',
 
   // plugin config
   instruction = 'instruction',
@@ -192,6 +194,7 @@ export enum NodeInputKeyEnum {
 
   datasetSearchUsingReRank = 'usingReRank',
   datasetSearchRerankWeight = 'rerankWeight',
+  datasetSearchRerankCandidateNum = 'rerankCandidateNum',
   datasetSearchRerankModelId = 'rerankModelId',
   /** @deprecated */
   datasetSearchRerankModel = 'rerankModel',
@@ -202,14 +205,9 @@ export enum NodeInputKeyEnum {
   datasetSearchExtensionModel = 'datasetSearchExtensionModel',
   datasetSearchExtensionBg = 'datasetSearchExtensionBg',
   datasetSearchInput = 'datasetSearchInput',
+  collectionFilterVersion = 'collectionFilterVersion',
   collectionFilterMatch = 'collectionFilterMatch',
   authTmbId = 'authTmbId',
-  datasetDeepSearch = 'datasetDeepSearch',
-  datasetDeepSearchModelId = 'datasetDeepSearchModelId',
-  /** @deprecated */
-  datasetDeepSearchModel = 'datasetDeepSearchModel',
-  datasetDeepSearchMaxTimes = 'datasetDeepSearchMaxTimes',
-  datasetDeepSearchBg = 'datasetDeepSearchBg',
 
   // concat dataset
   datasetQuoteList = 'system_datasetQuoteList',
@@ -380,7 +378,7 @@ export enum VariableInputEnum {
   internal = 'internal'
 }
 
-type VariableConfigType = {
+export type VariableConfigType = {
   icon: string;
   label: string;
   value: VariableInputEnum;

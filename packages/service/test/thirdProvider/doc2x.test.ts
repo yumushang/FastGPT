@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTestInstanceConfig } from '@test/utils/instanceConfigSnapshot';
 
-const { requestMock, axiosPutMock, getImageBufferMock, mockEnv } = vi.hoisted(() => ({
+/**
+ * performance.parse.fileTimeoutSeconds 的运行时唯一来源是实例配置快照。
+ * 见 .agents/design/common/admin-instance-config-env-boundary.md 13.1：运行期 `?? serviceEnv` 兜底已废除，
+ * PARSE_FILE_TIMEOUT_SECONDS 只在启动迁移时 seed 进库，因此本文件改写快照叶子来驱动 doc2x 的整体 deadline，
+ * 而不是 mock serviceEnv。每次获取当前快照，避免测试初始化替换 global 后仍修改旧对象。
+ */
+const setFileTimeoutSeconds = (value: number) => {
+  getTestInstanceConfig().performance.parse.fileTimeoutSeconds = value;
+};
+
+const { requestMock, axiosPutMock, getImageBufferMock } = vi.hoisted(() => ({
   requestMock: vi.fn(),
   axiosPutMock: vi.fn(),
-  getImageBufferMock: vi.fn(),
-  mockEnv: {
-    PARSE_FILE_TIMEOUT_SECONDS: 600
-  }
+  getImageBufferMock: vi.fn()
 }));
 
 vi.mock('@fastgpt/service/common/api/axios', () => ({
@@ -20,10 +28,6 @@ vi.mock('@fastgpt/service/common/api/axios', () => ({
 
 vi.mock('@fastgpt/service/common/file/image/utils', () => ({
   getImageBuffer: getImageBufferMock
-}));
-
-vi.mock('@fastgpt/service/env', () => ({
-  serviceEnv: mockEnv
 }));
 
 const { useDoc2xServer } = await import('@fastgpt/service/thirdProvider/doc2x');
@@ -60,7 +64,7 @@ describe('useDoc2xServer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requestMock.mockReset();
-    mockEnv.PARSE_FILE_TIMEOUT_SECONDS = 600;
+    setFileTimeoutSeconds(600);
     vi.useFakeTimers();
     axiosPutMock.mockResolvedValue({
       status: 200,
@@ -171,6 +175,25 @@ describe('useDoc2xServer', () => {
     expect(result.text).toBe('hello ![](https://img.example.com/a.png)');
   });
 
+  it('文本清理后再转换表格，避免反斜杠清理重新破坏列结构', async () => {
+    requestMock.mockReset();
+    mockDoc2xSuccess(
+      String.raw`<table><tr><th>选项|类型</th><th>备注</th></tr><tr><td>A\\\|B</td><td>$|x|$</td></tr></table>`
+    );
+
+    const resultPromise = useDoc2xServer({ apiKey: 'api-key' }).parsePDF(Buffer.from('pdf'));
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.text).toBe(
+      [
+        '| 选项&#124;类型 | 备注 |',
+        '| --- | --- |',
+        String.raw`| A\\&#124;B | $&#124;x&#124;$ |`
+      ].join('\n')
+    );
+  });
+
   it('Doc2x 返回 failed 状态时立即失败，不继续轮询', async () => {
     requestMock.mockReset();
     requestMock
@@ -241,7 +264,7 @@ describe('useDoc2xServer', () => {
   });
 
   it('轮询总时长跟随后端有效 timeout，不受固定 120 次限制', async () => {
-    mockEnv.PARSE_FILE_TIMEOUT_SECONDS = 1200;
+    setFileTimeoutSeconds(1200);
     requestMock.mockReset();
     let statusCalls = 0;
     requestMock.mockImplementation(({ url }: { url: string }) => {

@@ -4,8 +4,8 @@ import { NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
 import type { DispatchNodeResultType, ModuleDispatchProps } from '../../types/runtime';
 
-import { serviceEnv } from '../../../../env';
 import { runWorkflow } from '..';
+import { getWorkflowMaxLoopTimes, getWorkflowParallelMaxConcurrency } from '../../constants';
 import { getNodeResponseChildResponseCount } from '../../../chat/nodeResponseStorage';
 import {
   clampParallelConcurrency,
@@ -19,6 +19,8 @@ import {
 } from './service';
 import { pushSubWorkflowUsage } from '../utils';
 import { createContainerRunStateSnapshot, syncContainerRunState } from '../utils/containerRunState';
+import { WorkflowMemoryState } from '../../memory/state';
+import { getErrText } from '@fastgpt/global/common/error/utils';
 
 type Props = ModuleDispatchProps<{
   [NodeInputKeyEnum.nestedInputArray]: Array<any>;
@@ -48,26 +50,28 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
     return Promise.reject('Input value is not an array');
   }
 
-  const maxLength = serviceEnv.WORKFLOW_MAX_LOOP_TIMES;
+  // 循环上限与并发上限由统一 getter 从实例配置读取，ENV 只在迁移时 seed
+  const maxLength = getWorkflowMaxLoopTimes();
+  const maxConcurrency = getWorkflowParallelMaxConcurrency();
   if (loopInputArray.length > maxLength) {
     return Promise.reject(`Input array length cannot be greater than ${maxLength}`);
   }
 
-  const concurrency = clampParallelConcurrency(
-    userConcurrency,
-    serviceEnv.WORKFLOW_PARALLEL_MAX_CONCURRENCY
-  );
+  const concurrency = clampParallelConcurrency(userConcurrency, maxConcurrency);
 
   const maxRetryAttempts = clampParallelRetryTimes(userRetryTimes);
   const attemptResults: ParallelTaskResult[] = [];
+  const parentMemoryState = WorkflowMemoryState.fromWorkflow(props);
+  const successfulTaskMemories: Array<Record<string, any> | undefined> = [];
+  // 仅保留并行节点自身未恢复的异常；子流程失败只参与任务结果汇总。
+  let parallelFailure: { rawError: unknown } | undefined;
   const taskResponseIdPrefix = props.nodeResponseParentId || node.nodeId;
 
   const taskResults = await batchRun(
     loopInputArray,
     async (item: any, index: number) => {
       let lastResult: Awaited<ReturnType<typeof parseTaskResponse>> | undefined;
-      // Accumulate points across all retry attempts so nodeResponse.totalPoints
-      // matches the sum of all usagePush calls for this task.
+      // 业务汇总仍需要保留每次 retry 的积分，nodeResponse 本身不再缓存 child points。
       let accumulatedPoints = 0;
 
       for (let attempt = 0; attempt < maxRetryAttempts + 1; attempt++) {
@@ -90,6 +94,7 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
 
         try {
           const taskVariableState = props.variableState.clone();
+          const taskMemoryState = parentMemoryState.fork();
           const taskStateSnapshot = createContainerRunStateSnapshot({
             nodes: taskRuntimeNodes,
             childrenNodeIdList,
@@ -98,6 +103,7 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
           const response = await runWorkflow({
             ...props,
             variableState: taskVariableState,
+            memoryState: taskMemoryState,
             nodeResponseParentId: taskResponseId,
             runtimeNodes: taskRuntimeNodes,
             runtimeEdges: taskRuntimeEdges
@@ -112,9 +118,17 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
             iteration: index
           });
           accumulatedPoints += attemptPoints;
+          props.nodeSummary.mergeNodeSummary({
+            llmInputTokens: response.workflowRuntimeSummary.llmInputTokens,
+            llmOutputTokens: response.workflowRuntimeSummary.llmOutputTokens,
+            totalPoints: attemptPoints,
+            citeCollectionIds: response.workflowRuntimeSummary.citeCollectionIds,
+            hasAgentSandbox: response.workflowRuntimeSummary.hasAgentSandbox
+          });
 
           const result = parseTaskResponse({ index, response });
           if (result.success) {
+            successfulTaskMemories[index] = response[DispatchNodeResponseKeyEnum.memories];
             await syncContainerRunState({
               sourceNodes: taskRuntimeNodes,
               targetNodes: runtimeNodes,
@@ -151,6 +165,8 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
             totalPoints: accumulatedPoints
           };
         } catch (err) {
+          // 重试成功不遗留本节点的失败状态；最终异常由外层调度统一记录。
+          if (attempt === maxRetryAttempts) parallelFailure = { rawError: err };
           const attemptResult = {
             ...parseTaskError(index, err),
             taskResponseId,
@@ -173,7 +189,6 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
     fullResultsArray,
     fullDetail,
     status,
-    totalPoints,
     attemptResponseDetails,
     assistantResponses,
     customFeedbacks
@@ -201,18 +216,25 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
     }
   }
 
+  const parallelMemories: Record<string, any> = {};
+  for (const memories of successfulTaskMemories) {
+    if (memories) {
+      Object.assign(parallelMemories, memories);
+    }
+  }
+
   const data = {
     [NodeOutputKeyEnum.parallelSuccessResults]: filteredArray,
     [NodeOutputKeyEnum.parallelFullResults]: fullResultsArray,
     [NodeOutputKeyEnum.parallelStatus]: status
   };
-
-  return {
+  const result = {
     data,
     [DispatchNodeResponseKeyEnum.toolResponse]: fullResultsArray,
     [DispatchNodeResponseKeyEnum.assistantResponses]: assistantResponses,
+    [DispatchNodeResponseKeyEnum.memories]:
+      Object.keys(parallelMemories).length > 0 ? parallelMemories : undefined,
     [DispatchNodeResponseKeyEnum.nodeResponse]: {
-      totalPoints,
       parallelInput: loopInputArray,
       parallelResult: filteredArray,
       parallelRunDetail: fullDetail,
@@ -221,4 +243,11 @@ export const dispatchParallelRun = async (props: Props): Promise<Response> => {
     [DispatchNodeResponseKeyEnum.customFeedbacks]:
       customFeedbacks.length > 0 ? customFeedbacks : undefined
   };
+  return parallelFailure
+    ? {
+        ...result,
+        ...parallelFailure,
+        error: { [NodeOutputKeyEnum.errorText]: getErrText(parallelFailure.rawError) }
+      }
+    : result;
 };

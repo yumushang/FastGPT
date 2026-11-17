@@ -1,13 +1,14 @@
-import React, { useMemo, useState } from 'react';
-import { Box, Grid, IconButton, HStack, Flex, VStack } from '@chakra-ui/react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Box, Grid, IconButton, HStack, Flex, VStack, Checkbox } from '@chakra-ui/react';
 import { useRouter } from 'next/router';
-import { delAppById, putAppById, resumeInheritPer, changeOwner } from '@/web/core/app/api';
+import { batchMoveApps, delAppById, resumeInheritPer, changeOwner } from '@/web/core/app/api';
 import { useConfirm } from '@fastgpt/web/hooks/useConfirm';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import PermissionIconText from '@/components/support/permission/IconText';
 import { useTranslation } from 'next-i18next';
 import MyBox from '@fastgpt/web/components/common/MyBox';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { useContextSelector } from 'use-context-selector';
 import { AppListContext } from './context';
@@ -23,9 +24,9 @@ import type { EditResourceInfoFormType } from '@/components/common/Modal/EditRes
 import MyMenu, { type MenuItemType } from '@fastgpt/web/components/common/MyMenu';
 import { AppRoleList } from '@fastgpt/global/support/permission/app/constant';
 import { getCollaboratorList, postUpdateAppCollaborators } from '@/web/core/app/api/collaborator';
-import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import AppTypeTag from './TypeTag';
 import { postCopyApp } from '@/web/core/app/api/app';
+import ReferencedAppsPopover from '@/pageComponents/dashboard/ReferencedAppsPopover';
 import { formatTimeToChatTime } from '@fastgpt/global/common/string/time';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { useChatStore } from '@/web/core/chat/context/useChatStore';
@@ -38,10 +39,12 @@ import { createAppTypeMap } from '@/pageComponents/app/constants';
 import { getDashboardAppListScene } from './utils/appListTypes';
 import { getResourceListDisplayTime, hasAppListActiveFilter } from './filters/utils';
 import { useUserStore } from '@/web/support/user/useUserStore';
-import EmptyTip from '@fastgpt/web/components/common/EmptyTip';
 import ListCreateCard from '@/pageComponents/dashboard/ListCreateCard';
+import ResourceListCard from '@/pageComponents/dashboard/ResourceListCard';
 import { useVirtualGridList } from '@fastgpt/web/hooks/useVirtualGridList';
 import { useSafeTranslation } from '@fastgpt/web/hooks/useSafeTranslation';
+import { getGridPageSize } from '@fastgpt/web/hooks/useResponsiveGridPageSize';
+import ResourceCardSkeleton from '@/pageComponents/dashboard/ResourceCardSkeleton';
 
 const EditResourceModal = dynamic(() => import('@/components/common/Modal/EditResourceModal'));
 const ConfigPerModal = dynamic(() => import('@/components/support/permission/ConfigPerModal'));
@@ -72,19 +75,26 @@ const List = () => {
 
   const {
     myApps,
+    ScrollData,
     appType,
     loadMyApps,
     isFetchingApps,
+    isEmpty,
     onUpdateApp,
     setMoveAppId,
     folderDetail,
     searchKey,
     setSearchKey,
-    listFilters
+    listFilters,
+    columnCount,
+    pageSize,
+    isBatchMode,
+    selectedAppIds,
+    onToggleSelectApp
   } = useContextSelector(AppListContext, (v) => v);
 
-  const hasCreatePer = folderDetail
-    ? folderDetail.permission.hasWritePer && folderDetail?.type !== AppTypeEnum.httpPlugin
+  const hasCreatePer = parentId
+    ? Boolean(folderDetail?.permission.hasWritePer && folderDetail.type !== AppTypeEnum.httpPlugin)
     : userInfo?.team.permission.hasAppCreatePer;
   const hasActiveFilter = hasAppListActiveFilter({
     searchKey,
@@ -95,12 +105,17 @@ const List = () => {
 
   const [editedApp, setEditedApp] = useState<EditResourceInfoFormType>();
   const [editPerAppId, setEditPerAppId] = useState<string>();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isInitialLoading = !isEmpty && myApps.length === 0 && isFetchingApps;
   const { gridRef, renderVirtualGridItems } = useVirtualGridList({
     list: myApps,
-    listKey: `${router.pathname}-${appType}-${parentId || ''}-${searchKey}`,
-    reservedSlotCount: 1,
+    listKey: `${router.pathname}-${appType}-${parentId || ''}-${searchKey}-${listFilters.type}-${listFilters.creator.mode}-${listFilters.creator.tmbIds.join(',')}-${listFilters.sort}-${columnCount}-${pageSize}-${isInitialLoading}-${isBatchMode}`,
+    scrollContainerRef,
+    reservedSlotCount: isInitialLoading || isBatchMode ? 0 : 1,
     estimatedRowHeight: 160,
-    estimatedRowGap: 20
+    estimatedRowGap: 20,
+    loadingItemCount: isInitialLoading ? getGridPageSize(columnCount) : 0,
+    renderLoadingItem: () => <ResourceCardSkeleton />
   });
 
   const editPerApp = useMemo(
@@ -113,18 +128,17 @@ const List = () => {
 
   const parentApp = useMemo(() => myApps.find((item) => item._id === parentId), [parentId, myApps]);
 
-  const { runAsync: onPutAppById } = useRequest(putAppById, {
-    onSuccess() {
-      loadMyApps();
-    }
-  });
-
   const { getBoxProps } = useFolderDrag({
     activeStyles: {
       borderColor: 'primary.600'
     },
     onDrop: (dragId: string, targetId: string) => {
-      openMoveConfirm({ onConfirm: async () => onPutAppById(dragId, { parentId: targetId }) })();
+      openMoveConfirm({
+        onConfirm: async () => {
+          await batchMoveApps({ ids: [dragId], parentId: targetId });
+          await loadMyApps();
+        }
+      })();
     }
   });
 
@@ -164,15 +178,14 @@ const List = () => {
   });
 
   const { runAsync: onResumeInheritPermission } = useRequest(
-    () => {
-      return resumeInheritPer(editPerApp!._id);
+    async (appId: string) => {
+      await resumeInheritPer(appId);
+      // 保存期间可能切换目录或关闭弹窗，始终按发起操作时的 ID 同步。
+      await loadMyApps({ silent: true, resourceId: appId });
     },
     {
       manual: true,
-      errorToast: t('common:permission.Resume InheritPermission Failed'),
-      onSuccess() {
-        loadMyApps();
-      }
+      errorToast: t('common:permission.Resume InheritPermission Failed')
     }
   );
   const renderAppCard = (app: (typeof myApps)[number]) => {
@@ -184,30 +197,31 @@ const List = () => {
     const isAgent = AppTypeList.includes(app.type);
     const isTool = ToolTypeList.includes(app.type);
     const isFolder = AppFolderTypeList.includes(app.type);
+    const isNavigableItem = app.folderAccessMode === 'navigate';
+    const isSelected = selectedAppIds.includes(app._id);
+    const canBatchOperate = Boolean(app.permission?.hasManagePer || app.permission?.isOwner);
+
     return (
-      <MyBox
+      <ResourceListCard
         key={app._id}
-        data-virtual-item=""
-        py={4}
+        pt={5}
+        pb={3}
         px={5}
-        cursor={'pointer'}
-        border={'base'}
-        bg={'white'}
-        borderRadius={'10px'}
-        position={'relative'}
-        display={'flex'}
-        flexDirection={'column'}
-        _hover={{
-          borderColor: 'primary.300',
-          boxShadow: '1.5',
-          '& .more': {
-            display: 'flex'
-          },
-          '& .time': {
-            display: ['flex', 'none']
-          }
-        }}
+        isBatchMode={isBatchMode}
+        isSelected={isSelected}
+        canSelect={canBatchOperate}
+        dragProps={getBoxProps({
+          dataId: app._id,
+          isFolder: app.type === AppTypeEnum.folder || app.type === AppTypeEnum.toolFolder,
+          isDisabled: isNavigableItem
+        })}
         onClick={() => {
+          if (isBatchMode) {
+            if (canBatchOperate) {
+              onToggleSelectApp(app._id);
+            }
+            return;
+          }
           if (AppFolderTypeList.includes(app.type)) {
             setSearchKey('');
             router.push({
@@ -225,10 +239,6 @@ const List = () => {
             );
           }
         }}
-        {...getBoxProps({
-          dataId: app._id,
-          isFolder: app.type === AppTypeEnum.folder || app.type === AppTypeEnum.toolFolder
-        })}
       >
         <Grid templateColumns="auto 1fr auto" alignItems="center" width="100%" gap={2}>
           <Avatar src={app.avatar} borderRadius={'sm'} w={'1.5rem'} />
@@ -237,8 +247,28 @@ const List = () => {
               <Box className={'textEllipsis'}>{app.name}</Box>
             </MyTooltip>
           </Box>
-          <Box justifySelf="end" mr={-5}>
-            <AppTypeTag type={app.type} />
+          <Box justifySelf="end">
+            {isBatchMode ? (
+              canBatchOperate ? (
+                <Checkbox size={'sm'} isChecked={isSelected} pointerEvents={'none'} />
+              ) : (
+                <MyTooltip label={t('common:read_only_no_batch_permission')}>
+                  <Box
+                    w={'16px'}
+                    h={'16px'}
+                    borderRadius={'xs'}
+                    border={'1px solid'}
+                    borderColor={'#CECECE'}
+                    bg={'#F9F9F9'}
+                    cursor={'not-allowed'}
+                  />
+                </MyTooltip>
+              )
+            ) : (
+              <Box mr={-5}>
+                <AppTypeTag type={app.type} />
+              </Box>
+            )}
           </Box>
         </Grid>
         <Box
@@ -249,11 +279,22 @@ const List = () => {
           fontSize={'xs'}
           color={'myGray.500'}
         >
-          <Box className={'textEllipsis2'} whiteSpace={'pre-wrap'} lineHeight={1.3}>
-            {app.intro || t('common:no_intro')}
-          </Box>
+          <MyTooltip
+            label={isNavigableItem ? t('common:no_intro') : app.intro || t('common:no_intro')}
+            showOnlyWhenOverflow
+          >
+            <Box className={'textEllipsis2'} whiteSpace={'pre-wrap'} lineHeight={1.3}>
+              {isNavigableItem ? t('common:no_intro') : app.intro || t('common:no_intro')}
+            </Box>
+          </MyTooltip>
         </Box>
-        <HStack h={'24px'} fontSize={'mini'} color={'myGray.500'} w="full">
+        <HStack
+          h={'24px'}
+          fontSize={'mini'}
+          color={'myGray.500'}
+          w="full"
+          display={isNavigableItem ? 'none' : 'flex'}
+        >
           <HStack flex={'1 0 0'}>
             <UserBox
               sourceMember={app.sourceMember}
@@ -267,6 +308,16 @@ const List = () => {
               iconColor={'myGray.400'}
               w={'0.875rem'}
             />
+            {typeof app.relatedAppCount === 'number' && (
+              <ReferencedAppsPopover
+                resourceId={app._id}
+                resourceType={
+                  getDashboardAppListScene(router.pathname) === 'tool' ? 'tool' : 'agent'
+                }
+                count={app.relatedAppCount}
+                trigger={'hover'}
+              />
+            )}
           </HStack>
           <HStack>
             {isPc && (
@@ -429,95 +480,101 @@ const List = () => {
             )}
           </HStack>
         </HStack>
-      </MyBox>
+      </ResourceListCard>
     );
   };
 
-  if (myApps.length === 0 && isFetchingApps) return null;
-
   return (
-    <>
-      {myApps.length === 0 && !folderDetail ? (
-        hasActiveFilter ? (
-          <EmptyTip />
-        ) : isPc && hasCreatePer ? (
-          <CreateButton appType={appType} />
-        ) : (
-          <Grid
-            py={4}
-            gridTemplateColumns={
-              folderDetail
-                ? ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)']
-                : ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)', 'repeat(4,1fr)']
-            }
-            gridGap={5}
-            alignItems={'stretch'}
-          >
-            {hasCreatePer ? <ListCreateButton appType={appType} /> : <ForbiddenCreateButton />}
-          </Grid>
-        )
-      ) : (
-        <>
+    <ScrollData
+      ScrollContainerRef={scrollContainerRef}
+      h={'full'}
+      minH={0}
+      pr={folderDetail ? [3, 2] : [3, 6]}
+      mr={folderDetail ? [-3, -2] : [-3, -6]}
+    >
+      <>
+        {isInitialLoading ? (
           <Grid
             ref={gridRef}
             py={4}
             gridTemplateColumns={
-              folderDetail
+              parentId
                 ? ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)']
                 : ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)', 'repeat(4,1fr)']
             }
             gridGap={5}
             alignItems={'stretch'}
           >
-            {hasCreatePer ? <ListCreateButton appType={appType} /> : <ForbiddenCreateButton />}
             {renderVirtualGridItems(renderAppCard)}
           </Grid>
-        </>
-      )}
-      <DeleteConfirmModal />
-      <ConfirmCopyModal />
-      {!!editedApp && (
-        <EditResourceModal
-          {...editedApp}
-          title={t('common:core.app.edit_content')}
-          onClose={() => {
-            setEditedApp(undefined);
-          }}
-          onEdit={({ id, ...data }) => onUpdateApp(id, data)}
-        />
-      )}
-      {!!editPerApp && (
-        <ConfigPerModal
-          {...(editPerApp.permission.isOwner && {
-            onChangeOwner: (tmbId: string) =>
-              changeOwner({
-                appId: editPerApp._id,
-                ownerId: tmbId
-              }).then(() => loadMyApps())
-          })}
-          refetchResource={loadMyApps}
-          hasParent={Boolean(parentId)}
-          resumeInheritPermission={onResumeInheritPermission}
-          isInheritPermission={editPerApp.inheritPermission}
-          avatar={editPerApp.avatar}
-          name={editPerApp.name}
-          managePer={{
-            defaultRole: ReadRoleVal,
-            permission: editPerApp.permission,
-            onGetCollaboratorList: () => getCollaboratorList(editPerApp._id),
-            roleList: AppRoleList,
-            onUpdateCollaborators: (props) =>
-              postUpdateAppCollaborators({
-                ...props,
-                appId: editPerApp._id
-              }),
-            refreshDeps: [editPerApp.inheritPermission]
-          }}
-          onClose={() => setEditPerAppId(undefined)}
-        />
-      )}
-      <MoveConfirmModal />
-    </>
+        ) : isEmpty && !parentId && !hasActiveFilter && !isBatchMode && isPc && hasCreatePer ? (
+          <CreateButton appType={appType} />
+        ) : (
+          <Grid
+            ref={gridRef}
+            py={4}
+            gridTemplateColumns={
+              parentId
+                ? ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)']
+                : ['1fr', 'repeat(2,1fr)', 'repeat(2,1fr)', 'repeat(3,1fr)', 'repeat(4,1fr)']
+            }
+            gridGap={5}
+            alignItems={'stretch'}
+          >
+            {!isBatchMode &&
+              (hasCreatePer ? (
+                <ListCreateButton appType={appType} />
+              ) : !parentId ? (
+                <ForbiddenCreateButton />
+              ) : null)}
+            {renderVirtualGridItems(renderAppCard)}
+          </Grid>
+        )}
+        <DeleteConfirmModal />
+        <ConfirmCopyModal />
+        {!!editedApp && (
+          <EditResourceModal
+            {...editedApp}
+            title={t('common:core.app.edit_content')}
+            onClose={() => {
+              setEditedApp(undefined);
+            }}
+            onEdit={({ id, ...data }) => onUpdateApp(id, data)}
+          />
+        )}
+        {!!editPerApp && (
+          <ConfigPerModal
+            {...(editPerApp.permission.isOwner && {
+              onChangeOwner: (tmbId: string) =>
+                changeOwner({
+                  appId: editPerApp._id,
+                  ownerId: tmbId
+                }).then(() => loadMyApps({ silent: true, resourceId: editPerApp._id }))
+            })}
+            refetchResource={() => loadMyApps({ silent: true, resourceId: editPerApp._id })}
+            hasParent={Boolean(parentId)}
+            resumeInheritPermission={() => onResumeInheritPermission(editPerApp._id)}
+            isInheritPermission={editPerApp.inheritPermission}
+            avatar={editPerApp.avatar}
+            name={editPerApp.name}
+            managePer={{
+              defaultRole: ReadRoleVal,
+              permission: editPerApp.permission,
+              onGetCollaboratorList: () => getCollaboratorList(editPerApp._id),
+              roleList: AppRoleList,
+              onUpdateCollaborators: (props) =>
+                postUpdateAppCollaborators({
+                  ...props,
+                  appId: editPerApp._id
+                }),
+              refreshDeps: [editPerApp.inheritPermission]
+            }}
+            onClose={() => setEditPerAppId(undefined)}
+          />
+        )}
+        <MoveConfirmModal />
+      </>
+    </ScrollData>
   );
 };
 
@@ -611,7 +668,8 @@ const ForbiddenCreateButton = () => {
   const { t } = useTranslation();
   return (
     <MyBox
-      py={4}
+      pt={5}
+      pb={3}
       px={5}
       cursor={'not-allowed'}
       border={'base'}

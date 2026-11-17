@@ -1,3 +1,4 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
 import React, { useState } from 'react';
 import {
   Box,
@@ -11,7 +12,6 @@ import {
   ModalFooter,
   Switch,
   Table,
-  TableContainer,
   Tbody,
   Td,
   Th,
@@ -30,14 +30,16 @@ import SearchInput from '@fastgpt/web/components/common/Input/SearchInput';
 import Path from '@/components/common/folder/Path';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import { useRequest } from '@fastgpt/web/hooks/useRequest';
-import { getAppBasicInfoByIds, getMyApps } from '@/web/core/app/api';
+import { getAppBasicInfoByIds, getMyAppsV2 } from '@/web/core/app/api';
 import { type ParentIdType } from '@fastgpt/global/common/parentFolder/type';
 import { getAppFolderPath } from '@/web/core/app/api/app';
 import { AppFolderTypeList } from '@fastgpt/global/core/app/constants';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import { postCreateMcpServer, putUpdateMcpServer } from '../../../web/support/mcp/api';
 import QuestionTip from '@fastgpt/web/components/common/MyTooltip/QuestionTip';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import { useUserStore } from '@/web/support/user/useUserStore';
+import { useVirtualList } from '@fastgpt/web/hooks/useVirtualList';
 
 export type EditMcForm = {
   id?: string;
@@ -93,18 +95,18 @@ const SelectAppModal = ({
   const [searchKey, setSearchKey] = useState('');
   const [parentId, setParentId] = useState<ParentIdType>('');
 
-  const { data: apps = [], loading: loadingApps } = useRequest(
-    () =>
-      getMyApps({
-        searchKey,
-        parentId
-      }),
-    {
-      manual: false,
-      refreshDeps: [searchKey, parentId],
-      throttleWait: 200
-    }
-  );
+  const {
+    scrollDataList,
+    totalData,
+    ScrollList,
+    isLoading: loadingApps
+  } = useVirtualList(getMyAppsV2, {
+    params: { searchKey, parentId },
+    pageSize: 20,
+    itemHeight: 40,
+    EmptyTip: <EmptyTip text={t('common:folder.empty')} />,
+    refreshDeps: [searchKey, parentId]
+  });
   const { data: paths = [] } = useRequest(
     () => getAppFolderPath({ sourceId: parentId, type: 'current' }),
     {
@@ -113,7 +115,7 @@ const SelectAppModal = ({
     }
   );
 
-  const isLoading = loadingApps;
+  const isLoading = loadingApps && totalData.length === 0;
 
   return (
     <MyModal
@@ -125,19 +127,26 @@ const SelectAppModal = ({
       maxW={'60vw'}
       h={'100%'}
       maxH={'90vh'}
+      overflow={'hidden'}
       isCentered
       isLoading={isLoading}
     >
-      <ModalBody flex={'1'}>
+      <ModalBody flex={'1'} minH={0} minW={0} overflow={'hidden'} display={'flex'}>
         <Grid
           border="1px solid"
           borderColor="myGray.200"
           borderRadius="0.5rem"
-          gridTemplateColumns="1fr 1fr"
+          // minmax(0, 1fr) 让列宽可以小于文本内容，避免长应用名把弹窗撑出页面
+          gridTemplateColumns="minmax(0, 1fr) minmax(0, 1fr)"
           h={'100%'}
+          w={'100%'}
+          minW={0}
+          overflow={'hidden'}
         >
           <Flex
             h={'100%'}
+            minW={0}
+            overflow={'hidden'}
             flexDirection="column"
             borderRight="1px solid"
             borderColor="myGray.200"
@@ -150,13 +159,13 @@ const SelectAppModal = ({
             />
 
             {paths.length > 0 && !searchKey && (
-              <Box mt={3}>
+              <Box mt={3} minW={0} overflowX={'auto'}>
                 <Path paths={paths} hoverStyle={{ bg: 'myGray.200' }} onClick={setParentId} />
               </Box>
             )}
 
-            <Box mt="3" overflow={'auto'} flex={'1 0 0'} h={0}>
-              {apps.map((item) => {
+            <ScrollList mt="3" flex={'1 0 0'} minH={0} minW={0} w={'100%'}>
+              {scrollDataList.map(({ data: item }) => {
                 const selected = selectedList.some((app) => app.appId === item._id);
                 const isFolder = AppFolderTypeList.includes(item.type);
 
@@ -186,28 +195,47 @@ const SelectAppModal = ({
                     px={3}
                     borderRadius={'md'}
                     cursor={'pointer'}
+                    minW={0}
+                    overflow={'hidden'}
                     _hover={{
                       bg: 'myGray.100'
                     }}
                     onClick={handleItemClick}
                   >
-                    <Flex alignItems={'center'} w={'1.25rem'} onClick={(e) => e.stopPropagation()}>
+                    <Flex
+                      alignItems={'center'}
+                      flexShrink={0}
+                      w={'1.25rem'}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {!isFolder && <Checkbox isChecked={selected} onChange={handleItemClick} />}
                     </Flex>
-                    <Avatar src={item.avatar} w="1.5rem" borderRadius={'sm'} />
-                    <Box>{item.name}</Box>
+                    <Avatar src={item.avatar} w="1.5rem" borderRadius={'sm'} flexShrink={0} />
+                    <Box flex={'1 1 0'} minW={0}>
+                      <MyTooltip label={item.name} showOnlyWhenOverflow shouldWrapChildren={false}>
+                        <Box className="textEllipsis">{item.name}</Box>
+                      </MyTooltip>
+                    </Box>
                   </HStack>
                 );
               })}
-            </Box>
+            </ScrollList>
           </Flex>
 
-          <Flex h={'100%'} p="4" flexDirection="column">
+          <Flex h={'100%'} minW={0} overflow={'hidden'} p="4" flexDirection="column">
             <Box>
               {`${t('dashboard_mcp:has_chosen')}: `}
               {selectedList.length}
             </Box>
-            <Flex flexDirection="column" mt="2" gap={1} overflow={'auto'} flex={'1 0 0'} h={0}>
+            <Flex
+              flexDirection="column"
+              mt="2"
+              gap={1}
+              overflow={'auto'}
+              flex={'1 0 0'}
+              minW={0}
+              h={0}
+            >
               {selectedList.map((item) => {
                 return (
                   <HStack
@@ -216,17 +244,26 @@ const SelectAppModal = ({
                     px={3}
                     borderRadius={'md'}
                     cursor={'pointer'}
+                    minW={0}
+                    overflow={'hidden'}
                     _hover={{
                       bg: 'myGray.100'
                     }}
                   >
-                    <Avatar src={item.avatar} w="1.5rem" borderRadius={'sm'} />
-                    <Box ml="2" flex={'1 0 0'}>
-                      {item.toolName}
+                    <Avatar src={item.avatar} w="1.5rem" borderRadius={'sm'} flexShrink={0} />
+                    <Box ml="2" flex={'1 1 0'} minW={0}>
+                      <MyTooltip
+                        label={item.toolName}
+                        showOnlyWhenOverflow
+                        shouldWrapChildren={false}
+                      >
+                        <Box className="textEllipsis">{item.toolName}</Box>
+                      </MyTooltip>
                     </Box>
                     <MyIcon
                       name="common/closeLight"
                       w="1rem"
+                      flexShrink={0}
                       cursor={'pointer'}
                       _hover={{
                         color: 'red.600'
@@ -362,7 +399,7 @@ const EditMcpModal = ({
                 {t('dashboard_mcp:manage_app')}
               </Button>
             </Flex>
-            <TableContainer mt={2} position={'relative'}>
+            <FixedTableContainer mt={2} position={'relative'}>
               <Table>
                 <Thead>
                   <Tr>
@@ -388,7 +425,17 @@ const EditMcpModal = ({
                             w={'100%'}
                           />
                         </Td>
-                        <Td>{app.appName}</Td>
+                        <Td maxW={'200px'}>
+                          <MyTooltip
+                            label={app.appName}
+                            showOnlyWhenOverflow
+                            shouldWrapChildren={false}
+                          >
+                            <Box maxW={'200px'} className="textEllipsis">
+                              {app.appName}
+                            </Box>
+                          </MyTooltip>
+                        </Td>
                         <Td>
                           <Input
                             {...register(`apps.${index}.description`, { required: true })}
@@ -413,7 +460,7 @@ const EditMcpModal = ({
                 </Tbody>
               </Table>
               {apps.length === 0 && <EmptyTip />}
-            </TableContainer>
+            </FixedTableContainer>
           </Box>
         </ModalBody>
         <ModalFooter>

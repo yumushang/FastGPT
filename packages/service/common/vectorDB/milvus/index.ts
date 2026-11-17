@@ -1,4 +1,4 @@
-import { LoadState, MilvusClient } from '@zilliz/milvus2-sdk-node';
+import { ConsistencyLevelEnum, ErrorCode, LoadState, MilvusClient } from '@zilliz/milvus2-sdk-node';
 import type {
   FieldType,
   FunctionObject
@@ -124,7 +124,7 @@ export class MilvusCtrl implements VectorControllerType {
           index_name: 'vector_HNSW',
           index_type: 'HNSW',
           metric_type: 'IP',
-          params: { efConstruction: 128, M: 32 }
+          params: { efConstruction: 256, M: 32 }
         },
         ...createFullTextIndexParams()
       ],
@@ -199,6 +199,38 @@ export class MilvusCtrl implements VectorControllerType {
       insertIds
     };
   };
+  /**
+   * 兼容 Milvus 2.5：读取旧记录后完整 upsert，只改变 createTime。
+   * 保留 dense vector 和 text，由 BM25 函数重算 sparse；不为已经删除的 ID 补建空记录。
+   */
+  refreshCreateTime: VectorControllerType['refreshCreateTime'] = async ({ teamId, idList }) => {
+    if (idList.length === 0) return;
+    if (idList.some((id) => !/^\d+$/.test(id))) throw new Error('Invalid Milvus vector ID');
+    const client = await this.getClient();
+    const collectionName = getDatasetVectorTableName();
+    const result = await client.query({
+      collection_name: collectionName,
+      filter: `teamId == ${JSON.stringify(String(teamId))} and id in [${idList.join(',')}]`,
+      output_fields: ['id', 'vector', 'text', 'teamId', 'datasetId', 'collectionId'],
+      consistency_level: ConsistencyLevelEnum.Strong,
+      limit: idList.length
+    });
+    if (result.status?.error_code !== ErrorCode.SUCCESS) {
+      throw new Error(`Milvus refresh createTime query failed: ${result.status?.reason}`);
+    }
+    if (result.data.length === 0) return;
+    const createTime = Date.now();
+    const updated = await client.upsert({
+      collection_name: collectionName,
+      data: result.data.map((row) => ({ ...row, createTime }))
+    });
+    const errors = resolveMutationErrIndex(updated, result.data.length);
+    if (errors.length > 0) {
+      throw new Error(
+        `Milvus refresh createTime rejected ${errors.length}/${result.data.length} rows: ${updated.status?.reason ?? 'see err_index'}`
+      );
+    }
+  };
   delete: VectorControllerType['delete'] = async (props) => {
     const { teamId } = props;
     const client = await this.getClient();
@@ -269,6 +301,7 @@ export class MilvusCtrl implements VectorControllerType {
         // 单表含 dense vector + BM25 sparse 两个 ANN 字段,SDK 缺省取 schema 第一个(依赖字段顺序),必须显式指定 dense
         anns_field: 'vector',
         limit,
+        params: { ef: props.hnswEfSearch },
         expr: filterStr,
         // SDK 不自动回填主键:search 结果只含 output_fields 指定的字段,id 需显式列出
         output_fields: ['id', 'collectionId']

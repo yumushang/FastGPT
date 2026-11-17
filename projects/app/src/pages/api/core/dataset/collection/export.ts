@@ -1,5 +1,6 @@
 import { NextAPI } from '@/service/middleware/entry';
-import { authChatTargetCrud, authCollectionInChat } from '@/service/support/permission/auth/chat';
+import { authChatTargetCrud } from '@fastgpt/service/core/chat/auth';
+import { authCollectionInChat } from '@/service/support/permission/auth/chat';
 import { DatasetErrEnum } from '@fastgpt/global/common/error/code/dataset';
 import { ReadPermissionVal } from '@fastgpt/global/support/permission/constant';
 import {
@@ -15,8 +16,9 @@ import { authDatasetCollection } from '@fastgpt/service/support/permission/datas
 import { type ApiRequestProps } from '@fastgpt/next/type';
 import { type NextApiResponse } from 'next';
 import { sanitizeCsvField } from '@fastgpt/service/common/file/csv';
-import { replaceS3KeyToPreviewUrl } from '@fastgpt/service/core/dataset/utils';
-import { addDays } from 'date-fns';
+import { replaceS3KeysToPreviewUrls } from '@fastgpt/service/common/s3/utils/preview';
+import { createDatasetFileS3KeyFilter } from '@fastgpt/service/common/s3/sources/dataset/key';
+import { getStorageFileUrlExpiredTime } from '@fastgpt/service/common/s3/config/constants';
 import { ExportCollectionBodySchema } from '@fastgpt/global/openapi/core/dataset/collection/api';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 const logger = getLogger(LogCategories.MODULE.DATASET.COLLECTION);
@@ -45,13 +47,16 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
       };
     }
 
-    const { sourceType, sourceId, chatId, outLinkAuthData, chatTime } = parseBody;
+    const { customUid, authProxy, sourceType, sourceId, chatId, outLinkAuthData, chatTime } =
+      parseBody;
     /*
       1. auth chat read permission
       2. auth collection quote in chat
       3. auth outlink open show quote
     */
     const authRes = await authChatTargetCrud({
+      customUid,
+      authProxy,
       req,
       authToken: true,
       authApiKey: true,
@@ -124,10 +129,13 @@ async function handler(req: ApiRequestProps, res: NextApiResponse) {
     cursor.pause();
 
     try {
-      const [sanitizedQ, sanitizedA] = await Promise.all([
-        replaceS3KeyToPreviewUrl(sanitizeCsvField(doc.q || ''), addDays(new Date(), 90)),
-        replaceS3KeyToPreviewUrl(sanitizeCsvField(doc.a || ''), addDays(new Date(), 90))
-      ]);
+      const [sanitizedQ, sanitizedA] = await replaceS3KeysToPreviewUrls(
+        [sanitizeCsvField(doc.q || ''), sanitizeCsvField(doc.a || '')],
+        getStorageFileUrlExpiredTime(),
+        {
+          filter: createDatasetFileS3KeyFilter(collection.datasetId)
+        }
+      );
 
       write(`\n${sanitizedQ},${sanitizedA}`);
     } catch (error) {

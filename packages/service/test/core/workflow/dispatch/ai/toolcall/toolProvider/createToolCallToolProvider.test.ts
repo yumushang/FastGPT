@@ -23,7 +23,6 @@ const createToolNode = (overrides: Record<string, any> = {}) =>
     avatar: 'tool-avatar',
     flowNodeType: FlowNodeTypeEnum.tool,
     intro: 'Search intro',
-    toolDescription: 'Search data',
     inputs: [
       {
         key: 'q',
@@ -123,81 +122,102 @@ describe('createToolCallToolProvider', () => {
     });
   });
 
-  it('executes workflow tools through the provider', async () => {
-    const cacheToolFlowResponse = vi.fn();
-    const workflowStreamResponse = vi.fn();
-    runWorkflowMock.mockResolvedValue({
-      toolResponse: {
-        answer: 'workflow ok'
-      },
-      assistantResponses: [{ text: { content: 'assistant text' } }],
-      flowUsages: [{ moduleName: 'tool', totalPoints: 1 }],
-      flatNodeResponses: [
-        {
-          id: 'search',
-          nodeId: 'search',
-          moduleName: 'Search'
-        }
-      ],
-      runtimeNodeResponseSummary: { hasToolStop: false, runningTime: 0 },
-      workflowInteractiveResponse: undefined
-    });
+  it.each([true, false])(
+    'inherits parent stream=%s when executing workflow tools',
+    async (stream) => {
+      const cacheToolFlowResponse = vi.fn();
+      const workflowStreamResponse = vi.fn();
+      runWorkflowMock.mockResolvedValue({
+        toolResponse: {
+          answer: 'workflow ok'
+        },
+        assistantResponses: [{ text: { content: 'assistant text' } }],
+        flowUsages: [{ moduleName: 'tool', totalPoints: 1 }],
+        flatNodeResponses: [
+          {
+            id: 'search',
+            nodeId: 'search',
+            moduleName: 'Search'
+          }
+        ],
+        workflowRuntimeSummary: { hasToolStop: false, runningTime: 0 },
+        workflowInteractiveResponse: undefined
+      });
 
-    const provider = await createProvider({
-      cacheToolFlowResponse,
-      workflowProps: {
-        runningAppInfo: { id: 'app_1' },
-        runningUserInfo: { teamId: 'team_1', tmbId: 'tmb_1' },
-        uid: 'user_1',
-        chatId: 'chat_1',
-        chatConfig: {},
-        usageId: 'usage_1',
-        stream: true,
-        workflowStreamResponse
-      } as any
-    });
-    const result = await provider.executeTool({
-      call: {
-        id: 'call_search',
-        type: 'function',
-        function: {
-          name: 'search',
-          arguments: '{"q":"FastGPT"}'
-        }
-      } as any,
-      messages: []
-    });
+      const provider = await createProvider({
+        cacheToolFlowResponse,
+        workflowProps: {
+          runningAppInfo: { id: 'app_1' },
+          runningUserInfo: { teamId: 'team_1', tmbId: 'tmb_1' },
+          uid: 'user_1',
+          chatId: 'chat_1',
+          chatConfig: {},
+          usageId: 'usage_1',
+          nodeResponseParentId: 'toolcall_response',
+          stream,
+          workflowStreamResponse: stream ? workflowStreamResponse : undefined
+        } as any
+      });
+      const result = await provider.executeTool({
+        call: {
+          id: 'call_search',
+          type: 'function',
+          function: {
+            name: 'search',
+            arguments: '{"q":"FastGPT"}'
+          }
+        } as any,
+        messages: []
+      });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        response: JSON.stringify({ answer: 'workflow ok' }, null, 2),
-        usages: [{ moduleName: 'tool', totalPoints: 1 }],
-        stop: false
-      })
-    );
-    expect(cacheToolFlowResponse).toHaveBeenCalledWith(
-      expect.objectContaining({
-        callId: 'call_search',
-        flowResponse: expect.objectContaining({
-          flowResponses: [
-            {
-              id: 'search',
-              nodeId: 'search',
-              moduleName: 'Search'
-            }
-          ],
-          flowUsages: [{ moduleName: 'tool', totalPoints: 1 }]
+      expect(result).toEqual(
+        expect.objectContaining({
+          response: JSON.stringify({ answer: 'workflow ok' }, null, 2),
+          usages: [{ moduleName: 'tool', totalPoints: 1 }],
+          stop: false
         })
-      })
-    );
-    expect(runWorkflowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: false,
-        workflowStreamResponse: undefined
-      })
-    );
-    expect(workflowStreamResponse).not.toHaveBeenCalled();
-  });
+      );
+      expect(cacheToolFlowResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callId: 'call_search',
+          flowResponse: expect.objectContaining({
+            flowResponses: [
+              {
+                id: 'search',
+                nodeId: 'search',
+                moduleName: 'Search'
+              }
+            ],
+            flowUsages: [{ moduleName: 'tool', totalPoints: 1 }]
+          })
+        })
+      );
+      expect(runWorkflowMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream,
+          nodeResponseParentId: 'toolcall_response',
+          workflowStreamResponse: stream ? workflowStreamResponse : undefined
+        })
+      );
+      expect(workflowStreamResponse).not.toHaveBeenCalled();
+
+      // 子流程暂停后恢复也必须继承同一流式设置，不能在恢复入口重新禁流。
+      const childrenResponse = { type: 'userInput', entryNodeIds: ['search'] };
+      runWorkflowMock.mockClear();
+      await provider.executeInteractiveTool!({
+        childrenResponse,
+        toolCallId: 'call_search'
+      } as any);
+      expect(runWorkflowMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream,
+          nodeResponseParentId: 'toolcall_response',
+          workflowStreamResponse: stream ? workflowStreamResponse : undefined,
+          lastInteractive: childrenResponse
+        })
+      );
+    }
+  );
 
   it('runs every connected dataset search node and merges their citations', async () => {
     runWorkflowMock.mockImplementation(async ({ runtimeNodes }) => {
@@ -226,7 +246,7 @@ describe('createToolCallToolProvider', () => {
           }
         ],
         runTimes: 1,
-        runtimeNodeResponseSummary: { hasToolStop: false, runningTime: 0 },
+        workflowRuntimeSummary: { hasToolStop: false, runningTime: 0 },
         workflowInteractiveResponse: undefined
       };
     });
@@ -362,5 +382,125 @@ describe('createToolCallToolProvider', () => {
     const provider = await createProvider();
 
     expect(provider.readFileExecutor).toBeDefined();
+  });
+
+  it('forks memoryState and merges child system_memories for parallel dataset_search and user tools', async () => {
+    const { WorkflowMemoryState } = await import('@fastgpt/service/core/workflow/memory/state');
+    const parentMemoryState = WorkflowMemoryState.fromRecord({
+      'app:app_1:rootExtract': { memory: 'baseline' }
+    }).fork('node:toolCall1');
+
+    runWorkflowMock.mockImplementation(async ({ runtimeNodes, memoryState }) => {
+      const entryNode = runtimeNodes.find((node: any) => node.isEntry);
+      const key = memoryState.getNodeMemoryKey({
+        runningAppInfo: { sourceType: 'app', sourceId: 'app_1' },
+        nodeId: entryNode.nodeId
+      });
+      return {
+        toolResponse: {
+          prompt: 'Use citations',
+          cites: []
+        },
+        assistantResponses: [],
+        flowUsages: [],
+        flatNodeResponses: [],
+        runTimes: 1,
+        system_memories: {
+          [key]: {
+            memory: `ok-${entryNode.nodeId}`
+          }
+        },
+        workflowRuntimeSummary: { hasToolStop: false, runningTime: 0 },
+        workflowInteractiveResponse: undefined
+      };
+    });
+
+    const provider = await createProvider({
+      workflowProps: {
+        node: { nodeId: 'toolCall1' },
+        memoryState: parentMemoryState,
+        runningAppInfo: { id: 'app_1', sourceType: 'app', sourceId: 'app_1' },
+        runningUserInfo: { teamId: 'team_1', tmbId: 'tmb_1' },
+        uid: 'user_1',
+        chatId: 'chat_1',
+        chatConfig: {},
+        usageId: 'usage_1'
+      } as any,
+      toolNodes: [
+        createToolNode({
+          nodeId: 'dataset_node_1',
+          flowNodeType: FlowNodeTypeEnum.datasetSearchNode
+        }),
+        createToolNode({
+          nodeId: 'dataset_node_2',
+          flowNodeType: FlowNodeTypeEnum.datasetSearchNode
+        }),
+        createToolNode({
+          nodeId: 'search'
+        })
+      ],
+      runtimeNodes: [
+        {
+          nodeId: 'dataset_node_1',
+          inputs: [{ key: NodeInputKeyEnum.datasetSearchInput, value: [] }]
+        },
+        {
+          nodeId: 'dataset_node_2',
+          inputs: [{ key: NodeInputKeyEnum.datasetSearchInput, value: [] }]
+        },
+        {
+          nodeId: 'search',
+          inputs: [
+            {
+              key: 'q',
+              value: '',
+              renderTypeList: [FlowNodeInputTypeEnum.agentGenerated],
+              selectedType: FlowNodeInputTypeEnum.agentGenerated
+            }
+          ]
+        }
+      ] as any,
+      runtimeEdges: [
+        { target: 'dataset_node_1' },
+        { target: 'dataset_node_2' },
+        { target: 'search' }
+      ] as any
+    });
+
+    await provider.datasetSearchExecutor!({
+      messages: [],
+      call: {
+        id: 'call_dataset',
+        type: 'function',
+        function: {
+          name: 'dataset_search',
+          arguments: JSON.stringify({ query: ['FastGPT'] })
+        }
+      } as any
+    });
+
+    await provider.executeTool({
+      messages: [],
+      call: {
+        id: 'call_search',
+        type: 'function',
+        function: {
+          name: 'search',
+          arguments: JSON.stringify({ q: 'FastGPT' })
+        }
+      } as any
+    });
+
+    expect(parentMemoryState.getDelta()).toEqual({
+      'node:toolCall1/app:app_1:dataset_node_1': {
+        memory: 'ok-dataset_node_1'
+      },
+      'node:toolCall1/app:app_1:dataset_node_2': {
+        memory: 'ok-dataset_node_2'
+      },
+      'node:toolCall1/app:app_1:search': {
+        memory: 'ok-search'
+      }
+    });
   });
 });

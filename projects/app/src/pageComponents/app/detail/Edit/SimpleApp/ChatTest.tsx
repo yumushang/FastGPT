@@ -34,7 +34,7 @@ const ChatTest = ({ appForm, setRenderEdit, form2WorkflowFn }: Props) => {
   const setCiteModalData = useContextSelector(ChatItemContext, (v) => v.setCiteModalData);
 
   const [workflowData, setWorkflowData] = useSafeState({
-    nodes: appDetail.modules || [],
+    nodes: appDetail.nodes || [],
     edges: appDetail.edges || []
   });
 
@@ -86,14 +86,14 @@ const ChatTest = ({ appForm, setRenderEdit, form2WorkflowFn }: Props) => {
           <Flex alignItems={'center'} gap={2}>
             <SandboxEntryIcon size={'smSquare'} onOpen={onOpenSandboxModal} />
             <ChatVariableButton chatType={ChatTypeEnum.test} />
-            <MyTooltip label={t('common:core.chat.Restart')}>
+            <MyTooltip label={t('common:core.chat.New Chat')}>
               <IconButton
                 className="chat"
                 size={'smSquare'}
-                icon={<MyIcon name={'common/clearLight'} w={'14px'} />}
-                variant={'whiteDanger'}
+                icon={<MyIcon name={'core/chat/chatLight'} w={'14px'} />}
+                variant={'whitePrimary'}
                 borderRadius={'md'}
-                aria-label={'delete'}
+                aria-label={t('common:core.chat.New Chat')}
                 onClick={(e) => {
                   e.stopPropagation();
                   restartChat();

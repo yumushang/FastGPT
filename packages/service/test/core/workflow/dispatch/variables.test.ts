@@ -4,10 +4,13 @@ import {
   WorkflowIOValueTypeEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { ChatFileTypeEnum } from '@fastgpt/global/core/chat/constants';
+import type { EntryPointItemType } from '@fastgpt/global/core/app/type';
 import {
+  getEntryPointRuntimeVariables,
   getWorkflowFileVariableInputs,
   WorkflowVariableState
 } from '../../../../core/workflow/dispatch/utils/variables';
+import { ENTRY_POINT_VARIABLE_KEY } from '@fastgpt/global/core/app/constants';
 import { encryptSecret } from '../../../../common/secret/aes256gcm';
 import { anyValueDecrypt } from '../../../../common/secret/utils';
 
@@ -33,6 +36,65 @@ const createState = (props: Partial<Parameters<typeof WorkflowVariableState.crea
   });
 
 describe('WorkflowVariableState', () => {
+  it('should expose a configured entry point as a runtime-only variable', async () => {
+    const runtimeOnlyVariables = getEntryPointRuntimeVariables({
+      entryPoints: [
+        { id: 'knowledge', name: 'Knowledge Q&A' },
+        { id: 'writing', name: 'Writing' }
+      ],
+      inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Writing' }
+    });
+    const state = await createState({ runtimeOnlyVariables });
+
+    expect(state.get(ENTRY_POINT_VARIABLE_KEY)).toBe('Writing');
+    expect(state.toRuntimeRecord()).toMatchObject({ [ENTRY_POINT_VARIABLE_KEY]: 'Writing' });
+    expect(state.toStoreRecord()).not.toHaveProperty(ENTRY_POINT_VARIABLE_KEY);
+  });
+
+  it('should ignore entry point values that are not configured by the app', () => {
+    expect(
+      getEntryPointRuntimeVariables({
+        entryPoints: [{ id: 'knowledge', name: 'Knowledge Q&A' }],
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Forged entry point' }
+      })
+    ).toEqual({});
+    expect(
+      getEntryPointRuntimeVariables({
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Knowledge Q&A' }
+      })
+    ).toEqual({});
+    expect(
+      getEntryPointRuntimeVariables({
+        entryPoints: null,
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Knowledge Q&A' }
+      })
+    ).toEqual({});
+    expect(
+      getEntryPointRuntimeVariables({
+        entryPoints: [
+          { id: 'knowledge', name: 'Knowledge Q&A' },
+          null
+        ] as unknown as EntryPointItemType[],
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Knowledge Q&A' }
+      })
+    ).toEqual({});
+    expect(
+      getEntryPointRuntimeVariables({
+        entryPoints: { id: 'knowledge', name: 'Knowledge Q&A' } as unknown as EntryPointItemType[],
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Knowledge Q&A' }
+      })
+    ).toEqual({});
+    expect(
+      getEntryPointRuntimeVariables({
+        entryPoints: [
+          { id: 'first', name: 'Same name' },
+          { id: 'second', name: 'Same name' }
+        ],
+        inputVariables: { [ENTRY_POINT_VARIABLE_KEY]: 'Same name' }
+      })
+    ).toEqual({});
+  });
+
   it('should initialize normal variables and runtime-only system variables', async () => {
     const state = await createState({
       variablesConfig: [
@@ -120,7 +182,7 @@ describe('WorkflowVariableState', () => {
     await state.set('pwd', 'new-secret');
 
     expect(state.get('pwd')).toBe('new-secret');
-    expect(state.toStoreRecord().pwd).toMatchObject({ value: '' });
+    expect(state.toStoreRecord().pwd).toMatchObject({ secret: expect.any(String) });
     expect((state.toStoreRecord().pwd as any).secret).toEqual(expect.any(String));
     expect((state.toStoreRecord().pwd as any).secret).not.toBe('new-secret');
   });
@@ -136,7 +198,6 @@ describe('WorkflowVariableState', () => {
       ],
       inputVariables: {
         pwd: {
-          value: '',
           secret: encryptSecret('old-secret')
         }
       }
@@ -156,10 +217,7 @@ describe('WorkflowVariableState', () => {
         } as any
       ],
       inputVariables: {
-        pwd: JSON.stringify({
-          value: '',
-          secret: encryptSecret('old-secret')
-        })
+        pwd: JSON.stringify({ secret: encryptSecret('old-secret') })
       }
     });
 
@@ -380,12 +438,12 @@ describe('WorkflowVariableState', () => {
 
     expect(state.toStoreRecord().files).toEqual([
       {
-        type: ChatFileTypeEnum.file,
+        type: ChatFileTypeEnum.image,
         name: 'file.jpg',
         url: 'https://example.com/files/file.jpg'
       },
       {
-        type: ChatFileTypeEnum.file,
+        type: ChatFileTypeEnum.document,
         name: 'doc.pdf',
         url: 'https://preview.example.com/doc.pdf'
       }
@@ -428,7 +486,7 @@ describe('WorkflowVariableState', () => {
       {
         url: 'https://example.com/files/report.pdf',
         name: 'report.pdf',
-        type: ChatFileTypeEnum.file
+        type: ChatFileTypeEnum.document
       }
     ]);
   });
@@ -468,7 +526,7 @@ describe('WorkflowVariableState', () => {
       {
         key: 'chat/app/parent.pdf',
         name: 'parent.pdf',
-        type: ChatFileTypeEnum.file
+        type: ChatFileTypeEnum.document
       }
     ]);
   });
@@ -531,7 +589,7 @@ describe('WorkflowVariableState', () => {
       {
         url: 'https://example.com/report.unknown',
         name: 'report.unknown',
-        type: ChatFileTypeEnum.file
+        type: ChatFileTypeEnum.unknown
       }
     ]);
     await expect(state.set('files', 'https://example.com/report.pdf')).rejects.toThrow(

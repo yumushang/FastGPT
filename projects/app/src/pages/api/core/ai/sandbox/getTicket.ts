@@ -1,12 +1,13 @@
+import {
+  getAgentSandboxMaxFileBytes,
+  getAgentSandboxProxyConfig
+} from '@fastgpt/service/core/ai/sandbox/config';
 import { NextAPI } from '@/service/middleware/entry';
 import { type ApiRequestProps } from '@fastgpt/next/type';
-import {
-  buildSandboxClientQueryFromChatSource,
-  getSandboxClient
-} from '@fastgpt/service/core/ai/sandbox/interface/runtime';
+import { buildSandboxClientQueryFromChatSource } from '@fastgpt/service/core/ai/sandbox/interface/runtime';
+import { getSandboxClient } from '@fastgpt/service/core/ai/sandbox/application/runtime/client';
 import { authSandboxRuntimeSession } from '@/service/core/sandbox/access';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
-import { serviceEnv } from '@fastgpt/service/env';
 import jwt from 'jsonwebtoken';
 import { ReadPermissionVal, WritePermissionVal } from '@fastgpt/global/support/permission/constant';
 import {
@@ -19,12 +20,26 @@ import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 
 const TICKET_EXPIRES_IN = '1m';
 
+/** 鉴权、准备会话后签发通道专用连接地址；地址和文件限制统一由服务端配置派生。 */
 async function handler(req: ApiRequestProps): Promise<SandboxGetTicketResponse> {
-  const secret = serviceEnv.AGENT_SANDBOX_PROXY_SECRET;
+  const { secret, wsUrl: proxyUrl } = getAgentSandboxProxyConfig();
   if (!secret) {
-    throw new Error('AGENT_SANDBOX_PROXY_SECRET environment variable is missing');
+    throw new Error('Agent Sandbox proxy secret is not configured');
   }
-  const { sourceType, sourceId, chatId, channel, permission, outLinkAuthData } = parseApiInput({
+  if (!proxyUrl) {
+    throw new Error('Agent Sandbox WebSocket proxy URL is not configured');
+  }
+  const wsUrl = new URL(proxyUrl);
+  const {
+    customUid,
+    authProxy,
+    sourceType,
+    sourceId,
+    chatId,
+    channel,
+    permission,
+    outLinkAuthData
+  } = parseApiInput({
     req,
     bodySchema: SandboxGetTicketBodySchema
   }).body;
@@ -41,6 +56,8 @@ async function handler(req: ApiRequestProps): Promise<SandboxGetTicketResponse> 
     sourceType: resolvedSourceType,
     sourceId: resolvedSourceId
   } = await authSandboxRuntimeSession({
+    customUid,
+    authProxy,
     req,
     sourceType,
     sourceId,
@@ -74,10 +91,20 @@ async function handler(req: ApiRequestProps): Promise<SandboxGetTicketResponse> 
       permission: ticketPermission
     },
     secret,
-    { expiresIn: TICKET_EXPIRES_IN }
+    { algorithm: 'HS256', expiresIn: TICKET_EXPIRES_IN }
   );
 
-  return SandboxGetTicketResponseSchema.parse({ ticket, workspaceRoot, sessionWorkDirectory });
+  // 使用配置中的公开代理地址，保留部署路径前缀；Ticket 与请求通道绑定。
+  wsUrl.pathname = `${wsUrl.pathname.replace(/\/+$/, '')}/${channel}`;
+  wsUrl.hash = '';
+  wsUrl.searchParams.set('ticket', ticket);
+
+  return SandboxGetTicketResponseSchema.parse({
+    wsUrl: wsUrl.toString(),
+    maxFileBytes: getAgentSandboxMaxFileBytes(),
+    workspaceRoot,
+    sessionWorkDirectory
+  });
 }
 
 export default NextAPI(handler);

@@ -1,67 +1,127 @@
+import type { AppResource } from '@fastgpt/global/core/app/type';
+import type { ClientSession } from '../../common/mongo';
+import type { ModelHandle } from '../ai/model/catalog/handle';
+import { findDatasetIndexModelReferences } from './entity';
 import type { DatasetSchemaType } from '@fastgpt/global/core/dataset/type';
-import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
-import {
-  findModelData,
-  getEmbeddingModelData,
-  getLLMModelData,
-  getOptionalVlmModelData
-} from '../ai/model';
+import type {
+  EmbeddingModelDataType,
+  ModelReferenceType
+} from '@fastgpt/global/core/ai/model/schema';
+import { ModelErrEnum } from '@fastgpt/global/common/error/code/model';
+import { UserError } from '@fastgpt/global/common/error/utils';
+import { getTeamModelHandle } from '../ai/model/catalog/service';
+import type { DatasetModelAuthContext } from './collection/controller';
+import { getAuthorizedModelIds } from '../../support/permission/model/auth';
 
 type DatasetModelFields = Pick<
   DatasetSchemaType,
   'vectorModelId' | 'vectorModel' | 'agentModelId' | 'agentModel' | 'vlmModelId' | 'vlmModel'
 >;
 
-const normalizeModelId = (modelId: unknown) =>
-  modelId === undefined || modelId === null ? undefined : String(modelId);
-
-/** 使用新 ID 字段优先解析知识库向量模型，并兼容历史 model 字段。 */
-export const getDatasetEmbeddingModel = (dataset: Partial<DatasetModelFields>) =>
-  getEmbeddingModelData({
-    modelId: normalizeModelId(dataset.vectorModelId),
-    model: dataset.vectorModel
-  });
-
-/** 使用新 ID 字段优先解析知识库处理模型，并兼容历史 model 字段。 */
-export const getDatasetAgentModel = (dataset: Partial<DatasetModelFields>) =>
-  getLLMModelData({
-    modelId: normalizeModelId(dataset.agentModelId),
-    model: dataset.agentModel
-  });
-
-/** VLM 允许不配置；一旦配置但无法解析，统一抛出“模型不存在”。 */
-export const getDatasetVlmModel = (dataset: Partial<DatasetModelFields>) =>
-  getOptionalVlmModelData({
-    modelId: normalizeModelId(dataset.vlmModelId),
-    model: dataset.vlmModel
-  });
+/** 纯引用转换：稳定 ID 优先，缺少 ID 才保留历史名称；不读取缓存，也不执行模型校验。 */
+export const getDatasetModelReference = (
+  dataset: Partial<DatasetModelFields>,
+  slot: 'embedding' | 'agent' | 'vlm'
+): ModelReferenceType => {
+  const keys = {
+    embedding: ['vectorModelId', 'vectorModel'],
+    agent: ['agentModelId', 'agentModel'],
+    vlm: ['vlmModelId', 'vlmModel']
+  } as const;
+  const [idKey, nameKey] = keys[slot];
+  const id = dataset[idKey];
+  return {
+    modelId: id === undefined || id === null ? undefined : String(id),
+    model: dataset[nameKey]
+  };
+};
 
 /**
- * 解析知识库向量模型的展示数据。展示态允许返回已停用模型，模型缺失或类型不匹配时返回 undefined；
- * 训练和检索链路仍必须使用 getDatasetEmbeddingModel 做严格校验。
+ * 校验 HTTP 身份可使用当前知识库的 embedding 模型。
+ * 同一次校验的模型目录快照与授权集合继续传给导入流程，避免重复构造。
  */
-export const findDatasetEmbeddingModel = (dataset: Partial<DatasetModelFields>) => {
-  const model = findModelData({
-    modelId: normalizeModelId(dataset.vectorModelId),
-    model: dataset.vectorModel
+export const getDatasetModelAuthContext = async ({
+  dataset,
+  teamId,
+  tmbId,
+  isRoot
+}: {
+  dataset: DatasetSchemaType;
+  teamId: string;
+  tmbId: string;
+  isRoot: boolean;
+}): Promise<DatasetModelAuthContext> => {
+  const modelHandle = await getTeamModelHandle({ teamId });
+  const authorizedIds = await getAuthorizedModelIds({
+    actor: { teamId, tmbId, isRoot },
+    handle: modelHandle
   });
-  return model?.type === ModelTypeEnum.embedding ? model : undefined;
+
+  const embeddingModels = await assertAppDatasetIndexModelsAvailable({
+    resources: [{ type: 'dataset', id: String(dataset._id) }],
+    teamId,
+    modelHandle,
+    authorizedIds
+  });
+  // 鉴权后知识库可能被删除，仍校验已读取的引用，避免查询空结果绕过校验。
+  modelHandle.getModelData(
+    embeddingModels.get(String(dataset._id)) ?? getDatasetModelReference(dataset, 'embedding'),
+    {
+      type: 'embedding',
+      authorizedIds
+    }
+  );
+
+  return { modelHandle, authorizedIds };
 };
 
-/** 展示态解析知识库处理模型；允许展示已停用模型，但不接受错误模型类型。 */
-export const findDatasetAgentModel = (dataset: Partial<DatasetModelFields>) => {
-  const model = findModelData({
-    modelId: normalizeModelId(dataset.agentModelId),
-    model: dataset.agentModel
+/**
+ * 批量校验知识库的 embedding 索引模型存在、启用且操作者可授权。
+ * 返回已解析的模型数据，供调用方直接复用，避免同一引用再次查目录。
+ */
+export const assertAppDatasetIndexModelsAvailable = async ({
+  resources,
+  teamId,
+  modelHandle,
+  authorizedIds,
+  session
+}: {
+  resources: AppResource[];
+  teamId: string;
+  modelHandle: ModelHandle;
+  authorizedIds: ReadonlySet<string>;
+  session?: ClientSession;
+}) => {
+  const datasetIds = Array.from(
+    new Set(resources.filter((resource) => resource.type === 'dataset').map(({ id }) => id))
+  );
+  const embeddingModels = new Map<string, EmbeddingModelDataType>();
+  if (datasetIds.length === 0) return embeddingModels;
+
+  const datasets = await findDatasetIndexModelReferences({ datasetIds, teamId, session });
+
+  datasets.forEach((dataset) => {
+    embeddingModels.set(
+      String(dataset._id),
+      modelHandle.getModelData(getDatasetModelReference(dataset, 'embedding'), {
+        type: 'embedding',
+        authorizedIds
+      })
+    );
   });
-  return model?.type === ModelTypeEnum.llm ? model : undefined;
+
+  return embeddingModels;
 };
 
-/** 展示态解析知识库图片理解模型；已停用模型可展示，非视觉模型按不可用处理。 */
-export const findDatasetVlmModel = (dataset: Partial<DatasetModelFields>) => {
-  const model = findModelData({
-    modelId: normalizeModelId(dataset.vlmModelId),
-    model: dataset.vlmModel
-  });
-  return model?.type === ModelTypeEnum.llm && model.config.vision ? model : undefined;
+/**
+ * 从 assert 结果读取当前知识库的 embedding 模型。
+ * 调用方刚按同一 datasetId 校验过，缺失代表切换期间知识库被删除或团队变化，必须直接拒绝。
+ */
+export const getAssertedDatasetEmbeddingModel = (
+  embeddingModels: ReadonlyMap<string, EmbeddingModelDataType>,
+  datasetId: string
+) => {
+  const model = embeddingModels.get(datasetId);
+  if (!model) throw new UserError(ModelErrEnum.unExist);
+  return model;
 };

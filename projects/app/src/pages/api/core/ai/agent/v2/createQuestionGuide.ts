@@ -1,13 +1,17 @@
-import type { NextApiResponse } from 'next';
-import { pushQuestionGuideUsage } from '@/service/support/wallet/usage/push';
-import { createQuestionGuide } from '@fastgpt/service/core/ai/functions/createQuestionGuide';
-import { authChatTargetCrud } from '@/service/support/permission/auth/chat';
-import { type ApiRequestProps } from '@fastgpt/next/type';
 import { NextAPI } from '@/service/middleware/entry';
-import { getChatItems } from '@fastgpt/service/core/chat/controller';
+import { authChatTargetCrud } from '@fastgpt/service/core/chat/auth';
+import { pushQuestionGuideUsage } from '@/service/support/wallet/usage/push';
 import { chats2GPTMessages } from '@fastgpt/global/core/chat/adapt';
+import { type ApiRequestProps } from '@fastgpt/next/type';
+import { createQuestionGuide } from '@fastgpt/service/core/ai/functions/createQuestionGuide';
+import { getTeamModelHandle } from '@fastgpt/service/core/ai/model/catalog/service';
 import { getAppLatestVersion } from '@fastgpt/service/core/app/version/controller';
-import { getDefaultLLMModelData, getLLMModelData } from '@fastgpt/service/core/ai/model';
+import { getChatItems } from '@fastgpt/service/core/chat/controller';
+import type { NextApiResponse } from 'next';
+
+import type { AppQGConfigType } from '@fastgpt/global/core/app/type';
+import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import {
   CreateQuestionGuideResponseSchema,
   CreateQuestionGuideV2BodySchema,
@@ -15,14 +19,16 @@ import {
   type CreateQuestionGuideV2BodyType
 } from '@fastgpt/global/openapi/core/ai/agent/api';
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
-import type { AppQGConfigType } from '@fastgpt/global/core/app/type';
-import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { authTargetModelResource } from '@fastgpt/service/core/app/resource/service';
+import { getAuthorizedModelIds } from '@fastgpt/service/support/permission/model/auth';
 
 async function handler(
   req: ApiRequestProps<CreateQuestionGuideV2BodyType>,
   _res: NextApiResponse<any>
 ): Promise<CreateQuestionGuideResponseType> {
   const {
+    customUid,
+    authProxy,
     sourceType,
     sourceId,
     chatId,
@@ -36,9 +42,13 @@ async function handler(
   const {
     tmbId,
     teamId,
+    isRoot,
+    authType,
     sourceType: resolvedSourceType,
     sourceId: resolvedSourceId
   } = await authChatTargetCrud({
+    customUid,
+    authProxy,
     req,
     authToken: true,
     authApiKey: true,
@@ -48,13 +58,14 @@ async function handler(
     outLinkAuthData
   });
 
+  const appWorkflow =
+    resolvedSourceType === ChatSourceTypeEnum.app
+      ? await getAppLatestVersion(resolvedSourceId)
+      : undefined;
   // 未由客户端覆盖时读取持久化配置；该分支在迁移期兼容历史 model 字段。
-  const persistedQuestionGuide: AppQGConfigType | undefined = await (async () => {
-    if (inputQuestionGuide || resolvedSourceType !== ChatSourceTypeEnum.app) return undefined;
-
-    const { chatConfig } = await getAppLatestVersion(resolvedSourceId);
-    return chatConfig.questionGuide;
-  })();
+  const persistedQuestionGuide: AppQGConfigType | undefined = inputQuestionGuide
+    ? undefined
+    : appWorkflow?.chatConfig.questionGuide;
   const questionGuide = inputQuestionGuide ?? persistedQuestionGuide;
 
   // Get histories
@@ -67,25 +78,39 @@ async function handler(
     field: 'obj value time'
   });
   const messages = chats2GPTMessages({ messages: histories, reserveId: false });
-
-  const qgModelData = (() => {
-    if (inputQuestionGuide?.modelId !== undefined || inputQuestionGuide?.model !== undefined) {
-      return getLLMModelData({
-        modelId: inputQuestionGuide.modelId,
-        model: inputQuestionGuide.model
-      });
-    }
-    if (
-      persistedQuestionGuide?.modelId !== undefined ||
-      persistedQuestionGuide?.model !== undefined
-    ) {
-      return getLLMModelData({
-        modelId: persistedQuestionGuide.modelId,
-        model: persistedQuestionGuide.model
-      });
-    }
-    return getDefaultLLMModelData();
-  })();
+  const modelHandle = await getTeamModelHandle({ teamId });
+  const targetQuestionGuide =
+    inputQuestionGuide?.modelId !== undefined || inputQuestionGuide?.model !== undefined
+      ? inputQuestionGuide
+      : persistedQuestionGuide;
+  const explicitModel = modelHandle.getModelData(
+    {
+      modelId: targetQuestionGuide?.modelId,
+      model: targetQuestionGuide?.model
+    },
+    { type: ModelTypeEnum.llm, optional: true }
+  );
+  if (explicitModel) {
+    await authTargetModelResource({
+      targetType: resolvedSourceType,
+      targetId: resolvedSourceId,
+      modelId: explicitModel.modelId,
+      teamId,
+      tmbId,
+      isRoot,
+      authType,
+      handle: modelHandle,
+      resources: appWorkflow?.resources
+    });
+  }
+  const qgModelData =
+    explicitModel ??
+    modelHandle.getDefaultModelData('llm', {
+      authorizedIds: await getAuthorizedModelIds({
+        actor: { teamId, tmbId, isRoot },
+        handle: modelHandle
+      })
+    });
 
   const { result, inputTokens, outputTokens } = await createQuestionGuide({
     messages,

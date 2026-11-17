@@ -1,40 +1,42 @@
+import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { Box, Flex, IconButton } from '@chakra-ui/react';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
 import { useTranslation } from 'next-i18next';
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import MyTooltip from '@fastgpt/web/components/common/MyTooltip';
-import MyIcon from '@fastgpt/web/components/common/Icon';
 
-import { useLocalStorageState, useSafeState } from 'ahooks';
-import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
-import { useContextSelector } from 'use-context-selector';
-import { AppContext } from '../../context';
-import { useChatTest } from '../../useChatTest';
+import type { ChatAgentHelperRefType } from '@/components/core/chat/ChatAgentHelper';
+import ChatAgentHelper from '@/components/core/chat/ChatAgentHelper';
+import { ChatTypeEnum } from '@/components/core/chat/ChatContainer/ChatBox/constants';
+import ProModal from '@/components/ProTip/ProModal';
+import ChatQuoteList from '@/pageComponents/chat/ChatQuoteList';
+import ChatAIModelSelector from '@/pageComponents/chat/ChatWindow/ChatAIModelSelector';
+import ChatVariableButton from '@/pageComponents/chat/ChatWindow/ChatVariableButton';
+import { useSandboxEditor, useSandboxStatus } from '@/pageComponents/chat/SandboxEditor/hook';
+import { useSystemStore } from '@/web/common/system/useSystemStore';
+import { useModelDefault } from '@/web/core/ai/model/useModelDefault';
 import ChatItemContextProvider, { ChatItemContext } from '@/web/core/chat/context/chatItemContext';
 import ChatRecordContextProvider from '@/web/core/chat/context/chatRecordContext';
 import { AgentChatTestTabEnum, useChatStore } from '@/web/core/chat/context/useChatStore';
-import MyBox from '@fastgpt/web/components/common/MyBox';
-import { cardStyles } from '../../constants';
-import ChatQuoteList from '@/pageComponents/chat/ChatQuoteList';
-import { ChatTypeEnum } from '@/components/core/chat/ChatContainer/ChatBox/constants';
-import type { Form2WorkflowFnType } from '../FormComponent/type';
-import FillRowTabs from '@fastgpt/web/components/common/Tabs/FillRowTabs';
-import ChatAgentHelper from '@/components/core/chat/ChatAgentHelper';
-import type { ChatAgentHelperRefType } from '@/components/core/chat/ChatAgentHelper';
-import { ChatAgentHelperTypeEnum } from '@fastgpt/global/core/ai/auxiliaryGeneration/constants';
-import { checkAgentSkillSandboxUnavailable, loadGeneratedTools } from './utils';
-import { systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
-import { useSandboxEditor, useSandboxStatus } from '@/pageComponents/chat/SandboxEditor/hook';
-import { useSystemStore } from '@/web/common/system/useSystemStore';
-import { useUserModelStore } from '@/web/core/ai/model/useUserModelStore';
-import { useUserModelLists } from '@/web/core/ai/model/useUserModelLists';
 import { useUserStore } from '@/web/support/user/useUserStore';
-import { useToast } from '@fastgpt/web/hooks/useToast';
-import ChatVariableButton from '@/pageComponents/chat/ChatWindow/ChatVariableButton';
-import ProModal from '@/components/ProTip/ProModal';
-import ChatAIModelSelector from '@/pageComponents/chat/ChatWindow/ChatAIModelSelector';
-import { getErrText } from '@fastgpt/global/common/error/utils';
-import { findClientModelByValue } from '@/web/core/ai/model/modelReference';
+import { ChatAgentHelperTypeEnum } from '@fastgpt/global/core/ai/auxiliaryGeneration/constants';
 import { ModelTypeEnum } from '@fastgpt/global/core/ai/constants';
+import type { AppFormEditFormType } from '@fastgpt/global/core/app/formEdit/type';
+import { getToolIdentityKey } from '@fastgpt/global/core/app/tool/utils';
+import { systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
+import MyBox from '@fastgpt/web/components/common/MyBox';
+import FillRowTabs from '@fastgpt/web/components/common/Tabs/FillRowTabs';
+import { useToast } from '@fastgpt/web/hooks/useToast';
+import { useLocalStorageState, useSafeState } from 'ahooks';
+import { useContextSelector } from 'use-context-selector';
+import { cardStyles } from '../../constants';
+import { AppContext } from '../../context';
+import { useChatTest } from '../../useChatTest';
+import type { Form2WorkflowFnType } from '../FormComponent/type';
+import { loadGeneratedTools } from './utils';
+import { checkAgentSandboxIssues } from '@/web/core/workflow/check/resource';
+import { WorkflowCheckIssueCodeEnum } from '@fastgpt/global/core/workflow/diagnostic/constants';
 
 type Props = {
   appForm: AppFormEditFormType;
@@ -47,25 +49,25 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
   const { toast } = useToast();
   const { chatId, agentChatTestTab, setAgentChatTestTab } = useChatStore();
   const { feConfigs } = useSystemStore();
-  const { defaultModels } = useUserModelStore();
-  const { llmModelList } = useUserModelLists();
   const { teamPlanStatus } = useUserStore();
   const enableSandbox = !teamPlanStatus?.standard || !!teamPlanStatus?.standard?.enableSandbox;
   const showSandbox = feConfigs.show_agent_sandbox;
-  const isAgentSkillSandboxUnavailable = checkAgentSkillSandboxUnavailable({
-    appForm,
-    showSandbox,
-    enableSandbox
-  });
+  const isAgentSkillSandboxUnavailable =
+    checkAgentSandboxIssues({
+      hasSkills: Boolean(appForm.selectedAgentSkills?.length),
+      useAgentSandbox: Boolean(appForm.aiSettings.useAgentSandbox),
+      showSandbox,
+      enableSandbox
+    })[0]?.code === WorkflowCheckIssueCodeEnum.sandboxSkillUnavailable;
 
   const canUseHelper = !!feConfigs?.isPlus;
   const activeTab = canUseHelper ? agentChatTestTab : AgentChatTestTabEnum.chatDebug;
   const [hasRenderedHelper, setHasRenderedHelper] = useSafeState(false);
   const [proModalOpen, setProModalOpen] = useSafeState(false);
-  const [helperSelectedModel, setHelperSelectedModel] = useLocalStorageState<string>(
+  const [helperSelectedModel = '', setHelperSelectedModel] = useLocalStorageState<string>(
     'chat_agent_helper_model',
     {
-      defaultValue: defaultModels.llm?.modelId
+      defaultValue: ''
     }
   );
   const ChatAgentHelperRef = useRef<ChatAgentHelperRefType>(null);
@@ -74,29 +76,15 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
   const datasetCiteData = useContextSelector(ChatItemContext, (v) => v.datasetCiteData);
   const setCiteModalData = useContextSelector(ChatItemContext, (v) => v.setCiteModalData);
 
-  const [workflowData, setWorkflowData] = useSafeState({
-    nodes: appDetail.modules || [],
-    edges: appDetail.edges || []
+  const workflowData = useMemo(() => form2WorkflowFn(appForm, t), [appForm, form2WorkflowFn, t]);
+
+  const { model: defaultModel } = useModelDefault({
+    modelType: ModelTypeEnum.llm,
+    enabled: activeTab === AgentChatTestTabEnum.helper && !helperSelectedModel
   });
-
-  const modelSelectList = useMemo(
-    () =>
-      llmModelList
-        .filter((item): item is typeof item & { modelId: string } => !!item.modelId)
-        .map((item) => ({ label: item.name, value: item.modelId })),
-    [llmModelList]
-  );
-  const helperModel = useMemo(() => {
-    const selectedModelId = findClientModelByValue({
-      models: llmModelList,
-      value: helperSelectedModel
-    })?.modelId;
-    const defaultModelId = defaultModels.llm?.modelId || llmModelList[0]?.modelId || '';
-
-    if (selectedModelId) return selectedModelId;
-    if (helperSelectedModel) return helperSelectedModel;
-    return defaultModelId;
-  }, [defaultModels.llm?.modelId, helperSelectedModel, llmModelList]);
+  useEffect(() => {
+    if (!helperSelectedModel && defaultModel) setHelperSelectedModel(defaultModel.modelId);
+  }, [defaultModel, helperSelectedModel, setHelperSelectedModel]);
   const onChangeHelperModel = useCallback(
     (model: string) => {
       setHelperSelectedModel(model);
@@ -115,13 +103,12 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
           size={'sm'}
           bg={'myGray.50'}
           rounded={'10px'}
-          value={helperModel}
-          list={modelSelectList}
+          value={helperSelectedModel}
           onChange={onChangeHelperModel}
         />
       </Box>
     ),
-    [helperModel, modelSelectList, onChangeHelperModel]
+    [helperSelectedModel, onChangeHelperModel]
   );
 
   // Sandbox: Status Hook 负责网络同步，UI Hook 负责弹窗渲染
@@ -133,11 +120,6 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
     appId: appDetail._id,
     chatId
   });
-
-  useEffect(() => {
-    const { nodes, edges } = form2WorkflowFn(appForm, t);
-    setWorkflowData({ nodes, edges });
-  }, [appForm, form2WorkflowFn, setWorkflowData, t]);
 
   useEffect(() => {
     setRenderEdit(!datasetCiteData);
@@ -166,10 +148,24 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
 
   const { ChatContainer, restartChat } = useChatTest({
     ...workflowData,
+    getResourceNodes: () =>
+      workflowData.nodes
+        .filter((node) => node.flowNodeType === FlowNodeTypeEnum.agent)
+        .map((node) => ({
+          nodeId: node.nodeId,
+          inputs: node.inputs.map((input) =>
+            input.key === NodeInputKeyEnum.selectedTools
+              ? { ...input, value: appForm.selectedTools }
+              : input.key === NodeInputKeyEnum.skills
+                ? { ...input, value: appForm.selectedAgentSkills ?? [] }
+                : input
+          )
+        })),
     chatConfig: appForm.chatConfig,
     isReady: !isAgentSkillSandboxUnavailable
   });
-  const onRestartChat = useCallback(async () => {
+  const restartChatLabel = t('common:core.chat.New Chat');
+  const onRestartChat = useCallback(() => {
     if (isAgentSkillSandboxUnavailable) {
       toast({
         status: 'warning',
@@ -178,14 +174,7 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
       return;
     }
     if (activeTab === AgentChatTestTabEnum.helper) {
-      try {
-        await ChatAgentHelperRef.current?.restartChat();
-      } catch (error) {
-        toast({
-          status: 'warning',
-          title: getErrText(error, t('common:core.chat.error.Chat error'))
-        });
-      }
+      ChatAgentHelperRef.current?.restartChat();
     } else {
       restartChat();
     }
@@ -195,16 +184,18 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
   const chatAgentHelperMetadata = useMemo(
     () => ({
       systemPrompt: appForm.aiSettings.systemPrompt,
-      selectedTools: appForm.selectedTools.map((tool) => tool.id),
+      selectedTools: appForm.selectedTools.map((tool) =>
+        tool.source ? getToolIdentityKey(tool.id, tool.source) : tool.id
+      ),
       selectedDatasets: appForm.dataset.datasets.map((dataset) => dataset.datasetId),
       selectedAgentSkills: appForm.selectedAgentSkills || [],
       fileUpload: appForm.chatConfig.fileSelectConfig?.canSelectFile || false,
       enableSandbox: appForm.aiSettings.useAgentSandbox || false,
       modelConfig: {
-        modelId: helperModel
+        modelId: helperSelectedModel
       }
     }),
-    [appForm, helperModel]
+    [appForm, helperSelectedModel]
   );
 
   return (
@@ -250,14 +241,14 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
             {activeTab === AgentChatTestTabEnum.chatDebug && (
               <ChatVariableButton chatType={ChatTypeEnum.test} />
             )}
-            <MyTooltip label={t('common:core.chat.Restart')}>
+            <MyTooltip label={restartChatLabel}>
               <IconButton
                 className="chat"
                 size={'smSquare'}
-                icon={<MyIcon name={'common/clearLight'} w={'14px'} />}
-                variant={'whiteDanger'}
+                icon={<MyIcon name={'core/chat/chatLight'} w={'14px'} />}
+                variant={'whitePrimary'}
                 borderRadius={'md'}
-                aria-label={'delete'}
+                aria-label={restartChatLabel}
                 onClick={(e) => {
                   e.stopPropagation();
                   onRestartChat();
@@ -277,12 +268,12 @@ const ChatTest = ({ appForm, setAppForm, setRenderEdit, form2WorkflowFn }: Props
                 InputLeftComponent={HelperModelSelectorInput}
                 onApply={async (formData) => {
                   // Filter internal tools
-                  const filteredToolIds = (formData.tools || []).filter(
-                    (toolId) => !(toolId in systemSubInfo)
+                  const filteredTools = (formData.tools || []).filter(
+                    (tool) => !((typeof tool === 'string' ? tool : tool.id) in systemSubInfo)
                   );
 
                   const newTools = await loadGeneratedTools({
-                    newToolIds: filteredToolIds,
+                    newToolIds: filteredTools,
                     existsTools: appForm.selectedTools,
                     fileSelectConfig: appForm.chatConfig.fileSelectConfig
                   });

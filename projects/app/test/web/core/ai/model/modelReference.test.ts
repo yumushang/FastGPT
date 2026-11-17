@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 const canonicalModel = { modelId: 'shared-value', model: 'canonical-model' };
 const legacyCollisionModel = { modelId: 'legacy-id', model: 'shared-value' };
+const teamModel = { modelId: 'team-id', model: 'team-model', scope: 'team' };
 
 describe('findClientModelByValue', () => {
   it('matches modelId before a colliding legacy model value', () => {
@@ -24,66 +25,21 @@ describe('findClientModelByValue', () => {
     );
     expect(findClientModelByValue({ models: [canonicalModel] })).toBeUndefined();
   });
-});
 
-describe('findClientModelByReference', () => {
-  it('does not fall back to legacy model when modelId is empty or invalid', () => {
+  it('never matches team models by legacy model name while allowing explicit modelId', () => {
+    expect(findClientModelByValue({ models: [teamModel], value: 'team-model' })).toBeUndefined();
+    expect(findClientModelByValue({ models: [teamModel], value: 'team-id' })).toBe(teamModel);
     expect(
-      findClientModelByReference({
-        models: [canonicalModel],
-        reference: { modelId: '', model: 'canonical-model' }
-      })
+      findClientModelByReference({ models: [teamModel], reference: { model: 'team-model' } })
     ).toBeUndefined();
     expect(
-      findClientModelByReference({
-        models: [canonicalModel],
-        reference: { modelId: 'missing-id', model: 'canonical-model' }
-      })
-    ).toBeUndefined();
-  });
-
-  it('uses legacy model only when modelId is absent', () => {
+      findClientModelByReference({ models: [teamModel], reference: { modelId: 'team-id' } })
+    ).toBe(teamModel);
     expect(
-      findClientModelByReference({
-        models: [canonicalModel],
-        reference: { model: 'canonical-model' }
-      })
-    ).toBe(canonicalModel);
-    expect(findClientModelByReference({ models: [canonicalModel], reference: {} })).toBeUndefined();
-  });
-});
-
-describe('resolveClientModelReferenceId', () => {
-  it('preserves an existing modelId without validating or falling back', () => {
-    expect(
-      resolveClientModelReferenceId({
-        models: [canonicalModel],
-        reference: { modelId: '', model: 'canonical-model' }
-      })
-    ).toBe('');
-    expect(
-      resolveClientModelReferenceId({
-        models: [canonicalModel],
-        reference: { modelId: 'missing-id', model: 'canonical-model' }
-      })
-    ).toBe('missing-id');
-  });
-
-  it('normalizes legacy model only when modelId is absent', () => {
-    expect(
-      resolveClientModelReferenceId({
-        models: [canonicalModel],
-        reference: { model: 'canonical-model' }
-      })
-    ).toBe('shared-value');
-    expect(
-      resolveClientModelReferenceId({
-        models: [canonicalModel],
-        reference: { model: 'missing-model' }
-      })
+      resolveClientModelReferenceId({ models: [teamModel], reference: { model: 'team-model' } })
     ).toBeUndefined();
     expect(
-      resolveClientModelReferenceId({ models: [canonicalModel], reference: {} })
-    ).toBeUndefined();
+      resolveClientModelReferenceId({ models: [teamModel], reference: { modelId: 'team-id' } })
+    ).toBe('team-id');
   });
 });

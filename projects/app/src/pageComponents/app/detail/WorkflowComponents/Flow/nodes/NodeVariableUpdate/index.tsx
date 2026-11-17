@@ -60,10 +60,7 @@ const NodeVariableUpdate = ({ data, selected }: NodeProps<FlowNodeItemType>) => 
   const { t } = useTranslation();
 
   const onChangeNode = useContextSelector(WorkflowActionsContext, (v) => v.onChangeNode);
-  const { edges, getNodeById } = useContextSelector(
-    WorkflowBufferDataContext,
-    (v) => v
-  );
+  const { edges, getNodeById } = useContextSelector(WorkflowBufferDataContext, (v) => v);
   const appDetail = useContextSelector(AppContext, (v) => v.appDetail);
 
   const variables = useMemoEnhance(() => {
@@ -130,6 +127,7 @@ const NodeVariableUpdate = ({ data, selected }: NodeProps<FlowNodeItemType>) => 
             return {
               inputType: it,
               formParams: {
+                appId: appDetail._id,
                 maxLength: variable.maxLength,
                 minLength: variable.minLength,
                 min: variable.min,
@@ -206,6 +204,7 @@ const NodeVariableUpdate = ({ data, selected }: NodeProps<FlowNodeItemType>) => 
             </FormLabel>
             <Box ml={2}>
               <NodeInputSelect
+                strategy="absolute"
                 renderTypeList={[inputType, FlowNodeInputTypeEnum.reference]}
                 selectedType={updateItem.renderType}
                 onChange={(e) => {
@@ -257,7 +256,7 @@ const NodeVariableUpdate = ({ data, selected }: NodeProps<FlowNodeItemType>) => 
 
   const Render = useMemo(() => {
     return (
-      <NodeCard selected={selected} minW={'522px'} maxW={'1000px'} {...data}>
+      <NodeCard selected={selected} minW={'524px'} maxW={'1000px'} {...data}>
         <Box px={4} pb={4}>
           <Flex flexDirection={'column'} gap={4}>
             {updateList.map((updateItem, index) => (

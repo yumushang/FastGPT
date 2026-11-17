@@ -1,6 +1,7 @@
 import type {
   GetSystemMigrationFailedRecordsQuery,
   RetrySystemMigrationBody,
+  StartSystemMigrationBody,
   SystemMigrationFailedRecordsResponse,
   SystemMigrationListResponse
 } from '@fastgpt/global/migration/schema';
@@ -12,7 +13,7 @@ const systemMigrationPath = '/admin/migrations';
 export const getSystemMigrationList = () =>
   GET<SystemMigrationListResponse>(`${systemMigrationPath}/list`);
 
-/** 仅请求把非阻塞 failed 重置为 pending，任务仍由 runner 获取 lease 后执行。 */
+/** 仅请求把failed 重置为 pending，任务仍由 runner 获取 lease 后执行。 */
 export const retrySystemMigration = (body: RetrySystemMigrationBody) =>
   POST(`${systemMigrationPath}/retry`, body);
 
@@ -25,3 +26,7 @@ export const getSystemMigrationFailedRecords = ({
     migrationId,
     stageKey
   });
+
+/** 首次手动执行：仅入队，进度和恢复由 runner 统一管理。 */
+export const startSystemMigration = (body: StartSystemMigrationBody) =>
+  POST(`${systemMigrationPath}/start`, body);
