@@ -7,9 +7,6 @@ on:
         description: 'Image version tag (e.g. v1.0.0)'
         required: true
         type: string
-  push:
-    tags:
-      - "v*"
 
 env:
   FASTGPT_ALI_IMAGE_USER: ${{ secrets.FASTGPT_ALI_IMAGE_USER }}
