@@ -7,7 +7,8 @@ import {
   isDebugToolSource,
   isTeamPluginSource,
   splitCombineToolId,
-  splitToolsetToolPluginId
+  splitToolsetToolPluginId,
+  toModelSafeToolId
 } from '@fastgpt/global/core/app/tool/utils';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
 import { getErrText } from '@fastgpt/global/common/error/utils';
@@ -17,7 +18,10 @@ import {
   FlowNodeTypeEnum
 } from '@fastgpt/global/core/workflow/node/constant';
 import { getSystemToolRunTimeNodeFromSystemToolset } from '../../../../../../workflow/utils';
-import { getMCPToolRuntimeNode } from '@fastgpt/global/core/app/tool/mcpTool/utils';
+import {
+  getMCPToolRuntimeNode,
+  getMcpModelNodeId
+} from '@fastgpt/global/core/app/tool/mcpTool/utils';
 import { getHTTPToolRuntimeNode } from '@fastgpt/global/core/app/tool/httpTool/utils';
 import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/io';
 import {
@@ -382,8 +386,14 @@ export const getAgentRuntimeTools = async ({
     const tool = findToolByName(toolList, toolName);
     if (!tool) return Promise.reject(PluginErrEnum.unExist);
 
+    // 模型侧工具名优先用用户配置的 modelName（加工具集前缀防跨工具集重名）；
+    // 未配置时回退稳定哈希，避免中文工具名清洗后塌缩重名。执行路由仍走 toolConfig 里的原始 toolName。
+    const nodeId = tool.modelName
+      ? getMcpModelNodeId({ toolSetId: String(app._id), modelName: tool.modelName })
+      : toModelSafeToolId(pluginId);
+
     const node = getMCPToolRuntimeNode({
-      nodeId: pluginId.replace(/[^a-zA-Z0-9_-]/g, ''),
+      nodeId,
       toolSetId: String(app._id),
       toolsetName: app.name,
       avatar: app.avatar,
@@ -419,7 +429,8 @@ export const getAgentRuntimeTools = async ({
     if (!tool) return Promise.reject(PluginErrEnum.unExist);
 
     const node = getHTTPToolRuntimeNode({
-      nodeId: pluginId.replace(/[^a-zA-Z0-9_-]/g, ''),
+      // HTTP 工具同样可能使用中文名，清洗后需保证模型侧工具名唯一。
+      nodeId: toModelSafeToolId(pluginId),
       toolSetId: String(app._id),
       toolsetName: app.name,
       avatar: app.avatar,
@@ -762,7 +773,10 @@ export const getAgentRuntimeTools = async ({
               const newToolNode = getMCPToolRuntimeNode({
                 toolSetId: runtimeToolSetId,
                 toolsetName: toolNode.name,
-                nodeId: `${runtimeToolSetId}${index}`,
+                // 整组挂载与单选保持一致：配置了 modelName 就用语义化模型名，否则用序号 ID。
+                nodeId: tool.modelName
+                  ? getMcpModelNodeId({ toolSetId: runtimeToolSetId, modelName: tool.modelName })
+                  : `${runtimeToolSetId}${index}`,
                 avatar: toolNode.avatar,
                 tool
               });

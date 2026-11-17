@@ -17,6 +17,7 @@ import {
 import { type SearchDataResponseItemType } from '@fastgpt/global/core/dataset/type';
 import {
   getMCPToolRuntimeNode,
+  getMcpModelNodeId,
   parsetMcpToolConfig
 } from '@fastgpt/global/core/app/tool/mcpTool/utils';
 import {
@@ -497,7 +498,10 @@ export const rewriteRuntimeWorkFlow = async ({
             };
             const newToolNode = initToolSetChildNode(
               getMCPToolRuntimeNode({
-                nodeId: `${toolSetNode.nodeId}${index}`,
+                // 配置了 modelName 就用语义化模型名（加工具集前缀防重名），否则用序号 ID。
+                nodeId: runtimeTool.modelName
+                  ? getMcpModelNodeId({ toolSetId, modelName: runtimeTool.modelName })
+                  : `${toolSetNode.nodeId}${index}`,
                 toolSetId,
                 toolsetName: toolSetNode.name,
                 avatar: toolSetNode.avatar,

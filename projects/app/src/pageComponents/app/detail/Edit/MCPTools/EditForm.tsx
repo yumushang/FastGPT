@@ -7,7 +7,10 @@ import { useRequest } from '@fastgpt/web/hooks/useRequest';
 import { AppContext } from '../../context';
 import { useContextSelector } from 'use-context-selector';
 import MyIconButton from '@fastgpt/web/components/common/Icon/button';
-import { type McpToolConfigType } from '@fastgpt/global/core/app/tool/mcpTool/type';
+import {
+  type McpToolConfigType,
+  MCP_TOOL_MODEL_NAME_REGEX
+} from '@fastgpt/global/core/app/tool/mcpTool/type';
 import MyModal from '@fastgpt/web/components/common/MyModal';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyBox from '@fastgpt/web/components/common/MyBox';
@@ -44,8 +47,13 @@ const EditForm = ({
     async (data: GetMcpToolsBodyType) => await getMCPTools(data),
     {
       onSuccess: (res) => {
-        setToolList(res);
-        setCurrentTool(res[0]);
+        // 重新解析拿到的是远端模板，不携带 modelName；按 name 回填，避免丢失用户配置的模型名称。
+        const mergedList = res.map((tool) => {
+          const modelName = toolList.find((item) => item.name === tool.name)?.modelName;
+          return modelName === undefined ? tool : { ...tool, modelName };
+        });
+        setToolList(mergedList);
+        setCurrentTool(mergedList[0]);
       },
       errorToast: t('app:MCP_tools_parse_failed')
     }
@@ -152,6 +160,17 @@ const EditForm = ({
                     >
                       {tool.description || t('app:tools_no_description')}
                     </Box>
+                    {tool.modelName && (
+                      <Box
+                        fontSize={'11px'}
+                        color={'primary.600'}
+                        whiteSpace="nowrap"
+                        overflow="hidden"
+                        textOverflow="ellipsis"
+                      >
+                        {t('app:MCP_tools_model_name')}: {tool.modelName}
+                      </Box>
+                    )}
                   </Box>
                   <Box flex={1} />
                 </Flex>
@@ -188,16 +207,53 @@ const EditForm = ({
         </Box>
       </Box>
 
-      {toolDetail && <ToolDetailModal tool={toolDetail} onClose={() => setToolDetail(null)} />}
+      {toolDetail && (
+        <ToolDetailModal
+          tool={toolDetail}
+          toolList={toolList}
+          onClose={() => setToolDetail(null)}
+          onUpdate={(updatedTool) => {
+            setToolList(
+              toolList.map((item) => (item.name === updatedTool.name ? updatedTool : item))
+            );
+            if (currentTool?.name === updatedTool.name) setCurrentTool(updatedTool);
+          }}
+        />
+      )}
     </>
   );
 };
 
 export default React.memo(EditForm);
 
-const ToolDetailModal = ({ tool, onClose }: { tool: McpToolConfigType; onClose: () => void }) => {
+const ToolDetailModal = ({
+  tool,
+  toolList,
+  onClose,
+  onUpdate
+}: {
+  tool: McpToolConfigType;
+  toolList: McpToolConfigType[];
+  onClose: () => void;
+  onUpdate: (tool: McpToolConfigType) => void;
+}) => {
   const { t } = useTranslation();
   const appDetail = useContextSelector(AppContext, (v) => v.appDetail);
+
+  const [modelName, setModelName] = useState(tool.modelName ?? '');
+
+  // 模型名称校验：留空视为未配置（运行时自动生成）；非空时校验 ASCII 规则与工具集内唯一性。
+  const modelNameError = (() => {
+    if (modelName === '') return undefined;
+    if (!MCP_TOOL_MODEL_NAME_REGEX.test(modelName)) {
+      return t('app:MCP_tools_model_name_invalid');
+    }
+    const isDuplicate = toolList.some(
+      (item) => item.name !== tool.name && item.modelName === modelName
+    );
+    if (isDuplicate) return t('app:MCP_tools_model_name_duplicate');
+    return undefined;
+  })();
 
   return (
     <MyModal
@@ -225,6 +281,22 @@ const ToolDetailModal = ({ tool, onClose }: { tool: McpToolConfigType; onClose: 
             </Box>
           </Box>
         </Flex>
+
+        <Box mt={6}>
+          <FormLabel>{t('app:MCP_tools_model_name')}</FormLabel>
+          <Input
+            mt={2}
+            h={8}
+            fontFamily={'mono'}
+            placeholder={t('app:MCP_tools_model_name_placeholder')}
+            value={modelName}
+            isInvalid={modelNameError !== undefined}
+            onChange={(e) => setModelName(e.target.value)}
+          />
+          <Box mt={1} fontSize={'12px'} color={modelNameError ? 'red.500' : 'myGray.500'}>
+            {modelNameError ?? t('app:MCP_tools_model_name_tip')}
+          </Box>
+        </Box>
 
         <Box mt={6} color={'myGray.900'} fontWeight={'medium'}>
           {t('app:raw_params')}
@@ -271,7 +343,14 @@ const ToolDetailModal = ({ tool, onClose }: { tool: McpToolConfigType; onClose: 
         </Box>
       </ModalBody>
       <ModalFooter>
-        <Button size={'md'} onClick={onClose}>
+        <Button
+          size={'md'}
+          isDisabled={modelNameError !== undefined}
+          onClick={() => {
+            onUpdate({ ...tool, modelName: modelName === '' ? undefined : modelName });
+            onClose();
+          }}
+        >
           {t('common:Confirm')}
         </Button>
       </ModalFooter>

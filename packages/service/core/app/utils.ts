@@ -19,7 +19,7 @@ import { AppErrEnum } from '@fastgpt/global/common/error/code/app';
 import { PluginErrEnum } from '@fastgpt/global/common/error/code/plugin';
 import {
   isSystemOrCommercialToolId,
-  mergeToolSetChildDescriptions,
+  mergeToolSetChildConfigs,
   splitCombineToolId
 } from '@fastgpt/global/core/app/tool/utils';
 import { AgentToolInputModeEnum, AppToolSourceEnum } from '@fastgpt/global/core/app/tool/constants';
@@ -434,7 +434,7 @@ export async function rewriteAppWorkflowToDetail({
             node.intro = preview.intro;
           }
 
-          node.toolConfig = mergeToolSetChildDescriptions({
+          node.toolConfig = mergeToolSetChildConfigs({
             savedToolConfig: node.toolConfig,
             templateToolConfig: preview.toolConfig
           });

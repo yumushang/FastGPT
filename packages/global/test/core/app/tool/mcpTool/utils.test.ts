@@ -3,8 +3,14 @@ import {
   getMCPToolSetRuntimeNode,
   getMCPToolRuntimeNode,
   getMCPToolErrorText,
-  parsetMcpToolConfig
+  parsetMcpToolConfig,
+  getMcpModelNodeId,
+  findDuplicateModelName
 } from '@fastgpt/global/core/app/tool/mcpTool/utils';
+import {
+  McpToolConfigSchema,
+  MCP_TOOL_MODEL_NAME_REGEX
+} from '@fastgpt/global/core/app/tool/mcpTool/type';
 import {
   FlowNodeTypeEnum,
   FlowNodeOutputTypeEnum
@@ -255,6 +261,84 @@ describe('mcpTool utils', () => {
       });
 
       expect(result).toBeUndefined();
+    });
+  });
+});
+
+describe('MCP tool modelName', () => {
+  describe('McpToolConfigSchema', () => {
+    it('accepts tools without modelName (backward compatible)', () => {
+      const result = McpToolConfigSchema.safeParse({ name: '查询', description: 'desc' });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts valid ASCII modelName and rejects invalid values', () => {
+      expect(
+        McpToolConfigSchema.safeParse({
+          name: '查询',
+          description: 'desc',
+          modelName: 'query_xf-by_region'
+        }).success
+      ).toBe(true);
+
+      // 中文、空格、超长均不合法
+      expect(
+        McpToolConfigSchema.safeParse({ name: '查询', description: 'd', modelName: '查询模型' })
+          .success
+      ).toBe(false);
+      expect(
+        McpToolConfigSchema.safeParse({ name: '查询', description: 'd', modelName: 'has space' })
+          .success
+      ).toBe(false);
+      expect(
+        McpToolConfigSchema.safeParse({ name: '查询', description: 'd', modelName: 'a'.repeat(36) })
+          .success
+      ).toBe(false);
+    });
+  });
+
+  describe('getMcpModelNodeId', () => {
+    it('prefixes toolset id and stays within the 64-char model API limit', () => {
+      const toolSetId = '507f1f77bcf86cd799439011';
+      const nodeId = getMcpModelNodeId({ toolSetId, modelName: 'a'.repeat(35) });
+
+      expect(nodeId).toBe(`mcp-${toolSetId}-${'a'.repeat(35)}`);
+      expect(nodeId.length).toBeLessThanOrEqual(64);
+      expect(nodeId).toMatch(/^[a-zA-Z0-9_-]+$/);
+    });
+
+    it('keeps identical modelNames from different toolsets distinct', () => {
+      const a = getMcpModelNodeId({ toolSetId: '507f1f77bcf86cd799439011', modelName: 'query' });
+      const b = getMcpModelNodeId({ toolSetId: '507f1f77bcf86cd799439012', modelName: 'query' });
+      expect(a).not.toBe(b);
+    });
+  });
+
+  describe('findDuplicateModelName', () => {
+    it('returns the first duplicate and ignores unconfigured tools', () => {
+      expect(
+        findDuplicateModelName([
+          { modelName: 'query_a' },
+          {},
+          { modelName: '' },
+          { modelName: 'query_a' }
+        ])
+      ).toBe('query_a');
+    });
+
+    it('returns undefined when all configured names are unique', () => {
+      expect(
+        findDuplicateModelName([{ modelName: 'query_a' }, { modelName: 'query_b' }, {}])
+      ).toBeUndefined();
+      expect(findDuplicateModelName([])).toBeUndefined();
+    });
+  });
+
+  describe('MCP_TOOL_MODEL_NAME_REGEX', () => {
+    it('matches the schema constraint', () => {
+      expect(MCP_TOOL_MODEL_NAME_REGEX.test('query_xf-1')).toBe(true);
+      expect(MCP_TOOL_MODEL_NAME_REGEX.test('')).toBe(false);
+      expect(MCP_TOOL_MODEL_NAME_REGEX.test('中文名')).toBe(false);
     });
   });
 });

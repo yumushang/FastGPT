@@ -20,7 +20,7 @@ import type { SystemToolVersionType } from '@fastgpt/global/core/app/tool/system
 import {
   getToolRawId,
   isDebugToolSource,
-  mergeToolSetChildDescriptions,
+  mergeToolSetChildConfigs,
   splitCombineToolId
 } from '@fastgpt/global/core/app/tool/utils';
 import {
@@ -859,7 +859,7 @@ const NodeVersion = React.memo(function NodeVersion({ node }: { node: FlowNodeIt
               name: node.name,
               intro: node.intro,
               avatar: node.avatar,
-              toolConfig: mergeToolSetChildDescriptions({
+              toolConfig: mergeToolSetChildConfigs({
                 savedToolConfig: node.toolConfig,
                 templateToolConfig: template.toolConfig
               })

@@ -226,6 +226,24 @@ export const getToolNameCandidates = (toolName?: string) => {
   return candidates;
 };
 
+/**
+ * 生成模型侧安全的工具 ID：剔除非 ASCII 字符后追加稳定短哈希。
+ * 中文等非 ASCII 工具名直接清洗会塌缩成同一字符串（如 mcp-<工具集ID>），
+ * 导致模型 API 报工具名重名；哈希后缀保证不同原名得到不同 ID。
+ * 纯 ASCII ID 原样返回，兼容存量系统工具与英文 MCP 工具。
+ */
+export const toModelSafeToolId = (id: string) => {
+  const cleaned = id.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (cleaned === id) return id;
+
+  // djb2 哈希：无外部依赖且确定性，同一 ID 在模型 schema 构建与调用路由间保持一致。
+  let hash = 5381;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) + hash) ^ id.charCodeAt(i);
+  }
+  return `${cleaned}-${(hash >>> 0).toString(36)}`;
+};
+
 /** 返回工具集子工具的有效描述；主动保存空字符串时保留空字符串。 */
 export const getToolSetChildDescription = (
   savedDescription?: string | null | false | 0,
@@ -233,12 +251,14 @@ export const getToolSetChildDescription = (
 ) => (savedDescription === '' ? savedDescription : savedDescription || definitionDescription);
 
 /**
- * 将当前节点保存的子工具描述合并到新模板配置。
+ * 将当前节点保存的子工具配置合并到新模板配置。
  *
  * 系统工具集用 `toolId` 匹配，MCP/HTTP 工具集用 `name` 匹配；保留用户保存的描述，
  * 以便新增工具和历史缺失值继续使用新模板的工具定义描述。
+ * MCP 工具集额外保留用户配置的模型名称（modelName）：远端模板不携带该字段，
+ * 重新解析工具集时不能丢失。
  */
-export const mergeToolSetChildDescriptions = ({
+export const mergeToolSetChildConfigs = ({
   savedToolConfig,
   templateToolConfig
 }: {
@@ -285,11 +305,26 @@ export const mergeToolSetChildDescriptions = ({
       ? {
           mcpToolSet: {
             ...templateToolConfig.mcpToolSet,
-            toolList: mergeToolList({
-              templateList: templateToolConfig.mcpToolSet.toolList ?? [],
-              savedList: savedToolConfig?.mcpToolSet?.toolList,
-              getKey: (tool) => tool.name
-            })
+            toolList: (() => {
+              const mergedList = mergeToolList({
+                templateList: templateToolConfig.mcpToolSet.toolList ?? [],
+                savedList: savedToolConfig?.mcpToolSet?.toolList,
+                getKey: (tool) => tool.name
+              });
+
+              // 模型名称是用户本地配置，远端模板不携带；按 name 回填已保存值。
+              // toolList 元素可能是预览摘要类型（无 modelName），需收窄后取值。
+              const savedModelNameMap = new Map(
+                savedToolConfig?.mcpToolSet?.toolList?.map((tool) => [
+                  tool.name,
+                  'modelName' in tool ? tool.modelName : undefined
+                ])
+              );
+              return mergedList.map((tool) => {
+                const modelName = savedModelNameMap.get(tool.name);
+                return modelName === undefined ? tool : { ...tool, modelName };
+              });
+            })()
           }
         }
       : {}),

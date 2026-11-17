@@ -125,3 +125,32 @@ export const parsetMcpToolConfig = (
     toolName
   };
 };
+
+/**
+ * 生成配置了 modelName 的 MCP 子工具模型侧 nodeId。
+ * 拼接工具集前缀，避免不同工具集配置相同 modelName 时在 Agent 工具列表内重名；
+ * 总长度受 MCP_TOOL_MODEL_NAME_REGEX 约束，不超过模型 API 64 字符工具名上限。
+ */
+export const getMcpModelNodeId = ({
+  toolSetId,
+  modelName
+}: {
+  toolSetId: string;
+  modelName: string;
+}) => `${AppToolSourceEnum.mcp}-${toolSetId}-${modelName}`;
+
+/**
+ * 返回工具列表中首个重复的模型名称，无重复返回 undefined。
+ * 供保存接口校验与前端即时提示共用；空值视为未配置，不参与查重。
+ */
+export const findDuplicateModelName = (
+  toolList: Array<{ modelName?: string }>
+): string | undefined => {
+  const seen = new Set<string>();
+  for (const tool of toolList) {
+    if (tool.modelName === undefined || tool.modelName === '') continue;
+    if (seen.has(tool.modelName)) return tool.modelName;
+    seen.add(tool.modelName);
+  }
+  return undefined;
+};

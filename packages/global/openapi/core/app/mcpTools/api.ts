@@ -4,6 +4,22 @@ import { ObjectIdSchema } from '../../../../common/type/mongo';
 import { StoreSecretValueTypeApiInputSchema } from '../../../../common/secret/utils';
 import { CreateAppBodySchema } from '../common/api';
 import { McpToolConfigSchema } from '../../../../core/app/tool/mcpTool/type';
+import { findDuplicateModelName } from '../../../../core/app/tool/mcpTool/utils';
+
+/** 工具集内模型名称必须唯一，否则 Agent 合并工具列表时模型 API 会拒绝重名工具。 */
+const refineUniqueModelNames = (
+  val: { toolList: Array<{ modelName?: string }> },
+  ctx: z.RefinementCtx
+) => {
+  const duplicate = findDuplicateModelName(val.toolList);
+  if (duplicate !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['toolList'],
+      message: `Duplicate modelName: ${duplicate}`
+    });
+  }
+};
 
 // Create mcp tool
 export const CreateMcpToolsBodySchema = CreateAppBodySchema.omit({
@@ -32,6 +48,7 @@ export const CreateMcpToolsBodySchema = CreateAppBodySchema.omit({
       description: 'MCP 工具列表'
     })
   })
+  .superRefine(refineUniqueModelNames)
   .meta({
     example: {
       name: 'MCP 工具集',
@@ -53,6 +70,7 @@ export const UpdateMcpToolsBodySchema = z
     headerSecret: CreateMcpToolsBodySchema.shape.headerSecret,
     toolList: CreateMcpToolsBodySchema.shape.toolList
   })
+  .superRefine(refineUniqueModelNames)
   .meta({
     example: {
       appId: '68ad85a7463006c963799a05',
