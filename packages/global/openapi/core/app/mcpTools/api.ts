@@ -178,3 +178,45 @@ export const RunMcpToolResponseSchema = z.any().meta({
   description: '工具调用结果（MCP CallToolResult 结构，内容随工具变化）'
 });
 export type RunMcpToolResponseType = z.infer<typeof RunMcpToolResponseSchema>;
+
+// Generate ASCII model names for MCP tools via LLM
+export const GenerateMcpModelNamesBodySchema = z
+  .object({
+    tools: z
+      .array(
+        z.object({
+          name: z.string().meta({ example: '查询各地区信访量', description: '工具展示名' }),
+          description: z.string().optional().meta({
+            example: '按地区统计信访量',
+            description: '工具描述'
+          })
+        })
+      )
+      .min(1)
+      .max(50)
+      .meta({ description: '待生成模型名称的工具列表' }),
+    existingNames: z
+      .array(z.string())
+      .optional()
+      .meta({
+        example: ['query_monthly_trend'],
+        description: '已占用的模型名称，生成结果需避开'
+      })
+  })
+  .meta({
+    example: {
+      tools: [{ name: '查询各地区信访量', description: '按地区统计信访量' }],
+      existingNames: []
+    }
+  });
+export type GenerateMcpModelNamesBodyType = z.infer<typeof GenerateMcpModelNamesBodySchema>;
+
+export const GenerateMcpModelNamesResponseSchema = z
+  .object({
+    modelNames: z.array(z.string()).meta({
+      example: ['query_xf_by_region'],
+      description: '与 tools 顺序一一对应的 ASCII 模型名称'
+    })
+  })
+  .meta({ example: { modelNames: ['query_xf_by_region'] } });
+export type GenerateMcpModelNamesResponseType = z.infer<typeof GenerateMcpModelNamesResponseSchema>;

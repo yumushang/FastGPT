@@ -56,3 +56,36 @@ v4.17.4 运行时用 `pluginId.replace(/[^a-zA-Z0-9_-]/g, '')` 生成模型侧 n
 - [ ] 用户验收后跑全量测试（仓库约定）。
 - [ ] 构建自定义镜像并在内网部署验证：工具集配置 7 个 ASCII 名 → Agent 真实调用信访 MCP 工具端到端。
 - [ ] 视情况向上游提 PR（影响所有 CJK MCP 用户）。
+
+## fix2：单选路径 ID 重算覆盖缺陷 + AI 生成模型名
+
+### 缺陷（fix1 镜像实测仍报 400 的根因）
+
+`getAgentRuntimeTools` 的单工具分支（非 toolSet）在 `formatMcpToolNode` 之后，
+又用 `getAgentRuntimeToolId({ pluginId })` 对**原始 pluginId**（`<工具集ID>/<中文名>`，
+`splitCombineToolId` 已剥掉 `mcp-` 前缀）重新裸清洗，得到纯工具集 ID，
+覆盖了 format 阶段算好的唯一 nodeId → 7 个中文工具模型侧全部塌缩为 `t<工具集ID>`。
+fix1 只改了 format 阶段，未改这处重算，故未生效。
+
+### 修复
+
+1. `getAgentRuntimeToolId` 非 source 隔离分支改用 `toModelSafeToolId`（纯 ASCII 原样返回）。
+2. 单工具分支改传 `toolNode.nodeId`（已含 modelName 优先 + 哈希唯一化）而非原始 pluginId；
+   source 隔离（团队插件/调试）分支仍走 `hashStr(source:rawId)` 保持隔离语义。
+3. `adapter/prompt.ts` 工具引用候选 ID 增加 `toModelSafeToolId(pluginId)`，
+   保证提示词 `{{@工具ID@}}` 能解析到新格式模型名。
+4. 回归测试：中文工具单选/整组挂载模型名唯一、modelName 优先、路由仍走中文 toolId；
+   同步更新 7 处断言旧裸清洗行为的存量用例（service 52 用例 + global 70 + prompt 1 全过）。
+
+### AI 生成模型名（用户反馈手动填写太多）
+
+- 新 API `POST /api/core/app/mcpTools/generateModelName`：
+  body `{ tools: [{name, description}], existingNames? }` → `{ modelNames }`（与 tools 等长）。
+  鉴权 authCert；模型用团队默认 LLM（`getTeamModelHandle().getDefaultModelData('llm')` + 授权过滤，
+  同 createQuestionGuide 模式）；计费 source=mcp。
+- 服务层 `packages/service/core/ai/functions/generateMcpModelNames.ts`：
+  system prompt 约束 snake_case/字母开头/≤35/避开 existingNames/只输出 JSON 数组；
+  json5 解析 + 逐项 sanitize（小写、非法字符转下划线、限长、数字开头补 t、占用追加 _2/_3）；
+  解析失败回退序号占位名，保证返回值始终合法唯一等长。
+- 前端：工具列表头「一键 AI 生成模型名」批量补齐未配置项（已配置不动）；
+  详情弹窗模型名称输入框旁「AI 生成」单个重生成。i18n 四语言新增 3 键。

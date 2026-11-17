@@ -8,7 +8,9 @@ import type {
   GetMcpToolsResponseType,
   RunMcpToolBodyType,
   RunMcpToolResponseType,
-  UpdateMcpToolsResponseType
+  UpdateMcpToolsResponseType,
+  GenerateMcpModelNamesBodyType,
+  GenerateMcpModelNamesResponseType
 } from '@fastgpt/global/openapi/core/app/mcpTools/api';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import type { CreateAppResponseType } from '@fastgpt/global/openapi/core/app/common/api';
@@ -45,3 +47,8 @@ export const postRunMCPTool = (data: RunMcpToolBodyType) =>
 
 export const getMcpChildren = (data: GetMcpChildrenQueryType) =>
   GET<GetMcpChildrenResponseType>('/core/app/mcpTools/getChildren', data);
+
+export const postGenerateMcpModelNames = (data: GenerateMcpModelNamesBodyType) =>
+  POST<GenerateMcpModelNamesResponseType>('/core/app/mcpTools/generateModelName', data, {
+    timeout: 120000
+  });

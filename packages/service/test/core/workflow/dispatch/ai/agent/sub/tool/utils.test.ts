@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
 import { hashStr } from '@fastgpt/global/common/string/tools';
+import { toModelSafeToolId } from '@fastgpt/global/core/app/tool/utils';
 import { AppErrEnum } from '@fastgpt/global/common/error/code/app';
 import {
   FlowNodeInputTypeEnum,
@@ -398,6 +399,29 @@ describe('getAgentRuntimeTools schema loading', () => {
         }
       }
     }),
+    mcp_cn_app: createToolsetApp({
+      id: 'mcp_cn_app',
+      type: AppTypeEnum.mcpToolSet,
+      toolConfig: {
+        mcpToolSet: {
+          url: 'https://mcp.example.com',
+          headerSecret: {},
+          toolList: [
+            {
+              name: '查询各地区信访量',
+              description: '按地区统计信访量',
+              inputSchema: mcpInputSchema
+            },
+            {
+              name: '查询月度趋势',
+              description: '按月统计信访量',
+              inputSchema: mcpInputSchema,
+              modelName: 'query_monthly_trend'
+            }
+          ]
+        }
+      }
+    }),
     '123_app': createToolsetApp({
       id: '123_app',
       type: AppTypeEnum.mcpToolSet,
@@ -737,12 +761,42 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('mcp_appsearch');
+    expect(tools[0].id).toBe(toModelSafeToolId('mcp_app/search'));
     expect(tools[0].name).toBe('search');
-    expect(tools[0].requestSchema.function.name).toBe('mcp_appsearch');
+    expect(tools[0].requestSchema.function.name).toBe(toModelSafeToolId('mcp_app/search'));
     expect(tools[0].requestSchema.function.description).toBe('search: Search docs');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
     expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_app/search');
+  });
+
+  it('keeps model tool names unique for single-selected Chinese MCP tools', async () => {
+    const tools = await getAgentRuntimeTools({
+      tmbId: 'tmb_1',
+      tools: [
+        { id: 'mcp-mcp_cn_app/查询各地区信访量', config: {} },
+        { id: 'mcp-mcp_cn_app/查询月度趋势', config: {} }
+      ]
+    });
+
+    expect(tools).toHaveLength(2);
+    const names = tools.map((tool) => tool.requestSchema.function.name);
+    expect(new Set(names).size).toBe(2);
+    expect(names[0]).toBe(toModelSafeToolId('mcp_cn_app/查询各地区信访量'));
+    expect(names[1]).toBe('mcp-mcp_cn_app-query_monthly_trend');
+    expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_cn_app/查询各地区信访量');
+    expect(tools[1].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_cn_app/查询月度趋势');
+  });
+
+  it('keeps model tool names unique when a Chinese MCP toolset is mounted as a whole', async () => {
+    const tools = await getAgentRuntimeTools({
+      tmbId: 'tmb_1',
+      tools: [{ id: 'mcp_cn_app', config: {} }]
+    });
+
+    expect(tools).toHaveLength(2);
+    const names = tools.map((tool) => tool.requestSchema.function.name);
+    expect(new Set(names).size).toBe(2);
+    expect(names).toContain('mcp-mcp_cn_app-query_monthly_trend');
   });
 
   it('does not persist runtime MCP connection data in expanded Agent tools', async () => {
@@ -815,7 +869,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('mcp_slash_apptest');
+    expect(tools[0].id).toBe(toModelSafeToolId('mcp_slash_app//test'));
     expect(tools[0].name).toBe('/test');
     expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-mcp_slash_app//test');
   });
@@ -827,8 +881,8 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('123_appsearch');
-    expect(tools[0].requestSchema.function.name).toBe('t123_appsearch');
+    expect(tools[0].id).toBe(toModelSafeToolId('123_app/search'));
+    expect(tools[0].requestSchema.function.name).toBe(`t${toModelSafeToolId('123_app/search')}`);
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
   });
 
@@ -922,7 +976,7 @@ describe('getAgentRuntimeTools schema loading', () => {
 
     expect(getMCPChildrenMock).toHaveBeenCalledWith(appMap.legacy_mcp_app);
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('legacy_mcp_appsearch');
+    expect(tools[0].id).toBe(toModelSafeToolId('legacy_mcp_app/search'));
     expect(tools[0].name).toBe('search');
     expect(tools[0].requestSchema.function.parameters).toEqual(getModelToolSchema(mcpInputSchema));
     expect(tools[0].toolConfig?.mcpTool?.toolId).toBe('mcp-legacy_mcp_app/search');
@@ -1046,9 +1100,9 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('http_appcreate');
+    expect(tools[0].id).toBe(toModelSafeToolId('http_app/create'));
     expect(tools[0].name).toBe('create');
-    expect(tools[0].requestSchema.function.name).toBe('http_appcreate');
+    expect(tools[0].requestSchema.function.name).toBe(toModelSafeToolId('http_app/create'));
     expect(tools[0].requestSchema.function.description).toBe('create: Create record');
     expect(tools[0].requestSchema.function.parameters).toEqual(
       getModelToolSchema(httpRequestSchema)
@@ -1175,7 +1229,7 @@ describe('getAgentRuntimeTools schema loading', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe('http_slash_apptest');
+    expect(tools[0].id).toBe(toModelSafeToolId('http_slash_app//test'));
     expect(tools[0].name).toBe('/test');
     expect(tools[0].toolConfig?.httpTool?.toolId).toBe('http-http_slash_app//test');
   });

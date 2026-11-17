@@ -83,9 +83,8 @@ type AgentRuntimeNode = RuntimeNodeItemType & {
 
 /** 为隔离 source 生成稳定短 ID，避免特殊字符清洗或长度截断造成 runtime tool ID 碰撞。 */
 const getAgentRuntimeToolId = ({ pluginId, source }: { pluginId: string; source?: string }) => {
-  const normalizedPluginId = pluginId.replace(/[^a-zA-Z0-9_-]/g, '');
   const isSourceScoped = isTeamPluginSource(source) || isDebugToolSource(source);
-  if (!isSourceScoped || !source) return normalizedPluginId;
+  if (!isSourceScoped || !source) return toModelSafeToolId(pluginId);
 
   const rawPluginId = pluginId.replace(/^systemTool-/, '');
   return hashStr(`${source}:${rawPluginId}`).slice(0, 16);
@@ -821,7 +820,12 @@ export const getAgentRuntimeTools = async ({
           return [];
         } else {
           // 模型 schema、runtime map 和 dispatch 共用 source-aware ID。
-          const runtimeToolId = getAgentRuntimeToolId({ pluginId, source: runtimeSource });
+          // 单选 MCP/HTTP 工具的 nodeId 已在 format 阶段完成 modelName 优先 + 哈希唯一化，
+          // 这里必须沿用 toolNode.nodeId，不能用原始 pluginId 重新清洗（中文工具名会塌缩重名）。
+          const runtimeToolId = getAgentRuntimeToolId({
+            pluginId: toolNode.nodeId,
+            source: runtimeSource
+          });
           const inputs = initToolInputsTypeByDefaultMode(toolNode.inputs, {
             allowUserChatInputAgentGenerated: true
           });

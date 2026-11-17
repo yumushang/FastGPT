@@ -15,7 +15,7 @@ import MyModal from '@fastgpt/web/components/common/MyModal';
 import Avatar from '@fastgpt/web/components/common/Avatar';
 import MyBox from '@fastgpt/web/components/common/MyBox';
 import type { GetMcpToolsBodyType } from '@fastgpt/global/openapi/core/app/mcpTools/api';
-import { getMCPTools } from '@/web/core/app/api/mcpTools';
+import { getMCPTools, postGenerateMcpModelNames } from '@/web/core/app/api/mcpTools';
 import HeaderAuthConfig from '@/components/common/secret/HeaderAuthConfig';
 import { type StoreSecretValueType } from '@fastgpt/global/common/secret/type';
 import type { JsonSchemaPropertiesItemType } from '@fastgpt/global/core/app/jsonschema';
@@ -56,6 +56,32 @@ const EditForm = ({
         setCurrentTool(mergedList[0]);
       },
       errorToast: t('app:MCP_tools_parse_failed')
+    }
+  );
+
+  // 批量为未配置模型名称的工具调用 LLM 生成语义化 ASCII 名；已配置的保持不变。
+  const pendingTools = toolList.filter((tool) => !tool.modelName);
+  const { runAsync: runGenerateNames, loading: isGeneratingNames } = useRequest(
+    async () => {
+      const res = await postGenerateMcpModelNames({
+        tools: pendingTools.map((tool) => ({ name: tool.name, description: tool.description })),
+        existingNames: toolList
+          .map((tool) => tool.modelName)
+          .filter((name): name is string => !!name)
+      });
+      return res.modelNames;
+    },
+    {
+      manual: true,
+      onSuccess: (modelNames) => {
+        let index = 0;
+        setToolList(
+          toolList.map((tool) =>
+            tool.modelName ? tool : { ...tool, modelName: modelNames[index++] }
+          )
+        );
+      },
+      errorToast: t('app:MCP_tools_model_name_generate_failed')
     }
   );
 
@@ -103,6 +129,16 @@ const EditForm = ({
               total: toolList.length || 0
             })}
           </FormLabel>
+          <Button
+            size={'sm'}
+            variant={'whitePrimary'}
+            h={7}
+            isLoading={isGeneratingNames}
+            isDisabled={pendingTools.length === 0}
+            onClick={() => runGenerateNames()}
+          >
+            {t('app:MCP_tools_model_name_batch_generate')}
+          </Button>
         </Flex>
 
         <Box mt={3}>
@@ -242,6 +278,24 @@ const ToolDetailModal = ({
 
   const [modelName, setModelName] = useState(tool.modelName ?? '');
 
+  const { runAsync: runGenerateName, loading: isGeneratingName } = useRequest(
+    async () => {
+      const res = await postGenerateMcpModelNames({
+        tools: [{ name: tool.name, description: tool.description }],
+        existingNames: toolList
+          .filter((item) => item.name !== tool.name)
+          .map((item) => item.modelName)
+          .filter((name): name is string => !!name)
+      });
+      return res.modelNames[0];
+    },
+    {
+      manual: true,
+      onSuccess: (name) => setModelName(name),
+      errorToast: t('app:MCP_tools_model_name_generate_failed')
+    }
+  );
+
   // 模型名称校验：留空视为未配置（运行时自动生成）；非空时校验 ASCII 规则与工具集内唯一性。
   const modelNameError = (() => {
     if (modelName === '') return undefined;
@@ -284,15 +338,26 @@ const ToolDetailModal = ({
 
         <Box mt={6}>
           <FormLabel>{t('app:MCP_tools_model_name')}</FormLabel>
-          <Input
-            mt={2}
-            h={8}
-            fontFamily={'mono'}
-            placeholder={t('app:MCP_tools_model_name_placeholder')}
-            value={modelName}
-            isInvalid={modelNameError !== undefined}
-            onChange={(e) => setModelName(e.target.value)}
-          />
+          <Flex mt={2} gap={2}>
+            <Input
+              flex={1}
+              h={8}
+              fontFamily={'mono'}
+              placeholder={t('app:MCP_tools_model_name_placeholder')}
+              value={modelName}
+              isInvalid={modelNameError !== undefined}
+              onChange={(e) => setModelName(e.target.value)}
+            />
+            <Button
+              size={'sm'}
+              variant={'whitePrimary'}
+              h={8}
+              isLoading={isGeneratingName}
+              onClick={() => runGenerateName()}
+            >
+              {t('app:MCP_tools_model_name_ai_generate')}
+            </Button>
+          </Flex>
           <Box mt={1} fontSize={'12px'} color={modelNameError ? 'red.500' : 'myGray.500'}>
             {modelNameError ?? t('app:MCP_tools_model_name_tip')}
           </Box>

@@ -1,4 +1,4 @@
-import { splitCombineToolId } from '@fastgpt/global/core/app/tool/utils';
+import { splitCombineToolId, toModelSafeToolId } from '@fastgpt/global/core/app/tool/utils';
 
 const toolReferenceReg = /\{\{@([^@{}]+)@\}\}/g;
 
@@ -9,8 +9,9 @@ const getToolReferenceIdCandidates = (id: string) => {
   try {
     const { pluginId } = splitCombineToolId(trimmedId);
     const runtimeId = pluginId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const modelSafeId = toModelSafeToolId(pluginId);
 
-    for (const candidate of [pluginId, runtimeId]) {
+    for (const candidate of [pluginId, runtimeId, modelSafeId]) {
       if (candidate && !candidates.includes(candidate)) {
         candidates.push(candidate);
       }
