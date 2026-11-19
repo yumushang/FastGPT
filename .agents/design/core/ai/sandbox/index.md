@@ -2,9 +2,10 @@
 
 状态：当前实现
 
-最后核对：2026-10-09
+最后核对：2026-11-18
 
-用户级实例、生命周期、Legacy 迁移以及本分支后续变更的最终契约统一见
+普通 App 当前采用应用级共享实例，实施契约见
+[App 级共享 Sandbox 开发计划](./app-level-shared-sandbox.md)；历史用户级实例与 Legacy 生命周期见
 [用户级 Sandbox 最终方案](./user-level-sandbox.md)。本文只维护当前代码入口和运行行为索引。
 
 OpenSandbox Kubernetes PVC 的问题定论、生命周期设计和验证记录统一见
@@ -47,8 +48,8 @@ provider: opensandbox | sealosdevbox
 
 - `sourceType`：当前支持 App 和 Skill Edit。
 - `sourceId`：App id 或 Skill id。
-- `userId`：实例逻辑身份的一部分。App 使用有效用户 ID；Skill Edit 固定使用
-  `ChatSourceTypeEnum.skillEdit`。
+- `userId`：实例逻辑身份的一部分。普通 App 固定使用 `shared`；Workflow Builder 使用有效用户 ID；
+  Skill Edit 固定使用 `ChatSourceTypeEnum.skillEdit`。该字段不是鉴权用户 ID。
 - `chatId`：只用于 App Sandbox 内的 session 目录，不参与实例或 Provider 资源 ID。
 - `sandboxId`：Provider 侧的物理资源标识，不替代业务归属。
 
@@ -56,7 +57,8 @@ provider: opensandbox | sealosdevbox
 
 | 场景 | sandboxId | 归属 |
 | --- | --- | --- |
-| App chat | `app-<hash(sourceId-effectiveUserId)>` | `sourceType=app`，`userId=effectiveUserId` |
+| App chat | `app-<hash(sourceId-shared)>` | `sourceType=app`，`userId=shared` |
+| Workflow Builder | `workflowbuilder-<hash(sourceId-effectiveUserId)>` | `sourceType=workflowBuilder`，`userId=effectiveUserId` |
 | Skill Edit | `skilledit-<hash(sourceId-skillEdit)>` | `sourceType=skillEdit`，`userId=skillEdit` |
 | Chat Agent Helper | 不支持 Sandbox | 调用时直接报错 |
 
@@ -104,7 +106,7 @@ runtime preparation 不再接受绕过权限检查的布尔参数。随后根据
 agent-sandbox:init:<sandboxId>
 ```
 
-锁覆盖文件部署、entrypoint 和 Skill 扫描，避免并发请求交错修改同一工作区。租约会自动续期，获取失败转换为标准 initializing 错误。
+锁覆盖共享文件部署、entrypoint 和 Skill 扫描，避免并发请求交错修改共享运行环境。Session 目录与输入文件使用 `agent-sandbox:init:<sandboxId>:session:<chatId>` 独立准备，并保证 entrypoint 在输入文件就绪后执行。租约会自动续期，获取失败转换为标准 initializing 错误。
 
 ### Prepare pipeline
 
@@ -193,7 +195,7 @@ Skill Edit 复用编辑器 Sandbox 中的当前工作区，不把编辑中的内
 - 不活跃的 running 实例由 cron 停止并标记为 stopped。
 - 删除资源时同步清理 Provider 实例、Mongo 记录、可选 volume 和 S3 归档。
 - App chat 删除只清理聊天记录和 chat S3 文件，不删除共享 Sandbox，也不清理 Sandbox 内的 `sessions/<chatId>` 目录。
-- App 删除清理该 source 下全部用户级 v2 与 Legacy Sandbox，包括 Provider 实例、Mongo 记录、可选 volume 和 S3 归档。
+- App 删除清理该 source 下应用级共享实例、全部历史用户级 v2 与 Legacy Sandbox，包括 Provider 实例、Mongo 记录、可选 volume 和 S3 归档。
 - Skill 删除清理 Skill Edit 相关 Sandbox；普通编辑聊天删除不直接删除共享 edit-debug Sandbox。
 - stopped 实例可进入冷归档；恢复时通过 archive 状态机避免与归档、删除并发。
 - keepalive 只刷新 running 实例；stopped、stopping、不存在或 archived 状态均幂等结束，不创建、恢复或
@@ -232,8 +234,9 @@ Skill Edit 和 Skill 调试保持强依赖。文件 API 在服务端重新校验
 ## Workspace 预览
 
 HTML 预览和 `sandbox_get_file_url` 使用 Redis preview session 签发短期只读 URL。公开请求经
-`agent-sandbox-proxy` 回查 FastGPT，再由 Sandbox 内 `fastgpt-ide-agent:1319` 在 Workspace 范围内
-流式返回文件；预览不再上传临时文件到 S3，也不改变 Workspace 冷归档流程。
+`agent-sandbox-proxy` 回查 FastGPT，再由 Sandbox 内 `fastgpt-ide-agent:1319` 流式返回文件。新普通 App
+Preview Session 和 IDE FS 只允许当前 `sessions/<chatId>`，Proxy 校验 `allowed_root` 并过滤其他 Session
+的文件变更通知；历史 token 在原 TTL 内保持 Workspace 级语义。预览不再上传临时文件到 S3，也不改变 Workspace 冷归档流程。
 
 ## API 与权限
 
@@ -256,6 +259,7 @@ Sandbox 文件、ticket、preview、keepalive 等 API 位于 `projects/app/src/p
 | Resource 接口 | `packages/service/core/ai/sandbox/interface/resource` |
 | Preview 接口 | `packages/service/core/ai/sandbox/interface/preview` |
 | 团队归属回填迁移 | `projects/app/src/migration/tasks/4173/20261009_backfill_agent_sandbox_team_id` |
+| App 用户级实例归并迁移 | `projects/app/src/migration/tasks/4175/20261118_merge_app_user_sandboxes` |
 | Runtime client | `packages/service/core/ai/sandbox/application/runtime/client.ts` |
 | 初始化 pipeline | `packages/service/core/ai/sandbox/application/runtime/prepare.ts` |
 | Skill runtime | `packages/service/core/ai/sandbox/application/runtime/skill` |

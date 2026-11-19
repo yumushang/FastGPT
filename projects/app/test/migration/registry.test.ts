@@ -33,7 +33,8 @@ describe('validateSystemMigrationRegistry', () => {
       '20261009_migrate_dataset_rebuild_status',
       '20261009_backfill_agent_sandbox_team_id',
       '20261022_backfill_folder_ancestor_ids',
-      '20261025_token_prices_per_million'
+      '20261025_token_prices_per_million',
+      '20261118_merge_app_user_sandboxes'
     ]);
     expect(
       systemMigrations.filter((task: SystemMigration) => task.delay).map(({ id }) => id)
@@ -43,7 +44,11 @@ describe('validateSystemMigrationRegistry', () => {
     ]);
     expect(
       systemMigrations.filter((task: SystemMigration) => task.manual).map(({ id }) => id)
-    ).toEqual(['20261008_migrate_chunk_training', '20261009_migrate_dataset_rebuild_status']);
+    ).toEqual([
+      '20261008_migrate_chunk_training',
+      '20261009_migrate_dataset_rebuild_status',
+      '20261118_merge_app_user_sandboxes'
+    ]);
     expect(
       systemMigrations.find(({ id }) => id === '20261009_migrate_dataset_rebuild_status')
     ).toMatchObject({
@@ -53,9 +58,10 @@ describe('validateSystemMigrationRegistry', () => {
       systemMigrations.filter((task: SystemMigration) => task.blockStartup).map(({ id }) => id)
     ).toEqual(['20260903_migrate_legacy_system_models']);
     expect(systemMigrations.at(-1)).toMatchObject({
-      id: '20261025_token_prices_per_million',
-      version: '4.17.3',
-      progressSteps: [{ key: 'models' }]
+      id: '20261118_merge_app_user_sandboxes',
+      version: '4.17.5',
+      dependsOn: ['20261009_backfill_agent_sandbox_team_id'],
+      progressSteps: [{ key: 'applications' }, { key: 'workspaces' }, { key: 'validation' }]
     });
     expect(() => validateSystemMigrationRegistry(systemMigrations)).not.toThrow();
   });

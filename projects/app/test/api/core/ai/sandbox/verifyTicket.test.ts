@@ -27,6 +27,7 @@ vi.mock('@fastgpt/service/core/ai/sandbox/application/runtime/client', () => ({
 }));
 
 vi.mock('@fastgpt/service/core/ai/sandbox/application/preview', () => ({
+  getSandboxPreviewSessionRoot: () => 'sessions/chat-1',
   resolveSandboxPreviewSession: mocks.resolveSandboxPreviewSession
 }));
 
@@ -77,6 +78,10 @@ describe('sandbox verifyTicket API', () => {
     mocks.getEndpoint.mockResolvedValue({ url: 'http://sandbox.internal' });
     mocks.getSandboxClient.mockResolvedValue({
       exec: mocks.exec,
+      getRuntimePaths: () => ({
+        workspaceRoot: '/workspace',
+        sessionWorkDirectory: '/workspace/sessions/chat-1'
+      }),
       provider: { getEndpoint: mocks.getEndpoint }
     });
   });
@@ -97,8 +102,10 @@ describe('sandbox verifyTicket API', () => {
     }
   );
 
-  it('keeps WebSocket tickets on the existing IDE Agent listener', async () => {
-    await handler(createReq(createTicket('fs')));
+  it('keeps WebSocket tickets on the existing IDE Agent listener with a Session root', async () => {
+    await expect(handler(createReq(createTicket('fs')))).resolves.toMatchObject({
+      allowed_root: 'sessions/chat-1'
+    });
     expect(mocks.getEndpoint).toHaveBeenCalledWith(1318);
   });
 

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
-import { generateSandboxId } from '@fastgpt/global/core/ai/sandbox/constants';
+import {
+  APP_SHARED_SANDBOX_USER_ID,
+  generateSandboxId
+} from '@fastgpt/global/core/ai/sandbox/constants';
 import { getEditDebugSandboxId } from '@fastgpt/service/core/ai/skill/edit/config';
 
 const mocks = vi.hoisted(() => ({
@@ -44,11 +47,11 @@ describe('prepareAgentSandboxRuntime', () => {
       sandboxId: generateSandboxId({
         sourceType: ChatSourceTypeEnum.app,
         sourceId: 'app_1',
-        userId: 'user_1'
+        userId: APP_SHARED_SANDBOX_USER_ID
       }),
       sourceType: ChatSourceTypeEnum.app,
       sourceId: 'app_1',
-      userId: 'user_1',
+      userId: APP_SHARED_SANDBOX_USER_ID,
       chatId: 'chat_1'
     });
   });

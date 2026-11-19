@@ -41,9 +41,24 @@ const SandboxPreviewSessionSchema = z.object({
   sourceType: z.enum(ChatSourceTypeEnum),
   sourceId: z.string().min(1),
   userId: z.string(),
-  chatId: z.string().min(1)
+  chatId: z.string().min(1),
+  sessionRoot: z.string().min(1).optional()
 });
 export type SandboxPreviewSession = z.infer<typeof SandboxPreviewSessionSchema>;
+
+/** 将 Provider Session 绝对目录换算为 Preview/Proxy 使用的 Workspace 相对授权根目录。 */
+export const getSandboxPreviewSessionRoot = ({
+  workspaceRoot,
+  sessionWorkDirectory
+}: {
+  workspaceRoot: string;
+  sessionWorkDirectory: string;
+}) => {
+  if (trimSandboxPathRight(workspaceRoot) === trimSandboxPathRight(sessionWorkDirectory)) {
+    return '.';
+  }
+  return resolveSandboxPreviewPath(sessionWorkDirectory).relativePath;
+};
 
 const getSandboxPreviewSessionIndexKey = (sandboxId: string) =>
   asRedisLogicalKey(`${SANDBOX_PREVIEW_SESSION_KEY_PREFIX}:${sandboxId}:active`);

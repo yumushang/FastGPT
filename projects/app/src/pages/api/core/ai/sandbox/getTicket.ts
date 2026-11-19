@@ -64,7 +64,7 @@ async function handler(req: ApiRequestProps): Promise<SandboxGetTicketResponse> 
   const sandbox = await getSandboxClient(sandboxQuery);
   const { workspaceRoot, sessionWorkDirectory } = sandbox.getRuntimePaths();
 
-  // 用户级 Sandbox 可能由其它 Chat 创建，签发 Ticket 前确保当前 Chat 的 IDE 根目录存在。
+  // 共享 Sandbox 可能由其它用户或 Chat 创建，签发 Ticket 前确保当前 Chat 的 IDE 根目录存在。
   await sandbox.provider.createDirectories([sessionWorkDirectory]);
 
   // 签发短期 HMAC 凭证，内含租户元数据，不包含任何物理寻址信息。

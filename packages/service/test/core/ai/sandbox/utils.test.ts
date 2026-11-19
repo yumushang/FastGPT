@@ -65,6 +65,26 @@ describe('sandbox runtime paths', () => {
     expect(() => resolveSandboxRuntimePath('../other-chat/file', paths)).toThrow(
       'Path traversal detected'
     );
+    expect(
+      resolveSandboxRuntimePath('/workspace/sessions/chat-1/result.txt', paths, {
+        allowAbsolutePath: true,
+        allowOutsideWorkspace: false,
+        allowOutsideSession: false
+      })
+    ).toBe('/workspace/sessions/chat-1/result.txt');
+    expect(() =>
+      resolveSandboxRuntimePath('/workspace/sessions/chat-2/result.txt', paths, {
+        allowAbsolutePath: true,
+        allowOutsideWorkspace: false,
+        allowOutsideSession: false
+      })
+    ).toThrow('Sandbox path is outside session');
+    expect(() =>
+      resolveSandboxRuntimePath('/etc/passwd', paths, {
+        allowAbsolutePath: true,
+        allowOutsideSession: false
+      })
+    ).toThrow('Sandbox path is outside session');
   });
 
   it('encodes unusual Chat IDs into one stable path segment', () => {

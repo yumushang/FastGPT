@@ -39,7 +39,7 @@ const resolveSessionPath = (path: string) =>
 function makeSandbox(providerOverrides: Partial<SandboxClient['provider']> = {}): SandboxClient {
   return {
     provider: providerOverrides,
-    resolveRuntimePath: vi.fn(resolveSessionPath)
+    resolveSessionPath: vi.fn(resolveSessionPath)
   } as unknown as SandboxClient;
 }
 

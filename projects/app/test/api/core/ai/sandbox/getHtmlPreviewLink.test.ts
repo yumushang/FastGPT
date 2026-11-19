@@ -33,6 +33,7 @@ vi.mock('@fastgpt/service/core/ai/sandbox/application/preview', async (importOri
     typeof import('@fastgpt/service/core/ai/sandbox/application/preview')
   >()),
   createSandboxPreviewFileUrl: mocks.createSandboxPreviewFileUrl,
+  getSandboxPreviewSessionRoot: () => 'sessions/chat-1',
   resolveSandboxPreviewPath: mocks.resolveSandboxPreviewPath
 }));
 
@@ -81,7 +82,11 @@ describe('sandbox getHtmlPreviewLink API', () => {
       ])
     );
     mocks.getSandboxClient.mockResolvedValue({
-      resolveRuntimePath: mocks.resolveRuntimePath,
+      resolveSessionPath: mocks.resolveRuntimePath,
+      getRuntimePaths: () => ({
+        workspaceRoot: '/workspace',
+        sessionWorkDirectory: '/workspace/sessions/chat-1'
+      }),
       provider: { getFileInfo: mocks.getFileInfo }
     });
     mocks.resolveSandboxPreviewPath.mockReturnValue({
@@ -107,9 +112,7 @@ describe('sandbox getHtmlPreviewLink API', () => {
       outLinkAuthData: undefined,
       per: ReadPermissionVal
     });
-    expect(mocks.resolveRuntimePath).toHaveBeenCalledWith('dist/index.html', {
-      allowAbsolutePath: true
-    });
+    expect(mocks.resolveRuntimePath).toHaveBeenCalledWith('dist/index.html');
     expect(mocks.resolveSandboxPreviewPath).toHaveBeenCalledWith(
       '/workspace/sessions/chat-1/dist/index.html'
     );
@@ -120,7 +123,8 @@ describe('sandbox getHtmlPreviewLink API', () => {
         sourceType: ChatSourceTypeEnum.app,
         sourceId: '507f1f77bcf86cd799439011',
         userId: 'user-1',
-        chatId: 'chat-1'
+        chatId: 'chat-1',
+        sessionRoot: 'sessions/chat-1'
       },
       filePath: '/workspace/sessions/chat-1/dist/index.html'
     });
@@ -180,7 +184,7 @@ describe('sandbox getHtmlPreviewLink API', () => {
       });
       expect(mocks.getSandboxClient).toHaveBeenCalledExactlyOnceWith(query);
       expect(mocks.createSandboxPreviewFileUrl).toHaveBeenCalledWith({
-        context: query,
+        context: { ...query, sessionRoot: 'sessions/chat-1' },
         filePath: '/workspace/sessions/chat-1/dist/index.html'
       });
     }

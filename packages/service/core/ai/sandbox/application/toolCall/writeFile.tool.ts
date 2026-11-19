@@ -15,9 +15,7 @@ export const sandboxWriteFileTool = defineTool({
   zodSchema: SandboxWriteFileToolSchema,
   execute: async ({ sandboxInstance, params }) => {
     await sandboxInstance.ensureAvailable();
-    const providerPath = sandboxInstance.resolveRuntimePath(params.path, {
-      allowAbsolutePath: true
-    });
+    const providerPath = sandboxInstance.resolveSessionPath(params.path);
     const [file] = await sandboxInstance.provider.writeFiles([
       {
         path: providerPath,

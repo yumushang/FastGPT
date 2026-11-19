@@ -5,7 +5,7 @@ import { sandboxLsTool } from '@fastgpt/service/core/ai/sandbox/application/tool
 const createSandboxInstance = () =>
   ({
     ensureAvailable: vi.fn(async () => undefined),
-    resolveRuntimePath: vi.fn((path?: string) => {
+    resolveSessionPath: vi.fn((path?: string) => {
       if (!path || path === '.') return '/workspace/sessions/chat';
       if (path.startsWith('/')) return path;
       return `/workspace/sessions/chat/${path}`;
@@ -34,9 +34,7 @@ describe('sandboxLsTool', () => {
 
     expect(result.response).toBe('.env\nREADME.md\nsrc/');
     expect(sandbox.ensureAvailable).toHaveBeenCalledTimes(1);
-    expect(sandbox.resolveRuntimePath).toHaveBeenCalledWith('/workspace', {
-      allowAbsolutePath: true
-    });
+    expect(sandbox.resolveSessionPath).toHaveBeenCalledWith('/workspace');
     expect(sandbox.provider.listDirectory).toHaveBeenCalledWith('/workspace');
   });
 
@@ -54,9 +52,7 @@ describe('sandboxLsTool', () => {
         params: {}
       })
     ).resolves.toEqual({ response: '(empty directory)' });
-    expect(sandbox.resolveRuntimePath).toHaveBeenCalledWith(undefined, {
-      allowAbsolutePath: true
-    });
+    expect(sandbox.resolveSessionPath).toHaveBeenCalledWith(undefined);
     expect(sandbox.provider.listDirectory).toHaveBeenCalledWith('/workspace/sessions/chat');
   });
 

@@ -14,6 +14,7 @@ mod auth;
 mod error;
 mod preview;
 mod relay;
+mod scope;
 
 use auth::{
     invalidate_cached_preview_sandbox_address, resolve_cached_preview_sandbox_address,

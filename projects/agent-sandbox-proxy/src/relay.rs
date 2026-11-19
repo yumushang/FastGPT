@@ -11,6 +11,7 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info};
 
 use crate::auth::{SandboxAddress, WsLimits, get_http_client, get_proxy_secret};
+use crate::scope::{client_message_allowed, scope_upstream_message};
 
 mod error;
 mod message;
@@ -89,6 +90,7 @@ pub async fn handle_relay(
     };
     let permission_to_forward = claims.permission.as_str();
     let ws_limits = address.ws_limits;
+    let allowed_root = address.allowed_root.clone();
 
     let target_url = match address.sandbox_url.as_deref().filter(|url| !url.is_empty()) {
         Some(url) => {
@@ -182,6 +184,15 @@ pub async fn handle_relay(
     let (mut up_sink, up_stream) = up_ws.split();
 
     for buffered_msg in buffer.drain(..) {
+        if !client_message_allowed(&buffered_msg, allowed_root.as_deref()) {
+            close_client_ws(
+                &mut client_sink,
+                1008,
+                "Sandbox session path is not allowed",
+            )
+            .await;
+            return;
+        }
         if let Err(err) = up_sink.send(axum_to_tungstenite(buffered_msg)).await {
             if is_upstream_closed_error(&err) {
                 debug!(
@@ -231,6 +242,8 @@ pub async fn handle_relay(
 
     // Client -> Upstream (含周期性向 Upstream 发送 Ping 帧以保持连接活跃，解决 Devbox 链路空闲重置)
     let client_to_upstream_close_tx = client_close_tx.clone();
+    let client_to_upstream_control_tx = upstream_control_tx.clone();
+    let client_allowed_root = allowed_root.clone();
     let client_to_upstream = async move {
         let mut ping_interval = tokio::time::interval(Duration::from_secs(10));
         // 跳过第一次 tick 以免在刚刚握手完时发送 Ping
@@ -287,6 +300,11 @@ pub async fn handle_relay(
                                     break;
                                 }
                                 msg => {
+                                    if !client_message_allowed(&msg, client_allowed_root.as_deref()) {
+                                        send_client_close(&client_to_upstream_close_tx, 1008, "Sandbox session path is not allowed");
+                                        send_upstream_close(&client_to_upstream_control_tx, upstream_close_message(1008, "Sandbox session path is not allowed"));
+                                        break;
+                                    }
                                     if let Err(err) = up_sink.send(axum_to_tungstenite(msg)).await {
                                         if is_upstream_closed_error(&err) {
                                             debug!("[WSProxy] Upstream closed while forwarding client message: {}", err);
@@ -318,6 +336,7 @@ pub async fn handle_relay(
     let upstream_to_client_msg_tx = client_msg_tx.clone();
     let upstream_to_client_close_tx = client_close_tx.clone();
     let upstream_to_client_upstream_control_tx = upstream_control_tx.clone();
+    let upstream_allowed_root = allowed_root.clone();
     let upstream_to_client = async move {
         let mut up_stream = up_stream;
         while let Some(msg_res) = up_stream.next().await {
@@ -332,6 +351,10 @@ pub async fn handle_relay(
                     break;
                 }
                 Ok(msg) => {
+                    let Some(msg) = scope_upstream_message(msg, upstream_allowed_root.as_deref())
+                    else {
+                        continue;
+                    };
                     let Some(client_msg) = tungstenite_to_axum(msg) else {
                         continue;
                     };

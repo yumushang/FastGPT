@@ -67,7 +67,7 @@ const writeFileStreamResponse = async ({
   res: NextApiResponse;
   path: string;
 }) => {
-  const providerPath = sandbox.resolveRuntimePath(path, { allowAbsolutePath: true });
+  const providerPath = sandbox.resolveSessionPath(path);
   const fileInfoMap = await sandbox.provider.getFileInfo([providerPath]).catch(() => undefined);
   const fileInfo = fileInfoMap?.get(providerPath);
 

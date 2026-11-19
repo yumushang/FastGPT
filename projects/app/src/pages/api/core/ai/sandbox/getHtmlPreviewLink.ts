@@ -12,6 +12,7 @@ import { getSandboxClient } from '@fastgpt/service/core/ai/sandbox/application/r
 import { parseApiInput } from '@fastgpt/service/common/zod/requestParseError';
 import {
   createSandboxPreviewFileUrl,
+  getSandboxPreviewSessionRoot,
   resolveSandboxPreviewPath,
   SandboxPreviewSessionLimitError
 } from '@fastgpt/service/core/ai/sandbox/application/preview';
@@ -46,7 +47,7 @@ async function handler(req: ApiRequestProps, res: NextApiResponse): Promise<void
     chatId
   });
   const sandbox = await getSandboxClient(sandboxQuery);
-  const providerPath = sandbox.resolveRuntimePath(filePath, { allowAbsolutePath: true });
+  const providerPath = sandbox.resolveSessionPath(filePath);
   resolveSandboxPreviewPath(providerPath);
   const fileInfo = (await sandbox.provider.getFileInfo([providerPath])).get(providerPath);
 
@@ -59,7 +60,10 @@ async function handler(req: ApiRequestProps, res: NextApiResponse): Promise<void
 
   // 3. session 仅保存 sandbox 查询参数，provider endpoint 和内部口令由 proxy 按请求解析。
   const url = await createSandboxPreviewFileUrl({
-    context: sandboxQuery,
+    context: {
+      ...sandboxQuery,
+      sessionRoot: getSandboxPreviewSessionRoot(sandbox.getRuntimePaths())
+    },
     filePath: providerPath
   }).catch((error) => {
     if (error instanceof SandboxPreviewSessionLimitError) return null;

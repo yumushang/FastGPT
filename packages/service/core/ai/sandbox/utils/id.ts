@@ -3,7 +3,10 @@
  *
  * 只处理 app 和 skillEdit 的 id 规则，不查询数据库或 provider。
  */
-import { generateSandboxId } from '@fastgpt/global/core/ai/sandbox/constants';
+import {
+  APP_SHARED_SANDBOX_USER_ID,
+  generateSandboxId
+} from '@fastgpt/global/core/ai/sandbox/constants';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { isAppSandboxSourceType } from '@fastgpt/global/common/chat/source';
 
@@ -15,7 +18,11 @@ export const getSandboxUserId = ({
   sourceType: ChatSourceTypeEnum;
   userId: string;
 }) => {
-  if (isAppSandboxSourceType(sourceType)) {
+  if (sourceType === ChatSourceTypeEnum.app) {
+    return APP_SHARED_SANDBOX_USER_ID;
+  }
+
+  if (sourceType === ChatSourceTypeEnum.workflowBuilder) {
     return userId;
   }
 

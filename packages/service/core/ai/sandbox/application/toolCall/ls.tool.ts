@@ -16,9 +16,7 @@ export const sandboxLsTool = defineTool({
   execute: async ({ sandboxInstance, params }) => {
     await sandboxInstance.ensureAvailable();
     const limit = params.limit ?? DEFAULT_LS_LIMIT;
-    const providerPath = sandboxInstance.resolveRuntimePath(params.path, {
-      allowAbsolutePath: true
-    });
+    const providerPath = sandboxInstance.resolveSessionPath(params.path);
     const entries = await sandboxInstance.provider.listDirectory(providerPath);
     const results = entries
       .map((entry) => `${entry.name}${entry.isDirectory ? '/' : ''}`)

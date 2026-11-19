@@ -43,6 +43,7 @@ export type SandboxRuntimePaths = {
 type ResolveSandboxRuntimePathOptions = {
   allowAbsolutePath?: boolean;
   allowOutsideWorkspace?: boolean;
+  allowOutsideSession?: boolean;
 };
 
 /** 根据 provider 工作目录和 Chat source 构造本轮 Sandbox 运行时路径。 */
@@ -110,6 +111,13 @@ export const resolveSandboxRuntimePath = (
       !rawPath.startsWith(`${workspaceRoot}/`)
     ) {
       throw new Error('Sandbox path is outside workspace');
+    }
+    if (
+      options.allowOutsideSession === false &&
+      rawPath !== sessionWorkDirectory &&
+      !rawPath.startsWith(`${sessionWorkDirectory}/`)
+    ) {
+      throw new Error('Sandbox path is outside session');
     }
     return rawPath;
   }

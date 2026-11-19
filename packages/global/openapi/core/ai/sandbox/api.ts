@@ -95,6 +95,10 @@ export const SandboxVerifyTicketResponseSchema = z.object({
     example: 'temporary-agent-password',
     description: '连接 IDE Agent 使用的临时口令'
   }),
+  allowed_root: z.string().min(1).optional().meta({
+    example: 'sessions/bEdzC6PNupZrr1RoVutMF2DL',
+    description: '当前凭证允许访问的 Workspace 相对根目录；缺省表示兼容历史 Workspace 级凭证'
+  }),
   ws_limits: z.object({
     max_message_bytes: IntSchema.min(1).meta({
       example: 16777216,

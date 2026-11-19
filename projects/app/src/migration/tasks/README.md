@@ -81,6 +81,7 @@
 - `manual` 不得与 `independent` 或 `delay` 同时启用。后续自动任务不得依赖尚未手动执行的任务。
 - 手动触发不会自动检测集群升级完成；例如 chunk 迁移必须确认所有旧 App/Pro 生产者和 worker 已停止、旧租约过期后再执行。
 - 重建状态迁移依赖 chunk 迁移成功，避免前置任务随后写出尚未转换的旧 `rebuild` 模式。
+- App 用户级沙箱归并 `20261118_merge_app_user_sandboxes` 依赖团队归属回填成功，并要求管理员先停止全部旧版本 App/Pro 节点、排空旧请求，再执行手动归并；旧实例和归档保留，目标已有文件优先。
 
 ## 前置依赖
 
@@ -91,5 +92,6 @@
 - 模型权限、知识库模型引用、评测模型引用、应用模型引用回填，都依赖 `20260903_migrate_legacy_system_models` 成功。四个任务都会从 ai_models 和系统默认配置加载模型目录；在目录迁移完成前执行可能误判模型引用，权限回填还可能删除仍有效的旧名称权限。
 - `20260916_backfill_app_resource_snapshots` 依赖 `20260903_backfill_app_model_references` 成功。
 - `20261009_migrate_dataset_rebuild_status` 依赖 `20261008_migrate_chunk_training` 成功。
+- `20261118_merge_app_user_sandboxes` 依赖 `20261009_backfill_agent_sandbox_team_id` 成功。
 
 不要用数组中的相邻位置代替业务成功依赖，也不要把所有任务链式关联来模拟旧的全队列暂停。普通队列仍按注册顺序串行选择可执行任务，独立模式仍与非空 dependsOn 互斥。

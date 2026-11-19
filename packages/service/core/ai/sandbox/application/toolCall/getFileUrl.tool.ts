@@ -9,6 +9,7 @@ import { defineTool } from './type';
 import {
   buildSandboxPreviewFileUrl,
   createSandboxPreviewSession,
+  getSandboxPreviewSessionRoot,
   resolveSandboxPreviewPath
 } from '../preview';
 
@@ -33,9 +34,7 @@ export const sandboxGetFileUrlTool = defineTool({
     await sandboxInstance.ensureAvailable();
 
     const files = params.paths.map((inputPath) => {
-      const filePath = sandboxInstance.resolveRuntimePath(inputPath, {
-        allowAbsolutePath: true
-      });
+      const filePath = sandboxInstance.resolveSessionPath(inputPath);
       return {
         filePath,
         ...resolveSandboxPreviewPath(filePath)
@@ -56,7 +55,8 @@ export const sandboxGetFileUrlTool = defineTool({
       sourceType,
       sourceId,
       userId,
-      chatId
+      chatId,
+      sessionRoot: getSandboxPreviewSessionRoot(sandboxInstance.getRuntimePaths())
     });
     const result = files.map(({ filePath, relativePath }) => ({
       fileUrl: buildSandboxPreviewFileUrl({

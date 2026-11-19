@@ -35,16 +35,16 @@ const leaseCache = new LeaseCache();
  * 同一个 sandbox 内并发初始化时，如果文件部署、entrypoint 和扫描交错，可能互相污染。
  * 锁只存在于服务端 Redis，不写入 sandbox 文件系统。
  */
-export const withAgentSandboxInitLease = async <T>({
-  sandboxId,
+const withSandboxInitLease = async <T>({
+  key,
   fn
 }: {
-  sandboxId: string;
+  key: string;
   fn: () => Promise<T>;
 }): Promise<T> => {
   return leaseCache
     .withLease({
-      key: `agent-sandbox:init:${sandboxId}`,
+      key,
       label: 'agent-sandbox-init',
       ttlMs: SANDBOX_INIT_LEASE_TTL_MS,
       renewIntervalMs: SANDBOX_INIT_LEASE_RENEW_INTERVAL_MS,
@@ -57,6 +57,26 @@ export const withAgentSandboxInitLease = async <T>({
       throw error;
     });
 };
+
+export const withAgentSandboxInitLease = async <T>({
+  sandboxId,
+  fn
+}: {
+  sandboxId: string;
+  fn: () => Promise<T>;
+}): Promise<T> => withSandboxInitLease({ key: `agent-sandbox:init:${sandboxId}`, fn });
+
+/** 只串行化同一 Session 的目录与输入文件准备，避免共享 App 的不同 Chat 相互阻塞。 */
+export const withAgentSandboxSessionInitLease = async <T>({
+  sandboxId,
+  chatId,
+  fn
+}: {
+  sandboxId: string;
+  chatId: string;
+  fn: () => Promise<T>;
+}): Promise<T> =>
+  withSandboxInitLease({ key: `agent-sandbox:init:${sandboxId}:session:${chatId}`, fn });
 
 /**
  * 执行 runtime sandbox entrypoint。

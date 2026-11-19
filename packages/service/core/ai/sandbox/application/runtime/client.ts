@@ -1,5 +1,6 @@
 /** 运行态 client 只管理连接复用、工作目录和命令执行；生命周期交由 runtime/service。 */
 import { isAppSandboxSourceType } from '@fastgpt/global/common/chat/source';
+import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import { getLogger, LogCategories } from '../../../../../common/logger';
 import type { ExecuteResult, ISandbox } from '@fastgpt-sdk/sandbox-adapter';
@@ -96,10 +97,30 @@ export class SandboxClient {
     return this.runtimePaths;
   }
 
+  /**
+   * 解析用户文件路径。普通 App 共享 Sandbox 后必须限制在当前 Session，其他来源保持原路径语义。
+   * 该限制不约束 Shell，不能视为容器内的强安全边界。
+   */
+  resolveSessionPath(path?: string) {
+    if (this.query.sourceType !== ChatSourceTypeEnum.app) {
+      return this.resolveRuntimePath(path, { allowAbsolutePath: true });
+    }
+
+    return this.resolveRuntimePath(path, {
+      allowAbsolutePath: true,
+      allowOutsideWorkspace: false,
+      allowOutsideSession: false
+    });
+  }
+
   /** 将调用方文件路径解析到当前会话目录；绝对路径默认不限制 workspace 范围。 */
   resolveRuntimePath(
     path?: string,
-    options: { allowAbsolutePath?: boolean; allowOutsideWorkspace?: boolean } = {}
+    options: {
+      allowAbsolutePath?: boolean;
+      allowOutsideWorkspace?: boolean;
+      allowOutsideSession?: boolean;
+    } = {}
   ) {
     return resolveSandboxRuntimePath(path, this.runtimePaths, options);
   }

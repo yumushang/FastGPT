@@ -4,7 +4,8 @@ import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 const previewMock = vi.hoisted(() => ({
   resolveSandboxPreviewPath: vi.fn(),
   createSandboxPreviewSession: vi.fn(),
-  buildSandboxPreviewFileUrl: vi.fn()
+  buildSandboxPreviewFileUrl: vi.fn(),
+  getSandboxPreviewSessionRoot: vi.fn(() => 'sessions/chat')
 }));
 
 vi.mock('@fastgpt/service/core/ai/sandbox/application/preview', () => previewMock);
@@ -13,7 +14,7 @@ import { sandboxGetFileUrlTool } from '@fastgpt/service/core/ai/sandbox/applicat
 
 const getFileInfo = vi.fn();
 const ensureAvailable = vi.fn(async () => undefined);
-const resolveRuntimePath = vi.fn((filePath: string) =>
+const resolveSessionPath = vi.fn((filePath: string) =>
   filePath.startsWith('/') ? filePath : `/workspace/sessions/chat-1/${filePath}`
 );
 const sandboxId = 'app-0123456789abcdef';
@@ -26,7 +27,11 @@ const createSandboxInstance = () =>
       userId: 'user',
       chatId: 'chat'
     }),
-    resolveRuntimePath,
+    resolveSessionPath,
+    getRuntimePaths: () => ({
+      workspaceRoot: '/workspace',
+      sessionWorkDirectory: '/workspace/sessions/chat-1'
+    }),
     ensureAvailable,
     provider: {
       getFileInfo
@@ -69,12 +74,8 @@ describe('sandboxGetFileUrlTool', () => {
         filename: 'data.csv'
       }
     ]);
-    expect(resolveRuntimePath).toHaveBeenNthCalledWith(1, '/workspace/file.txt', {
-      allowAbsolutePath: true
-    });
-    expect(resolveRuntimePath).toHaveBeenNthCalledWith(2, 'report/data.csv', {
-      allowAbsolutePath: true
-    });
+    expect(resolveSessionPath).toHaveBeenNthCalledWith(1, '/workspace/file.txt');
+    expect(resolveSessionPath).toHaveBeenNthCalledWith(2, 'report/data.csv');
     expect(getFileInfo).toHaveBeenCalledWith([
       '/workspace/file.txt',
       '/workspace/sessions/chat-1/report/data.csv'
@@ -84,7 +85,8 @@ describe('sandboxGetFileUrlTool', () => {
       sourceType: ChatSourceTypeEnum.app,
       sourceId: 'app',
       userId: 'user',
-      chatId: 'chat'
+      chatId: 'chat',
+      sessionRoot: 'sessions/chat'
     });
     expect(previewMock.buildSandboxPreviewFileUrl).toHaveBeenNthCalledWith(1, {
       sessionId: 'a12345678901234567890123',
@@ -103,7 +105,7 @@ describe('sandboxGetFileUrlTool', () => {
     });
 
     expect(result.response).toBe('[]');
-    expect(resolveRuntimePath).not.toHaveBeenCalled();
+    expect(resolveSessionPath).not.toHaveBeenCalled();
     expect(getFileInfo).not.toHaveBeenCalled();
     expect(previewMock.createSandboxPreviewSession).not.toHaveBeenCalled();
   });

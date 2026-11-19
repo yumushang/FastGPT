@@ -94,6 +94,7 @@ import {
   archiveInactiveSandboxes,
   archiveSandboxResource,
   archiveSandboxResourceNow,
+  mergeWorkspaceSessionsFromArchive,
   restoreArchivedSandboxWithinLease,
   retryStaleArchivingSandboxes
 } from '@fastgpt/service/core/ai/sandbox/application/archive';
@@ -161,6 +162,7 @@ const createSandbox = () => ({
   readFiles: vi.fn(async () => [{ content: Buffer.from('workspace'), error: undefined }]),
   writeFiles: vi.fn(async () => [{ error: undefined }]),
   deleteFiles: vi.fn(async () => undefined),
+  deleteDirectories: vi.fn(async () => undefined),
   stop: vi.fn(async () => undefined)
 });
 
@@ -369,6 +371,31 @@ describe('sandbox archive lifecycle', () => {
     expect(sandbox.stop).not.toHaveBeenCalled();
     expect(mocks.markSandboxOperationFailed).not.toHaveBeenCalled();
     expect(mocks.disconnectSandbox).toHaveBeenCalledWith(sandbox);
+  });
+
+  it('merges only Session archives without overwriting target files', async () => {
+    const sandbox = createSandbox();
+
+    await mergeWorkspaceSessionsFromArchive({
+      sandbox: sandbox as any,
+      workDirectory: '/workspace',
+      sourceSandboxId: 'app-user-1',
+      archiveBody: Buffer.from('archive'),
+      assertValid: lease.assertValid,
+      signal: lease.signal
+    });
+
+    const command = sandbox.execute.mock.calls.at(-1)?.[0] as string;
+    expect(command).toContain('unzip -n -q');
+    expect(command).toContain("'sessions/*'");
+    expect(command).toContain('cp -a -n');
+    expect(command).not.toContain('unzip -o');
+    expect(sandbox.writeFiles).toHaveBeenCalledWith([
+      {
+        path: '/workspace/.fastgpt-session-merge-app-user-1.zip',
+        data: Buffer.from('archive')
+      }
+    ]);
   });
 
   it('retries only stale archiving records through lifecycle leases', async () => {

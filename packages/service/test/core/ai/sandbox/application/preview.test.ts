@@ -17,6 +17,7 @@ import {
   buildSandboxPreviewFileUrl,
   createSandboxPreviewFileUrl,
   createSandboxPreviewSession,
+  getSandboxPreviewSessionRoot,
   resolveSandboxPreviewPath,
   resolveSandboxPreviewSession,
   SandboxPreviewSessionLimitError
@@ -199,6 +200,25 @@ describe('sandbox preview application', () => {
         filePath: '/workspace/index.html'
       })
     ).toThrow('AGENT_SANDBOX_PREVIEW_PROXY_URL environment variable is missing');
+  });
+
+  it('derives Session-scoped preview roots and persists them in new sessions', async () => {
+    expect(
+      getSandboxPreviewSessionRoot({
+        workspaceRoot: '/workspace',
+        sessionWorkDirectory: '/workspace/sessions/chat-1'
+      })
+    ).toBe('sessions/chat-1');
+    expect(
+      getSandboxPreviewSessionRoot({
+        workspaceRoot: '/workspace',
+        sessionWorkDirectory: '/workspace'
+      })
+    ).toBe('.');
+
+    const context = { ...sessionContext, sessionRoot: 'sessions/chat-1' };
+    await createSandboxPreviewSession(context);
+    expect(JSON.parse(String(redisMock.evalScript.mock.calls[0][0].args[2]))).toEqual(context);
   });
 
   it('normalizes relative and workspace absolute paths', () => {

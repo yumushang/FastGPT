@@ -7,13 +7,13 @@ import { Alert } from '@/components/docs/Alert';
 
 ![Virtual Machine Sandbox](/imgs/agent_vm_intro.png)
 
-In FastGPT Agent V2, the **Virtual Machine** is a dedicated, isolated Linux sandbox for each chat session. It gives the Agent a runtime for calculations, code execution, and file operations, so it can solve tasks by running code.
+In FastGPT Agent V2, each app has a shared **Virtual Machine**: a lightweight Linux sandbox. Users of the same app share the sandbox and work in separate Session directories. It gives the Agent a runtime for calculations, code execution, and file operations, so it can solve tasks by running code.
 
 ---
 
 ## What is Virtual Machine
 
-When you toggle the "Enable Computer" option, the system dynamically provisions and binds a dedicated sandbox container for each individual chat session in the background.
+When you toggle the "Enable Computer" option, the system dynamically provisions a shared sandbox container for the app in the background. Each chat Session uses its own working directory under `sessions/<chatId>`.
 
 ![Enable Computer](/imgs/agent_vm_enable.png)
 
@@ -29,14 +29,15 @@ With the virtual machine, the Agent can:
 
 To balance security, latency, and resource footprint across high-concurrency and multi-tenant environments, the system features the following core designs:
 
-### 1. Session-Level Isolation and Lifecycle Management
+### 1. App-Level Sharing and Lifecycle Management
 
-- The virtual machine is tightly coupled with the user's chat session. Different users and sessions run in entirely isolated environments. A future version is planned to use user-level isolation to reduce resource consumption.
-- The system utilizes a keepalive mechanism to sustain active containers. When a session remains idle for too long (for example, several minutes without a new request), the container is automatically collected and destroyed to release host resources.
+- The virtual machine belongs to an app. Users of the same app share CPU, memory, process space, and networking; different apps use separate sandbox instances.
+- A Session directory is a logical workspace boundary, not a Linux user or container security boundary. File management, uploads, downloads, and previews are restricted to the current Session by default, but Shell commands can still access the shared environment. Do not store other users' credentials or sensitive data in a shared sandbox.
+- The system uses keepalive heartbeats to sustain active containers. Activity from any user refreshes the keepalive timer. The sandbox is suspended only after the entire app remains idle for the configured period.
 
 ### 2. Session Persistence
 
-The virtual machine remains active throughout the duration of a chat session. Dependencies downloaded, temporary files written, or environment variables set in the previous turns remain accessible in subsequent turns.
+Dependencies and environment changes from earlier turns remain available throughout the shared virtual machine's lifecycle. Files written to each `sessions/<chatId>` directory also persist across turns.
 
 ### 3. Security Constraints & Escape Prevention
 

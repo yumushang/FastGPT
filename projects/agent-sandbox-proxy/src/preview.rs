@@ -12,7 +12,10 @@ use axum::{
     response::Response,
 };
 
-use crate::{auth::SandboxAddress, error::PreviewError, relay::build_http_preview_url};
+use crate::{
+    auth::SandboxAddress, error::PreviewError, relay::build_http_preview_url,
+    scope::is_path_within_root,
+};
 
 static PREVIEW_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
@@ -57,6 +60,15 @@ pub async fn proxy_preview_file(
         .as_deref()
         .filter(|token| !token.is_empty())
         .ok_or(PreviewError::MissingCredentials("Agent token is missing"))?;
+    if address
+        .allowed_root
+        .as_deref()
+        .is_some_and(|root| !is_path_within_root(path, root))
+    {
+        return Err(PreviewError::InvalidRequest(
+            "Preview path is outside the authorized session".to_string(),
+        ));
+    }
     let target_url = build_http_preview_url(sandbox_url, path)
         .map_err(|err| PreviewError::InvalidRequest(err.to_string()))?;
 
@@ -178,6 +190,7 @@ mod tests {
             &SandboxAddress {
                 sandbox_url: Some(format!("http://{address}/base")),
                 agent_token: Some("agent-password".to_string()),
+                allowed_root: None,
                 ws_limits: Default::default(),
             },
             "dir/file.txt",
@@ -206,6 +219,7 @@ mod tests {
             &SandboxAddress {
                 sandbox_url: None,
                 agent_token: None,
+                allowed_root: None,
                 ws_limits: Default::default(),
             },
             "file.txt",
@@ -239,6 +253,7 @@ mod tests {
             &SandboxAddress {
                 sandbox_url: Some(format!("http://{address}/base")),
                 agent_token: Some("agent-password".to_string()),
+                allowed_root: None,
                 ws_limits: Default::default(),
             },
             "dir/file.txt",
@@ -275,6 +290,7 @@ mod tests {
             &SandboxAddress {
                 sandbox_url: Some(format!("http://{address}/base")),
                 agent_token: Some("agent-password".to_string()),
+                allowed_root: None,
                 ws_limits: Default::default(),
             },
             "dir/file.txt",

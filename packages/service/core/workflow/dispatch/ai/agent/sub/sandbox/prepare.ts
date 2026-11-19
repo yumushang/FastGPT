@@ -26,7 +26,8 @@ import { resolveSandboxHome } from '../../../../../../ai/sandbox/application/run
 import { runAgentSkillVersionEntrypoints } from '../../../../../../ai/sandbox/application/runtime/skill/entrypoint';
 import {
   runSandboxEntrypoint,
-  withAgentSandboxInitLease
+  withAgentSandboxInitLease,
+  withAgentSandboxSessionInitLease
 } from '../../../../../../ai/sandbox/application/runtime/entrypoint';
 import { type SandboxClient } from '../../../../../../ai/sandbox/application/runtime/client';
 import type { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
@@ -96,8 +97,27 @@ export async function ensureAgentSandboxRuntime({
     chatId
   });
   const readInputFile = (url: string) => readWorkflowFileBuffer({ url });
+  const sandboxId = sandboxContext.sandboxClient.getSandboxId();
+
+  // Session 文件准备按 Chat 隔离；entrypoint 仍在这些文件就绪后执行。
+  await withAgentSandboxSessionInitLease({
+    sandboxId,
+    chatId,
+    fn: async () => {
+      await sandboxContext.sandboxClient.provider.createDirectories([sandboxContext.workDirectory]);
+      await injectCurrentInputFiles(
+        currentFiles,
+        readInputFile
+      )({
+        sandbox: sandboxContext.sandboxClient.provider,
+        workDirectory: sandboxContext.workDirectory,
+        workspaceRoot: sandboxContext.workspaceRoot
+      });
+    }
+  });
+
   const preparedContext = await withAgentSandboxInitLease({
-    sandboxId: sandboxContext.sandboxClient.getSandboxId(),
+    sandboxId,
     fn: () => {
       const context = {
         ...sandboxContext,
@@ -111,7 +131,6 @@ export async function ensureAgentSandboxRuntime({
         ? prepareSandbox(
             context,
             preparePackageMirrors(),
-            injectCurrentInputFiles(currentFiles, readInputFile),
             ...prepareActions,
             scanEditDebugSkillInfos()
           )
@@ -123,7 +142,6 @@ export async function ensureAgentSandboxRuntime({
               skillIds,
               selectedSkills
             }),
-            injectCurrentInputFiles(currentFiles, readInputFile),
             ...prepareActions,
             runSandboxEntrypoint({ sandboxEntrypoint }),
             runSelectedSkillEntrypoints(),

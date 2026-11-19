@@ -30,6 +30,7 @@ impl Default for WsLimits {
 pub struct SandboxAddress {
     pub sandbox_url: Option<String>,
     pub agent_token: Option<String>,
+    pub allowed_root: Option<String>,
     #[serde(default)]
     pub ws_limits: WsLimits,
 }

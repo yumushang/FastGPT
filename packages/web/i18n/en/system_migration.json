@@ -135,5 +135,11 @@
   "migrations.20261025_token_prices_per_million.name": "Migrate system model prices to million units",
   "migrations.20261025_token_prices_per_million.description": "Reads system models once and saves pricing in one batch. Token/TTS rates are multiplied by 1000; STT rates are copied unchanged. Preserves root-level prices and skips valid existing pricing. Team models are free. Runs in the background; fix invalid data and retry after a failure.",
   "migrations.20261025_token_prices_per_million.models": "Update system model prices",
-  "migrations.20261025_token_prices_per_million.result": "Migrated {{migratedCount}} system models to pricing. Original prices and team models remain unchanged."
+  "migrations.20261025_token_prices_per_million.result": "Migrated {{migratedCount}} system models to pricing. Original prices and team models remain unchanged.",
+  "migrations.20261118_merge_app_user_sandboxes.name": "Merge user-level App sandboxes",
+  "migrations.20261118_merge_app_user_sandboxes.description": "Merges user-level sandboxes into one shared sandbox per App while preserving Session directories and prioritizing existing target files. Stop all old-version nodes and drain old requests before running. Old instances and archives are retained; repair failures and retry when needed.",
+  "migrations.20261118_merge_app_user_sandboxes.applications": "Merge App sandboxes",
+  "migrations.20261118_merge_app_user_sandboxes.workspaces": "Install historical Session workspaces",
+  "migrations.20261118_merge_app_user_sandboxes.validation": "Validate shared sandbox states",
+  "migrations.20261118_merge_app_user_sandboxes.result": "Processed {{processedAppCount}} Apps and merged {{mergedSourceCount}} user-level workspaces."
 }

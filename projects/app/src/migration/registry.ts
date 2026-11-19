@@ -25,6 +25,7 @@ import { backfillFolderAncestorIds } from './tasks/4173/20261022_backfill_folder
 import { migrateChunkTraining } from './tasks/4171/20261008_migrate_chunk_training';
 import { backfillAgentSandboxTeamId } from './tasks/4173/20261009_backfill_agent_sandbox_team_id';
 import { migrateTokenPricesPerMillion } from './tasks/4173/20261025_token_prices_per_million';
+import { mergeAppUserSandboxMigration } from './tasks/4175/20261118_merge_app_user_sandboxes';
 
 export type SystemMigrationLogger = {
   info: (message: string, metadata?: Record<string, unknown>) => void;
@@ -574,6 +575,34 @@ export const systemMigrations = [
     // 系统模型迁移由全局启动链保证先成功；计价转换随后独立运行，不阻塞业务或普通队列。
     independent: true,
     run: migrateTokenPricesPerMillion
+  },
+  {
+    id: '20261118_merge_app_user_sandboxes',
+    dependsOn: ['20261009_backfill_agent_sandbox_team_id'],
+    version: '4.17.5',
+    nameKey: i18nT('system_migration:migrations.20261118_merge_app_user_sandboxes.name'),
+    descriptionKey: i18nT(
+      'system_migration:migrations.20261118_merge_app_user_sandboxes.description'
+    ),
+    resultKey: i18nT('system_migration:migrations.20261118_merge_app_user_sandboxes.result'),
+    progressSteps: [
+      {
+        key: 'applications',
+        labelKey: i18nT(
+          'system_migration:migrations.20261118_merge_app_user_sandboxes.applications'
+        )
+      },
+      {
+        key: 'workspaces',
+        labelKey: i18nT('system_migration:migrations.20261118_merge_app_user_sandboxes.workspaces')
+      },
+      {
+        key: 'validation',
+        labelKey: i18nT('system_migration:migrations.20261118_merge_app_user_sandboxes.validation')
+      }
+    ],
+    manual: true,
+    run: mergeAppUserSandboxMigration
   }
 ] as const satisfies readonly SystemMigration[];
 

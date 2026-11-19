@@ -4,6 +4,7 @@ import { ChatFileTypeEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/
 const {
   prepareAgentSandboxRuntimeMock,
   withAgentSandboxInitLeaseMock,
+  withAgentSandboxSessionInitLeaseMock,
   injectInputFilesToSandboxMock,
   prepareSandboxRuntimeMirrorsMock,
   runAgentSandboxEntrypointMock,
@@ -18,6 +19,9 @@ const {
 } = vi.hoisted(() => ({
   prepareAgentSandboxRuntimeMock: vi.fn(),
   withAgentSandboxInitLeaseMock: vi.fn(async ({ fn }: { fn: () => Promise<unknown> }) => fn()),
+  withAgentSandboxSessionInitLeaseMock: vi.fn(async ({ fn }: { fn: () => Promise<unknown> }) =>
+    fn()
+  ),
   injectInputFilesToSandboxMock: vi.fn(),
   prepareSandboxRuntimeMirrorsMock: vi.fn(),
   runAgentSandboxEntrypointMock: vi.fn(),
@@ -27,7 +31,7 @@ const {
   syncBuiltinSkillsToSandboxMock: vi.fn(),
   runAgentSkillVersionEntrypointsMock: vi.fn(),
   getAgentSkillInfosMock: vi.fn(),
-  sandboxProviderMock: {},
+  sandboxProviderMock: { createDirectories: vi.fn() },
   sandboxClientMock: {
     provider: {},
     getSandboxId: vi.fn(() => 'sandbox_1')
@@ -77,7 +81,8 @@ vi.mock(
         });
         return context;
       },
-    withAgentSandboxInitLease: withAgentSandboxInitLeaseMock
+    withAgentSandboxInitLease: withAgentSandboxInitLeaseMock,
+    withAgentSandboxSessionInitLease: withAgentSandboxSessionInitLeaseMock
   })
 );
 vi.mock('@fastgpt/service/core/ai/sandbox/application/runtime/home', async (importOriginal) => ({
@@ -173,6 +178,11 @@ describe('ensureAgentSandboxRuntime', () => {
       currentFiles
     });
 
+    expect(withAgentSandboxSessionInitLeaseMock).toHaveBeenCalledWith({
+      sandboxId: 'sandbox_1',
+      chatId: 'chat_1',
+      fn: expect.any(Function)
+    });
     expect(withAgentSandboxInitLeaseMock).toHaveBeenCalledWith({
       sandboxId: 'sandbox_1',
       fn: expect.any(Function)
@@ -202,6 +212,9 @@ describe('ensureAgentSandboxRuntime', () => {
       sandboxProviderMock,
       currentFiles,
       expect.any(Function)
+    );
+    expect(injectInputFilesToSandboxMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runAgentSandboxEntrypointMock.mock.invocationCallOrder[0]
     );
     expect(runAgentSandboxEntrypointMock).toHaveBeenCalledWith({
       sandbox: sandboxProviderMock,
@@ -315,8 +328,8 @@ describe('ensureAgentSandboxRuntime', () => {
     expect(prepareSandboxRuntimeMirrorsMock).toHaveBeenCalledWith({
       sandbox: sandboxProviderMock
     });
-    expect(prepareSandboxRuntimeMirrorsMock.mock.invocationCallOrder[0]).toBeLessThan(
-      injectInputFilesToSandboxMock.mock.invocationCallOrder[0]
+    expect(injectInputFilesToSandboxMock.mock.invocationCallOrder[0]).toBeLessThan(
+      prepareAction.mock.invocationCallOrder[0]
     );
     expect(injectInputFilesToSandboxMock).toHaveBeenCalledWith(
       sandboxProviderMock,

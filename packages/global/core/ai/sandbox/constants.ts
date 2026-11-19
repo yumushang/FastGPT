@@ -33,6 +33,9 @@ export enum SandboxTypeEnum {
 }
 
 // ---- sandboxId 生成 ----
+/** 普通 App Chat 共享物理 Sandbox 时使用的逻辑归属键，不代表真实用户。 */
+export const APP_SHARED_SANDBOX_USER_ID = 'shared';
+
 /** 为 v2 Sandbox 生成带 sourceType 前缀的稳定物理资源 ID。 */
 export const generateSandboxId = ({
   sourceType,

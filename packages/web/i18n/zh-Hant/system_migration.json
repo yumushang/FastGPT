@@ -135,5 +135,11 @@
   "migrations.20261025_token_prices_per_million.name": "遷移系統模型價格至百萬單位",
   "migrations.20261025_token_prices_per_million.description": "背景一次讀取系統模型並批次寫入 pricing，Token/TTS 單價乘以 1000，STT 原價複製；保留根級原值，已有合法 pricing 則跳過。團隊模型不計費，不阻塞啟動；失敗後修復資料並重試。",
   "migrations.20261025_token_prices_per_million.models": "更新系統模型單價",
-  "migrations.20261025_token_prices_per_million.result": "已遷移 {{migratedCount}} 個系統模型至 pricing，舊價格原值和團隊模型保持不變。"
+  "migrations.20261025_token_prices_per_million.result": "已遷移 {{migratedCount}} 個系統模型至 pricing，舊價格原值和團隊模型保持不變。",
+  "migrations.20261118_merge_app_user_sandboxes.name": "歸併 App 使用者級沙箱",
+  "migrations.20261118_merge_app_user_sandboxes.description": "將同一 App 的使用者級沙箱歸併為應用級共享沙箱，保留各 Session 目錄且目標已有檔案優先。執行前必須停止全部舊版本節點並排空舊請求；舊實例與封存會保留，失敗後可修復並重試。",
+  "migrations.20261118_merge_app_user_sandboxes.applications": "歸併 App 沙箱",
+  "migrations.20261118_merge_app_user_sandboxes.workspaces": "安裝歷史 Session 工作區",
+  "migrations.20261118_merge_app_user_sandboxes.validation": "校驗共享沙箱狀態",
+  "migrations.20261118_merge_app_user_sandboxes.result": "已處理 {{processedAppCount}} 個 App，歸併 {{mergedSourceCount}} 個使用者級工作區。"
 }

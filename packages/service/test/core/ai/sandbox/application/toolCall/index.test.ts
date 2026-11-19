@@ -49,7 +49,7 @@ const createSandboxInstance = () =>
       runtimeSkillsRoot: '/workspace/projects',
       sessionWorkDirectory: '/workspace/sessions/chat'
     })),
-    resolveRuntimePath: vi.fn((path: string) =>
+    resolveSessionPath: vi.fn((path: string) =>
       path.startsWith('/') ? path : `/workspace/sessions/chat/${path}`
     ),
     provider: {

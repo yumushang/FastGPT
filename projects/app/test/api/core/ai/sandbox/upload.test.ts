@@ -82,7 +82,7 @@ describe('sandbox upload API', () => {
         createDirectories: mocks.createDirectories,
         writeFiles: mocks.writeFiles
       },
-      resolveRuntimePath: (path: string) => `/workspace/sessions/chat-1/${path}`
+      resolveSessionPath: (path: string) => `/workspace/sessions/chat-1/${path}`
     });
   });
 

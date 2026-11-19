@@ -5,7 +5,7 @@ import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
 const createSandboxInstance = (content: unknown) =>
   ({
     ensureAvailable: vi.fn(async () => undefined),
-    resolveRuntimePath: vi.fn((path: string) =>
+    resolveSessionPath: vi.fn((path: string) =>
       path.startsWith('/') ? path : `/workspace/sessions/chat_1/${path}`
     ),
     provider: {
@@ -21,7 +21,7 @@ const createSandboxInstance = (content: unknown) =>
 const createFailedSandboxInstance = (file: unknown) =>
   ({
     ensureAvailable: vi.fn(async () => undefined),
-    resolveRuntimePath: vi.fn((path: string) => `/workspace/sessions/chat_1/${path}`),
+    resolveSessionPath: vi.fn((path: string) => `/workspace/sessions/chat_1/${path}`),
     provider: {
       readFiles: vi.fn(async () => [file])
     }
@@ -63,9 +63,7 @@ describe('sandboxReadFileTool', () => {
     });
 
     expect(result.response).toBe('# Skill Creator');
-    expect(sandboxInstance.resolveRuntimePath).toHaveBeenCalledWith(path, {
-      allowAbsolutePath: true
-    });
+    expect(sandboxInstance.resolveSessionPath).toHaveBeenCalledWith(path);
     expect(sandboxInstance.provider.readFiles).toHaveBeenCalledWith([path]);
   });
 

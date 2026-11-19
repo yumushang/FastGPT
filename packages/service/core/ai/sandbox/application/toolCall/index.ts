@@ -162,7 +162,7 @@ export const prepareSandboxToolRuntime = async ({
     instance.provider,
     files.map((file) => ({
       ...file,
-      path: instance.resolveRuntimePath(file.path, { allowAbsolutePath: true })
+      path: instance.resolveSessionPath(file.path)
     })),
     readInputFile
   );

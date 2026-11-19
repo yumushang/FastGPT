@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { APP_SHARED_SANDBOX_USER_ID } from '@fastgpt/global/core/ai/sandbox/constants';
 import { getSandboxUserId } from '@fastgpt/service/core/ai/sandbox/utils/id';
 
 describe('sandbox v2 identity', () => {
@@ -9,7 +10,7 @@ describe('sandbox v2 identity', () => {
         sourceType: ChatSourceTypeEnum.app,
         userId: 'user-1'
       })
-    ).toBe('user-1');
+    ).toBe(APP_SHARED_SANDBOX_USER_ID);
     expect(
       getSandboxUserId({
         sourceType: ChatSourceTypeEnum.workflowBuilder,
@@ -44,6 +45,13 @@ describe('sandbox v2 identity', () => {
     });
 
     expect(appSandboxId).toMatch(/^app-[a-f0-9]{16}$/);
+    expect(appSandboxId).toBe(
+      getRunningSandboxId({
+        sourceType: ChatSourceTypeEnum.app,
+        sourceId: 'app-1',
+        userId: 'user-2'
+      })
+    );
     expect(builderSandboxId).toMatch(/^workflowbuilder-[a-f0-9]{16}$/);
     expect(builderSandboxId).not.toBe(appSandboxId);
   });

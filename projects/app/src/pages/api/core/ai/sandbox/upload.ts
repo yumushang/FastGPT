@@ -56,7 +56,7 @@ async function handler(
     })
   );
 
-  const providerPath = sandbox.resolveRuntimePath(path, { allowAbsolutePath: true });
+  const providerPath = sandbox.resolveSessionPath(path);
   await prepareSandboxFileParentDirectories(sandbox.provider, [providerPath]);
 
   const boundedStream = createSizeLimitedStream({

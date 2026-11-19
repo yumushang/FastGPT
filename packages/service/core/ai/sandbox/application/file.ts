@@ -125,7 +125,7 @@ export async function isSandboxPathDirectory(
   sandbox: SandboxClient,
   path: string
 ): Promise<boolean> {
-  const providerPath = sandbox.resolveRuntimePath(path, { allowAbsolutePath: true });
+  const providerPath = sandbox.resolveSessionPath(path);
   const fileInfoMap = await sandbox.provider.getFileInfo([providerPath]);
   const fileInfo = fileInfoMap.get(providerPath);
   return (
@@ -144,7 +144,7 @@ export async function getSandboxFileContent(
   path: string,
   preview?: boolean
 ): Promise<SandboxFileContent> {
-  const providerPath = sandbox.resolveRuntimePath(path, { allowAbsolutePath: true });
+  const providerPath = sandbox.resolveSessionPath(path);
   const results = await sandbox.provider.readFiles([providerPath]);
   const result = results[0];
 
@@ -181,7 +181,7 @@ export async function addDirectoryToArchive(
 ): Promise<void> {
   if (depth > MAX_ARCHIVE_DEPTH) return;
 
-  const providerDirPath = sandbox.resolveRuntimePath(dirPath, { allowAbsolutePath: true });
+  const providerDirPath = sandbox.resolveSessionPath(dirPath);
   const entries = await sandbox.provider.listDirectory(providerDirPath);
 
   for (const entry of entries) {
@@ -190,7 +190,7 @@ export async function addDirectoryToArchive(
     if (entry.isDirectory) {
       await addDirectoryToArchive(sandbox, archive, entry.path, entryArchivePath, depth + 1);
     } else {
-      const providerFilePath = sandbox.resolveRuntimePath(entry.path, { allowAbsolutePath: true });
+      const providerFilePath = sandbox.resolveSessionPath(entry.path);
       archive.append(Readable.from(sandbox.provider.readFileStream(providerFilePath)), {
         name: entryArchivePath
       });

@@ -112,6 +112,22 @@ describe('SandboxClient', () => {
     expect(next.adapter.createDirectories).toHaveBeenCalledTimes(1);
     expect(client.resolveRuntimePath('file.txt')).toContain('/home/devbox/workspace');
   });
+  it('restricts App user files to the current Session while keeping runtime paths flexible', () => {
+    return getSandboxClient(query).then((client) => {
+      expect(client.resolveSessionPath('result.txt')).toBe('/workspace/sessions/chat/result.txt');
+      expect(client.resolveSessionPath('/workspace/sessions/chat/result.txt')).toBe(
+        '/workspace/sessions/chat/result.txt'
+      );
+      expect(() => client.resolveSessionPath('/workspace/sessions/other/result.txt')).toThrow(
+        'Sandbox path is outside session'
+      );
+      expect(
+        client.resolveRuntimePath('/workspace/projects/version/SKILL.md', {
+          allowAbsolutePath: true
+        })
+      ).toBe('/workspace/projects/version/SKILL.md');
+    });
+  });
   it('retries failed directory creation on the next command', async () => {
     const client = await getSandboxClient(query);
     runtime.adapter.createDirectories.mockRejectedValueOnce(new Error('mkdir failed'));

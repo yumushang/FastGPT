@@ -104,7 +104,7 @@ const ensureZipAvailableInSandbox = async (sandbox: ISandbox, signal: AbortSigna
 };
 
 /** 恢复前确保镜像中存在 unzip。 */
-const ensureUnzipAvailableInSandbox = async (sandbox: ISandbox, signal: AbortSignal) => {
+export const ensureUnzipAvailableInSandbox = async (sandbox: ISandbox, signal: AbortSignal) => {
   const command = [
     'if command -v unzip >/dev/null 2>&1; then exit 0; fi',
     'if command -v apt-get >/dev/null 2>&1; then',
@@ -232,7 +232,7 @@ async function createWorkspaceArchive(params: {
   return archiveBuffer;
 }
 
-async function restoreWorkspaceArchive(params: {
+export async function restoreWorkspaceArchive(params: {
   sandbox: ISandbox;
   workDirectory: string;
   sandboxId: string;
@@ -274,6 +274,60 @@ async function restoreWorkspaceArchive(params: {
     throw error;
   });
   logger.info('Sandbox workspace restored from archive', { sandboxId });
+}
+
+/**
+ * 将旧 Sandbox 归档中的 sessions 合并到共享目标。目标已有文件永远优先；
+ * 临时目录用于完整解压，重放时同名文件跳过，因此业务提交前崩溃也可安全续跑。
+ */
+export async function mergeWorkspaceSessionsFromArchive(params: {
+  sandbox: ISandbox;
+  workDirectory: string;
+  sourceSandboxId: string;
+  archiveBody: Buffer;
+  assertValid: () => void;
+  signal: AbortSignal;
+}) {
+  const { sandbox, workDirectory, sourceSandboxId, archiveBody, signal } = params;
+  const stagingName = `.fastgpt-session-merge-${sourceSandboxId}`;
+  const archiveName = `${stagingName}.zip`;
+  const stagingPath = joinSandboxPath(workDirectory, stagingName);
+  const archivePath = joinSandboxPath(workDirectory, archiveName);
+  const quotedWorkDirectory = shellQuote(workDirectory);
+  const quotedStagingPath = shellQuote(stagingPath);
+  const quotedArchivePath = shellQuote(archivePath);
+
+  await runSandboxCommand(
+    sandbox,
+    `rm -rf ${quotedStagingPath} && mkdir -p ${quotedStagingPath} ${shellQuote(
+      joinSandboxPath(workDirectory, 'sessions')
+    )}`,
+    { signal, timeoutMs: SANDBOX_ARCHIVE_DIRECTORY_TIMEOUT_MS }
+  );
+  params.assertValid();
+  const [writeResult] = await sandbox.writeFiles([{ path: archivePath, data: archiveBody }]);
+  if (writeResult.error) {
+    throw new Error(`Failed to write session merge archive: ${writeResult.error.message}`);
+  }
+
+  const mergeCommand = [
+    `unzip -Z -t ${quotedArchivePath} | awk -v max=${getAgentSandboxArchiveMaxBytes()} 'BEGIN { ok=0 } /uncompressed,/ { ok=(($3 + 0) <= max) } END { exit ok ? 0 : 1 }'`,
+    `unzip -Z1 ${quotedArchivePath} | awk 'BEGIN { ok=1 } /^\\// || /(^|\\/)\\.\\.($|\\/)/ { ok=0 } END { exit ok ? 0 : 1 }'`,
+    `if unzip -Z1 ${quotedArchivePath} | grep -q '^sessions/'; then unzip -n -q ${quotedArchivePath} -d ${quotedStagingPath} 'sessions/*'; fi`,
+    `for source in ${quotedStagingPath}/sessions/*; do [ -e "$source" ] || continue; name=\${source##*/}; target=${quotedWorkDirectory}/sessions/"$name"; if [ -e "$target" ]; then cp -a -n "$source/." "$target/"; else mv "$source" "$target"; fi; done`,
+    `rm -rf ${quotedStagingPath} ${quotedArchivePath}`
+  ].join(' && ');
+  params.assertValid();
+  await runSandboxCommand(sandbox, mergeCommand, {
+    signal,
+    timeoutMs: SANDBOX_ARCHIVE_COMMAND_TIMEOUT_MS,
+    maxOutputBytes: 8 * 1024
+  }).catch(async (error) => {
+    params.assertValid();
+    await sandbox.deleteFiles([archivePath]).catch(() => undefined);
+    await sandbox.deleteDirectories([stagingPath]).catch(() => undefined);
+    throw error;
+  });
 }
 
 async function archiveSandboxWithinLease(params: {
@@ -525,7 +579,7 @@ export async function retryStaleArchivingSandboxes(now = new Date()) {
 }
 
 /** 在已持有 restore lifecycle lease 的 step 内准备 volume 并创建恢复 Sandbox。 */
-async function createRestoreSandbox(params: {
+export async function createRestoreSandbox(params: {
   provider: SandboxProviderType;
   sandboxId: string;
   claimName?: string;

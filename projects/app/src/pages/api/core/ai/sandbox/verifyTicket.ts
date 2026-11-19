@@ -19,7 +19,10 @@ import {
 } from '@fastgpt/global/openapi/core/ai/sandbox/api';
 import { serviceEnv } from '@fastgpt/service/env';
 import { ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
-import { resolveSandboxPreviewSession } from '@fastgpt/service/core/ai/sandbox/application/preview';
+import {
+  getSandboxPreviewSessionRoot,
+  resolveSandboxPreviewSession
+} from '@fastgpt/service/core/ai/sandbox/application/preview';
 
 const IDE_AGENT_PORT = 1318;
 const IDE_AGENT_PREVIEW_PORT = 1319;
@@ -79,9 +82,11 @@ async function handler(
 
   const authContext = await (async () => {
     if (typeof headerPreviewSession === 'string') {
+      const sandboxQuery = await resolveSandboxPreviewSession(headerPreviewSession);
       return {
-        sandboxQuery: await resolveSandboxPreviewSession(headerPreviewSession),
-        ideAgentPort: IDE_AGENT_PREVIEW_PORT
+        sandboxQuery,
+        ideAgentPort: IDE_AGENT_PREVIEW_PORT,
+        restrictToSession: sandboxQuery.sessionRoot !== undefined
       };
     }
 
@@ -101,7 +106,8 @@ async function handler(
           userId,
           chatId
         }),
-        ideAgentPort: IDE_AGENT_PORT
+        ideAgentPort: IDE_AGENT_PORT,
+        restrictToSession: sourceType === ChatSourceTypeEnum.app
       };
     } catch {
       throw new Error('Invalid ticket signature');
@@ -116,6 +122,9 @@ async function handler(
   return SandboxVerifyTicketResponseSchema.parse({
     sandbox_url: endpoint.url,
     agent_token: agentPassword,
+    ...(authContext.restrictToSession
+      ? { allowed_root: getSandboxPreviewSessionRoot(sandbox.getRuntimePaths()) }
+      : {}),
     ws_limits: {
       max_message_bytes: serviceEnv.AGENT_SANDBOX_WS_MAX_MESSAGE_BYTES,
       max_frame_bytes: serviceEnv.AGENT_SANDBOX_WS_MAX_FRAME_BYTES

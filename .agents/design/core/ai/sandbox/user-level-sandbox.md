@@ -1,8 +1,11 @@
 # 用户级 Sandbox 最终方案
 
-状态：已实现，作为当前分支唯一技术方案
+状态：历史方案；普通 App 已由应用级共享实例取代，Workflow Builder 与 Skill Edit 仍沿用对应边界
 
-最后核对：2026-10-12
+最后核对：2026-11-18
+
+普通 App 的新身份、Session 限制和用户级实例归并迁移见
+[App 级共享 Sandbox 开发计划](./app-level-shared-sandbox.md)。本文保留历史数据与生命周期设计依据。
 
 ## 1. 目标与范围
 
