@@ -31,6 +31,7 @@ const nodeTypes: Record<FlowNodeTypeEnum, any> = {
   [FlowNodeTypeEnum.emptyNode]: NodeSimple,
   [FlowNodeTypeEnum.globalVariable]: NodeSimple,
   [FlowNodeTypeEnum.textEditor]: NodeSimple,
+  [FlowNodeTypeEnum.skill]: NodeSimple,
   [FlowNodeTypeEnum.customFeedback]: NodeSimple,
   [FlowNodeTypeEnum.systemConfig]: dynamic(() => import('./nodes/NodeSystemConfig')),
   [FlowNodeTypeEnum.pluginConfig]: dynamic(() => import('./nodes/NodePluginIO/NodePluginConfig')),

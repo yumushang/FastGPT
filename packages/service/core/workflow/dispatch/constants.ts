@@ -31,6 +31,7 @@ import { dispatchIfElse } from './tools/runIfElse';
 import { dispatchLafRequest } from './tools/runLaf';
 import { dispatchUpdateVariable } from './tools/runUpdateVar';
 import { dispatchTextEditor } from './tools/textEditor';
+import { dispatchSkill } from './tools/skill';
 import { dispatchRunAgent } from './ai/agent';
 
 export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
@@ -62,6 +63,7 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   [FlowNodeTypeEnum.variableUpdate]: dispatchUpdateVariable,
   [FlowNodeTypeEnum.code]: dispatchCodeSandbox,
   [FlowNodeTypeEnum.textEditor]: dispatchTextEditor,
+  [FlowNodeTypeEnum.skill]: dispatchSkill,
   [FlowNodeTypeEnum.customFeedback]: dispatchCustomFeedback,
   [FlowNodeTypeEnum.readFiles]: dispatchReadFiles,
   [FlowNodeTypeEnum.userSelect]: dispatchUserSelect,
@@ -106,6 +108,7 @@ export const FlowNodeTypeResTextMap: Record<FlowNodeTypeEnum, string> = {
   [FlowNodeTypeEnum.variableUpdate]: 'updateVarResult',
   [FlowNodeTypeEnum.code]: 'customOutputs',
   [FlowNodeTypeEnum.textEditor]: 'textOutput',
+  [FlowNodeTypeEnum.skill]: 'textOutput',
   [FlowNodeTypeEnum.customFeedback]: 'customOutputs',
   [FlowNodeTypeEnum.readFiles]: 'readFiles',
   [FlowNodeTypeEnum.userSelect]: 'userSelectResult',

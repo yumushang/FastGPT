@@ -36,12 +36,14 @@ import { RunToolNode } from './system/runTool';
 import { RunToolSetNode } from './system/runToolSet';
 import { CodeNode } from './system/sandbox';
 import { TextEditorNode } from './system/textEditor';
+import { SkillNode } from './system/skill';
 import { ToolParamsNode } from './system/toolParams';
 import { VariableUpdateNode } from './system/variableUpdate';
 
 const systemNodes: FlowNodeTemplateType[] = [
   AiChatModule,
   TextEditorNode,
+  SkillNode,
   AssignedAnswerModule,
   DatasetSearchModule,
   ClassifyQuestionModule,

@@ -153,6 +153,7 @@ export enum FlowNodeTypeEnum {
   variableUpdate = 'variableUpdate',
   code = 'code',
   textEditor = 'textEditor',
+  skill = 'skill',
   customFeedback = 'customFeedback',
   readFiles = 'readFiles',
   userSelect = 'userSelect',
