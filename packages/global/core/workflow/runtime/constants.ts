@@ -19,6 +19,7 @@ export enum SseResponseEventEnum {
 
   // Agent
   plan = 'plan', // plan response
+  planStatus = 'planStatus', // plan lifecycle status
   stepTitle = 'stepTitle', // step title response
 
   // Sandbox lifecycle

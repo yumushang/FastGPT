@@ -166,6 +166,16 @@ export const WholeResponseContent = ({
           label={t('chat:response.node_name')}
           value={t(activeModule.moduleName as any, activeModule.moduleNameArgs)}
         />
+        {activeModule?.agentPlanStatus && (
+          <Row
+            label={t('chat:response.status')}
+            value={t(
+              (activeModule.agentPlanStatus === 'set_plan'
+                ? 'chat:agent_plan_status_set_plan'
+                : 'chat:agent_plan_status_update_plan') as any
+            )}
+          />
+        )}
         {activeModule?.totalPoints !== undefined && (
           <Row
             label={t('common:support.wallet.usage.Total points')}
@@ -555,6 +565,18 @@ export const WholeResponseContent = ({
 
       {/* tool */}
       <Row label={t('workflow:tool.tool_result')} value={activeModule?.toolRes} />
+
+      {/* plan */}
+      <Row
+        label={t('chat:response.plan_result')}
+        rawDom={
+          activeModule?.agentPlanResult ? (
+            <Box whiteSpace={'pre-wrap'} fontSize={'12px'}>
+              {activeModule.agentPlanResult}
+            </Box>
+          ) : undefined
+        }
+      />
     </Box>
   ) : null;
 };

@@ -7,6 +7,7 @@ import type { ChatItemMiniType } from '@fastgpt/global/core/chat/type';
 import type { ToolCallChildrenInteractive } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import type { LLMModelItemType } from '@fastgpt/global/core/ai/model.schema';
 import type { JSONSchemaInputType } from '@fastgpt/global/core/app/jsonschema';
+import type { AgentPlanType } from '@fastgpt/global/core/ai/agent/type';
 
 export type DispatchToolModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.history]?: ChatItemMiniType[];
@@ -25,11 +26,13 @@ export type DispatchToolModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.aiChatResponseFormat]?: string;
   [NodeInputKeyEnum.aiChatJsonSchema]?: string;
   [NodeInputKeyEnum.useAgentSandbox]?: boolean;
+  [NodeInputKeyEnum.useAgentPlan]?: boolean;
 }> & {
   messages: ChatCompletionMessageParam[];
   toolNodes: ToolNodeItemType[];
   toolModel: LLMModelItemType;
   childrenInteractiveParams?: ToolCallChildrenInteractive['params'];
+  activePlan?: AgentPlanType;
 };
 
 export type ToolNodeItemType = {

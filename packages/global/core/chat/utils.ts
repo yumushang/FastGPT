@@ -12,11 +12,31 @@ import { PublishChannelEnum } from '../../support/outLink/constant';
 import { removeDatasetCiteText } from '../ai/llm/utils';
 import type { WorkflowInteractiveResponseType } from '../workflow/template/system/interactive/type';
 import { ConfirmPlanAgentText } from '../workflow/runtime/constants';
-import type { AgentPlanType } from '../ai/agent/type';
+import type { AgentPlanType, AgentPlanStatusType } from '../ai/agent/type';
 
 export type PlanAskInfo = {
   question: string;
   answer: string;
+};
+
+export const mergePlanSSEValue = (
+  values: AIChatItemValueItemType[],
+  e: {
+    plan?: AgentPlanType;
+    planStatus?: AgentPlanStatusType;
+    responseValueId?: string;
+    stepId?: string;
+  }
+): AIChatItemValueItemType[] => {
+  const patch: Partial<AIChatItemValueItemType> = e.plan
+    ? { plan: e.plan, planStatus: undefined }
+    : { planStatus: e.planStatus };
+  const index = e.responseValueId ? values.findIndex((v) => v.id === e.responseValueId) : -1;
+
+  if (index >= 0) {
+    return [...values.slice(0, index), { ...values[index], ...patch }, ...values.slice(index + 1)];
+  }
+  return [...values, { id: e.responseValueId, stepId: e.stepId, ...patch }];
 };
 
 export const getPlanCallResponseText = ({

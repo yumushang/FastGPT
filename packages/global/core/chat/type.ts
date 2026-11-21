@@ -12,7 +12,7 @@ import { DispatchNodeResponseSchema } from '../workflow/runtime/type';
 import { WorkflowInteractiveResponseTypeSchema } from '../workflow/template/system/interactive/type';
 import type { FlowNodeInputItemType } from '../workflow/type/io';
 import z from 'zod';
-import { AgentPlanSchema } from '../ai/agent/type';
+import { AgentPlanSchema, AgentPlanStatusSchema } from '../ai/agent/type';
 
 export const ChatHistoryItemResSchema = DispatchNodeResponseSchema.extend({
   nodeId: z.string(),
@@ -31,7 +31,8 @@ export const ToolModuleResponseItemSchema = z.object({
   toolAvatar: z.string(),
   params: z.string(),
   response: z.string().nullish(),
-  functionName: z.string()
+  functionName: z.string(),
+  hideInUI: z.boolean().nullish()
 });
 export type ToolModuleResponseItemType = z.infer<typeof ToolModuleResponseItemSchema>;
 
@@ -220,6 +221,7 @@ export const AIChatItemValueSchema = z.object({
   skills: z.array(SkillModuleResponseItemSchema).nullish(),
   interactive: WorkflowInteractiveResponseTypeSchema.optional(),
   plan: AgentPlanSchema.nullish(),
+  planStatus: AgentPlanStatusSchema.nullish(),
   stepTitle: StepTitleItemSchema.nullish(),
 
   /** @deprecated */

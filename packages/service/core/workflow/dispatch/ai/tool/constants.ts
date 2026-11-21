@@ -3,6 +3,7 @@ import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
 import type { ChildResponseItemType } from './type';
 import { SANDBOX_TOOL_NAME } from '@fastgpt/global/core/ai/sandbox/constants';
+import { i18nT } from '../../../../../../web/i18n/utils';
 
 export const getMultiplePrompt = (obj: {
   fileCount: number;
@@ -45,6 +46,36 @@ export const getSandboxToolWorkflowResponse = ({
         id: getNanoid(),
         nodeId: getNanoid(),
         runningTime: durationSeconds
+      }
+    ],
+    flowUsages: [],
+    runTimes: 0
+  };
+};
+
+export const getPlanToolWorkflowResponse = ({
+  callId,
+  operation,
+  message,
+  seconds = 0
+}: {
+  callId: string;
+  operation: 'set_plan' | 'update_plan';
+  message: string;
+  seconds?: number;
+}): ChildResponseItemType => {
+  return {
+    flowResponses: [
+      {
+        moduleName: i18nT('chat:plan_update'),
+        moduleType: FlowNodeTypeEnum.toolCall,
+        moduleLogo: 'core/app/agent/child/plan',
+        agentPlanStatus: operation,
+        agentPlanResult: message,
+        totalPoints: 0,
+        id: callId,
+        nodeId: callId,
+        runningTime: seconds
       }
     ],
     flowUsages: [],

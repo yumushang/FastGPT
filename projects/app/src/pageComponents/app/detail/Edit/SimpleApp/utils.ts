@@ -105,6 +105,10 @@ export const appWorkflow2Form = ({
         node.inputs,
         NodeInputKeyEnum.useAgentSandbox
       );
+      defaultAppForm.aiSettings.useAgentPlan = findInputValueByKey(
+        node.inputs,
+        NodeInputKeyEnum.useAgentPlan
+      );
     } else if (node.flowNodeType === FlowNodeTypeEnum.datasetSearchNode) {
       defaultAppForm.dataset.datasets = findInputValueByKey(
         node.inputs,
@@ -655,6 +659,13 @@ export function form2AppWorkflow(
               value: formData.aiSettings.useAgentSandbox ?? false
             },
             {
+              key: NodeInputKeyEnum.useAgentPlan,
+              renderTypeList: [FlowNodeInputTypeEnum.hidden],
+              label: '',
+              valueType: WorkflowIOValueTypeEnum.boolean,
+              value: formData.aiSettings.useAgentPlan ?? false
+            },
+            {
               key: NodeInputKeyEnum.aiSystemPrompt,
               renderTypeList: [FlowNodeInputTypeEnum.textarea, FlowNodeInputTypeEnum.reference],
               max: 3000,
@@ -736,7 +747,11 @@ export function form2AppWorkflow(
   }
 
   const workflow = (() => {
-    if (data.selectedTools.length > 0 || data.aiSettings.useAgentSandbox)
+    if (
+      data.selectedTools.length > 0 ||
+      data.aiSettings.useAgentSandbox ||
+      data.aiSettings.useAgentPlan
+    )
       return toolTemplates(data);
     if (selectedDatasets.length > 0) return datasetTemplate(data);
     return simpleChatTemplate(data);

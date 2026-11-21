@@ -272,7 +272,7 @@ export const chats2GPTMessages = ({
 
           pendingRuntimeToolResponses.push(...toolResponse);
         }
-        if (value.plan) {
+        if (value.plan && value.plan.source !== 'toolCall') {
           // 查找该 Plan 产生的上下文，组成一个 toolcall
           // 需要跨所有历史消息收集同 planId 的 values（ask 信息可能在之前的 AI 消息中）
           const planId = value.plan.planId;

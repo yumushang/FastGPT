@@ -35,6 +35,7 @@ import type { FlowNodeInputItemType } from '@fastgpt/global/core/workflow/type/i
 import type { McpToolDataType } from '@fastgpt/global/core/app/tool/mcpTool/type';
 import type { JSONSchemaInputType } from '@fastgpt/global/core/app/jsonschema';
 import { getToolConfigStatus } from '@fastgpt/global/core/app/formEdit/utils';
+import { readToolCallActivePlan } from './plan/activePlan';
 
 type Response = DispatchNodeResultType<{
   [NodeOutputKeyEnum.answerText]: string;
@@ -61,7 +62,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       fileUrlList: fileLinks,
       aiChatVision,
       aiChatReasoning,
-      isResponseAnswerText = true
+      isResponseAnswerText = true,
+      useAgentPlan
     }
   } = props;
 
@@ -225,6 +227,7 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
         toolNodes,
         toolModel,
         messages: adaptMessages,
+        activePlan: useAgentPlan ? readToolCallActivePlan({ histories }) : undefined,
         childrenInteractiveParams:
           lastInteractive?.type === 'toolChildrenInteractive' ? lastInteractive.params : undefined
       });
@@ -284,7 +287,9 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       ),
       [DispatchNodeResponseKeyEnum.assistantResponses]: isResponseAnswerText
         ? previewAssistantResponses
-        : undefined,
+        : useAgentPlan
+          ? previewAssistantResponses.filter((item) => item.plan)
+          : undefined,
       [DispatchNodeResponseKeyEnum.nodeResponse]: {
         // 展示的积分消耗
         totalPoints: totalPointsUsage,

@@ -468,6 +468,8 @@
   "upload_file_max_amount_tip": "單輪對話中最大上傳檔案數量",
   "upload_method": "上傳方式",
   "url_upload": "文件鏈接",
+  "use_agent_plan": "計畫",
+  "use_agent_plan_desc": "開啟後，AI 可先制定任務計畫再逐步執行，並在聊天中展示計畫進度。",
   "use_agent_sandbox": "虛擬機",
   "use_computer_desc": "開啟後，AI 將獲得一個虛擬機器環境，執行指令、操作檔案、執行程式碼。\n每个会话共享一个虚拟机环境。",
   "used_points": "積分用量：",

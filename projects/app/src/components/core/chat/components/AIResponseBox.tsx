@@ -8,7 +8,8 @@ import {
   Box,
   Button,
   Flex,
-  HStack
+  HStack,
+  SkeletonText
 } from '@chakra-ui/react';
 import type {
   AIChatItemValueItemType,
@@ -55,6 +56,51 @@ const accordionButtonStyle = {
   pr: 2.5,
   _hover: {
     bg: 'auto'
+  }
+};
+
+const planStepStatusStyle: Record<
+  NonNullable<AgentPlanType['steps'][number]['status']>,
+  { dot: string; line?: string }
+> = {
+  pending: {
+    dot: 'myGray.300'
+  },
+  in_progress: {
+    dot: 'blue.500',
+    line: 'blue.200'
+  },
+  done: {
+    dot: 'green.500'
+  },
+  blocked: {
+    dot: 'red.500'
+  },
+  skipped: {
+    dot: 'orange.400'
+  }
+};
+
+const planStepPulseAfterStyle = {
+  content: '""',
+  position: 'absolute',
+  inset: '-6px',
+  borderRadius: 'full',
+  border: '2px solid',
+  borderColor: 'blue.300',
+  animation: 'planStepPulse 1.4s ease-out infinite'
+};
+
+const planStepPulseSx = {
+  '@keyframes planStepPulse': {
+    '0%': {
+      transform: 'scale(0.45)',
+      opacity: 0.75
+    },
+    '100%': {
+      transform: 'scale(1.4)',
+      opacity: 0
+    }
   }
 };
 
@@ -344,8 +390,6 @@ const RenderPaymentPauseInteractive = React.memo(function RenderPaymentPauseInte
   );
 });
 const RenderPlan = React.memo(function RenderPlan({ plan }: { plan: AgentPlanType }) {
-  const { t } = useTranslation();
-
   return (
     <Box border={'base'} bg={'white'} overflow={'hidden'} borderRadius={'md'} w={'full'}>
       <Flex alignItems={'center'} px={4} py={3} bg={'myGray.50'} borderBottom={'base'}>
@@ -356,36 +400,95 @@ const RenderPlan = React.memo(function RenderPlan({ plan }: { plan: AgentPlanTyp
       </Flex>
       <Box px={4} py={4}>
         <Flex direction="column" gap={0}>
-          {plan.steps.map((step, index) => (
-            <Flex key={step.id} gap={3} position="relative">
-              {/* Left side: dot and line */}
-              <Flex direction="column" alignItems="center" position="relative">
-                {/* Dot */}
+          {plan.steps.map((step, index) => {
+            const style = step.status ? planStepStatusStyle[step.status] : undefined;
+
+            return (
+              <Flex key={step.id} gap={3} position="relative">
+                {/* Left side: dot and line */}
+                <Flex direction="column" alignItems="center" position="relative">
+                  {/* Dot */}
+                  <Box
+                    w="10px"
+                    h="10px"
+                    borderRadius="full"
+                    border="2px solid"
+                    borderColor={style?.dot ?? 'primary.600'}
+                    bg={style?.dot ?? 'transparent'}
+                    flexShrink={0}
+                    mt={1.5}
+                    position="relative"
+                    _after={step.status === 'in_progress' ? planStepPulseAfterStyle : undefined}
+                    sx={step.status === 'in_progress' ? planStepPulseSx : undefined}
+                  />
+                  {/* Connecting line */}
+                  {index < plan.steps.length - 1 && (
+                    <Box
+                      w="1.5px"
+                      h="100%"
+                      bg={style?.line ?? 'myGray.250'}
+                      mb={-1}
+                      flexGrow={1}
+                      minH="20px"
+                    />
+                  )}
+                </Flex>
+
+                {/* Right side: content */}
+                <Box flex={1} pb={index < plan.steps.length - 1 ? 3 : 0}>
+                  <Box fontSize="sm" fontWeight="medium" color="myGray.900">
+                    {step.title}
+                  </Box>
+                  {step.description && (
+                    <Box fontSize="xs" mt={1} color="myGray.500">
+                      {step.description}
+                    </Box>
+                  )}
+                </Box>
+              </Flex>
+            );
+          })}
+        </Flex>
+      </Box>
+    </Box>
+  );
+});
+const RenderPlanStatus = React.memo(function RenderPlanStatus({
+  planStatus
+}: {
+  planStatus: NonNullable<AIChatItemValueItemType['planStatus']>;
+}) {
+  const { t } = useTranslation();
+  const title =
+    planStatus.status === 'updating'
+      ? t('chat:agent_plan_updating')
+      : t('chat:agent_plan_generating');
+
+  return (
+    <Box border={'base'} bg={'white'} overflow={'hidden'} borderRadius={'md'} w={'full'}>
+      <Flex alignItems={'center'} px={4} py={3} bg={'myGray.50'} borderBottom={'base'}>
+        <Box fontWeight={'bold'} fontSize={'sm'} color={'myGray.700'}>
+          {title}
+        </Box>
+      </Flex>
+      <Box px={4} py={4}>
+        <Flex direction="column" gap={4}>
+          {[0, 1, 2].map((item) => (
+            <Flex key={item} gap={3}>
+              <Flex direction="column" alignItems="center">
                 <Box
                   w="10px"
                   h="10px"
                   borderRadius="full"
                   border="2px solid"
-                  borderColor="primary.600"
-                  flexShrink={0}
+                  borderColor="myGray.200"
+                  bg="white"
                   mt={1.5}
                 />
-                {/* Connecting line */}
-                {index < plan.steps.length - 1 && (
-                  <Box w="1.5px" h="100%" bg="myGray.250" mb={-1} flexGrow={1} minH="20px" />
-                )}
+                {item < 2 && <Box w="1.5px" h="34px" bg="myGray.200" mt={1} />}
               </Flex>
-
-              {/* Right side: content */}
-              <Box flex={1} pb={index < plan.steps.length - 1 ? 3 : 0}>
-                <Box fontSize="sm" fontWeight="medium" color="myGray.900">
-                  {step.title}
-                </Box>
-                {step.description && (
-                  <Box fontSize="xs" mt={1} color="myGray.500">
-                    {step.description}
-                  </Box>
-                )}
+              <Box flex={1} minW={0}>
+                <SkeletonText noOfLines={2} spacing={2} skeletonHeight="10px" />
               </Box>
             </Flex>
           ))}
@@ -472,7 +575,7 @@ const AIResponseBox = ({
 }) => {
   const showRunningStatus = useContextSelector(ChatItemContext, (v) => v.showRunningStatus);
   const showSkillReferences = useContextSelector(ChatItemContext, (v) => v.showSkillReferences);
-  const tools = value.tool ? [value.tool] : value.tools;
+  const tools = (value.tool ? [value.tool] : value.tools)?.filter((tool) => !tool.hideInUI);
   const disableStreamingInteraction = isChatting && isLastChild;
   const skills = value.skills;
   const responseNodes: React.ReactNode[] = [];
@@ -551,6 +654,9 @@ const AIResponseBox = ({
     if (interactive.type === 'paymentPause') {
       return <RenderPaymentPauseInteractive interactive={interactive} />;
     }
+  }
+  if ('planStatus' in value && value.planStatus) {
+    return <RenderPlanStatus planStatus={value.planStatus} />;
   }
   if ('plan' in value && value.plan) {
     return <RenderPlan plan={value.plan} />;

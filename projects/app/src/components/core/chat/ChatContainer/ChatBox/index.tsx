@@ -59,7 +59,7 @@ import { useContextSelector } from 'use-context-selector';
 import { useSystem } from '@fastgpt/web/hooks/useSystem';
 import { useCreation, useDebounceEffect, useMemoizedFn, useThrottleFn } from 'ahooks';
 import MyIcon from '@fastgpt/web/components/common/Icon';
-import { mergeChatResponseData } from '@fastgpt/global/core/chat/utils';
+import { mergeChatResponseData, mergePlanSSEValue } from '@fastgpt/global/core/chat/utils';
 import { getWebReqUrl } from '@fastgpt/web/common/system/utils';
 import { ChatRecordContext } from '@/web/core/chat/context/chatRecordContext';
 import { ChatContext } from '@/web/core/chat/context/chatContext';
@@ -107,6 +107,7 @@ const shouldCreateResumeAiPlaceholder = (event: SseResponseEventEnum) => {
     SseResponseEventEnum.toolResponse,
     SseResponseEventEnum.interactive,
     SseResponseEventEnum.plan,
+    SseResponseEventEnum.planStatus,
     SseResponseEventEnum.stepTitle,
     SseResponseEventEnum.workflowDuration
   ].includes(event);
@@ -349,6 +350,7 @@ const ChatBox = ({
       tool,
       interactive,
       plan,
+      planStatus,
       stepId,
       stepTitle,
       sandboxStatus,
@@ -543,17 +545,13 @@ const ChatBox = ({
           }
 
           // Agent
-          if (event === SseResponseEventEnum.plan && plan) {
+          if (
+            (event === SseResponseEventEnum.plan && plan) ||
+            (event === SseResponseEventEnum.planStatus && planStatus)
+          ) {
             return {
               ...item,
-              value: [
-                ...item.value,
-                {
-                  id: responseValueId,
-                  stepId,
-                  plan
-                }
-              ]
+              value: mergePlanSSEValue(item.value, { plan, planStatus, responseValueId, stepId })
             };
           }
           if (event === SseResponseEventEnum.stepTitle && stepTitle) {
@@ -663,7 +661,7 @@ const ChatBox = ({
       if (item.text?.content) return true;
       if (item.reasoning?.content) return true;
       if (item.tool?.params || item.tool?.response) return true;
-      if (item.plan || item.stepTitle || item.interactive) return true;
+      if (item.plan || item.planStatus || item.stepTitle || item.interactive) return true;
       return false;
     });
   });

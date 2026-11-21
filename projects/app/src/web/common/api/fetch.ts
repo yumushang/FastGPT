@@ -97,6 +97,10 @@ type ResponseQueueItemType = CommonResponseType &
         plan: AgentPlanType;
       }
     | {
+        event: SseResponseEventEnum.planStatus;
+        planStatus: { status: 'generating' | 'updating' };
+      }
+    | {
         event: SseResponseEventEnum.stepTitle;
         stepTitle: StepTitleItemType;
       }
@@ -133,6 +137,7 @@ function handleEventSourceData(params: HandleEventSourceDataParams) {
       case SseResponseEventEnum.toolResponse:
       case SseResponseEventEnum.interactive:
       case SseResponseEventEnum.plan:
+      case SseResponseEventEnum.planStatus:
       case SseResponseEventEnum.stepTitle:
       case SseResponseEventEnum.skillCall: {
         enqueue({ responseValueId, stepId, event, ...obj });

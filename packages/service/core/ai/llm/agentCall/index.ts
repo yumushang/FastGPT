@@ -37,6 +37,8 @@ type RunAgentCallProps = {
   userKey?: CreateLLMResponseProps['userKey'];
 
   childrenInteractiveParams?: ToolCallChildrenInteractive['params'];
+  // 控制工具（如 plan）：纯控制工具轮不计入连续工具调用强制回答计数
+  controlToolNames?: string[];
   // LLM 压缩后回调
   onCompressContext?: (usage: {
     modelName: string;
@@ -120,6 +122,7 @@ export const runAgentCall = async ({
 
   onCompressContext,
   childrenInteractiveParams,
+  controlToolNames,
   handleInteractiveTool,
   handleToolResponse,
   onToolCompress,
@@ -298,7 +301,10 @@ export const runAgentCall = async ({
       return Promise.reject(responseEmptyTip);
     }
     if (toolCalls.length) {
-      consecutiveRequestToolTimes++;
+      const pureControlTurn =
+        !!controlToolNames?.length &&
+        toolCalls.every((call) => controlToolNames.includes(call.function.name));
+      if (!pureControlTurn) consecutiveRequestToolTimes++;
     }
     if (answer) {
       consecutiveRequestToolTimes = 0;

@@ -23,7 +23,7 @@ export const filterToolResponseToPreview = (response: AIChatItemValueItemType[])
       const formatTools = item.tools?.map((tool) => {
         return {
           ...tool,
-          response: sliceStrStartEnd(tool.response, 500, 500)
+          response: tool.hideInUI ? tool.response : sliceStrStartEnd(tool.response, 500, 500)
         };
       });
       return {

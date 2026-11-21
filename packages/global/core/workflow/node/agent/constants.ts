@@ -6,6 +6,7 @@ import {
   SANDBOX_SHELL_TOOL
 } from '../../../ai/sandbox/constants';
 import type { I18nStringType } from '../../../../common/i18n/type';
+import { setPlanToolName, updatePlanToolName } from '../../../ai/agent/constants';
 import { skillToolsMap } from './skillTools';
 
 export enum SubAppIds {
@@ -77,6 +78,24 @@ export const systemSubInfo: Record<
     },
     avatar: 'core/workflow/template/agent',
     toolDescription: '调用 LLM 模型完成一些通用任务。'
+  },
+  [setPlanToolName]: {
+    name: {
+      'zh-CN': '设置计划',
+      'zh-Hant': '設定計畫',
+      en: 'Set plan'
+    },
+    avatar: 'core/app/agent/child/plan',
+    toolDescription: 'Create the active plan for a complex task.'
+  },
+  [updatePlanToolName]: {
+    name: {
+      'zh-CN': '更新计划',
+      'zh-Hant': '更新計畫',
+      en: 'Update plan'
+    },
+    avatar: 'core/app/agent/child/plan',
+    toolDescription: 'Maintain an existing active plan.'
   },
   ...skillToolsMap
 };

@@ -24,10 +24,19 @@ import {
   SANDBOX_GET_FILE_URL_TOOL_NAME,
   SANDBOX_TOOLS
 } from '@fastgpt/global/core/ai/sandbox/constants';
-import { getSandboxToolWorkflowResponse } from './constants';
+import { getSandboxToolWorkflowResponse, getPlanToolWorkflowResponse } from './constants';
 import { callSandboxTool } from '../../../../ai/sandbox/toolCall';
 import { systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
+import { getNanoid } from '@fastgpt/global/common/string/tools';
+import {
+  applySetPlan,
+  applyPlanUpdate,
+  createPlanAgentTools,
+  setPlanToolName,
+  updatePlanToolName
+} from './plan';
+import { compactToolCallPlanResponses } from './plan/assistantResponses';
 
 type ResponseType = {
   requestIds: string[];
@@ -71,7 +80,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       aiChatJsonSchema,
       aiChatReasoning,
       isResponseAnswerText = true,
-      useAgentSandbox
+      useAgentSandbox,
+      useAgentPlan
     }
   } = workflowProps;
 
@@ -134,6 +144,15 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     }
   }
 
+  // 注入 plan 控制工具（引导词在工具 description 内）
+  if (useAgentPlan) {
+    tools.push(...createPlanAgentTools());
+  }
+  const planValueId = getNanoid();
+  let activePlan = props.activePlan;
+  const isPlanToolName = (name?: string) =>
+    !!useAgentPlan && (name === setPlanToolName || name === updatePlanToolName);
+
   const getToolInfo = (name: string) => {
     const systemTool = systemSubInfo[name];
     if (systemTool) {
@@ -184,6 +203,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       useVision: aiChatVision
     },
     childrenInteractiveParams,
+    controlToolNames: useAgentPlan ? [setPlanToolName, updatePlanToolName] : undefined,
     userKey: externalProvider.openaiAccount,
     isAborted: checkIsStopping,
     usagePush,
@@ -206,6 +226,18 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       });
     },
     onToolCall({ call }) {
+      if (isPlanToolName(call.function.name)) {
+        workflowStreamResponse?.({
+          id: planValueId,
+          event: SseResponseEventEnum.planStatus,
+          data: {
+            planStatus: {
+              status: call.function.name === setPlanToolName ? 'generating' : 'updating'
+            }
+          }
+        });
+        return;
+      }
       if (!isResponseAnswerText) return;
       const toolNode = getToolInfo(call.function.name);
       if (toolNode) {
@@ -225,6 +257,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       }
     },
     onToolParam({ tool, params }) {
+      if (isPlanToolName(tool.function.name)) return;
       if (!isResponseAnswerText) return;
       workflowStreamResponse?.({
         id: tool.id,
@@ -250,6 +283,33 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         interactive,
         stop
       } = await (async () => {
+        // 拦截 plan 控制工具调用
+        if (isPlanToolName(call.function?.name)) {
+          const args = parseJsonArgs(call.function.arguments);
+          const result =
+            call.function.name === setPlanToolName
+              ? applySetPlan({ input: args })
+              : applyPlanUpdate({ plan: activePlan, update: args });
+
+          if (result.success) {
+            activePlan = result.plan;
+          }
+          toolRunResponses.push(
+            getPlanToolWorkflowResponse({
+              callId: call.id,
+              operation: call.function.name as 'set_plan' | 'update_plan',
+              message: result.message
+            })
+          );
+          if (result.success) {
+            workflowStreamResponse?.({
+              id: planValueId,
+              event: SseResponseEventEnum.plan,
+              data: { plan: result.plan }
+            });
+          }
+          return { response: result.message };
+        }
         // 拦截 sandbox 工具调用
         if (
           call.function?.name === SANDBOX_TOOL_NAME ||
@@ -315,7 +375,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         }
       })();
 
-      if (isResponseAnswerText) {
+      if (isResponseAnswerText && !isPlanToolName(call.function?.name)) {
         workflowStreamResponse?.({
           id: call.id,
           event: SseResponseEventEnum.toolResponse,
@@ -403,6 +463,10 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     .map((item) => item.value as AIChatItemValueItemType[])
     .flat();
 
+  const finalAssistantResponses = useAgentPlan
+    ? compactToolCallPlanResponses({ assistantResponses, finalPlan: activePlan })
+    : assistantResponses;
+
   return {
     requestIds,
     error,
@@ -411,7 +475,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     toolCallOutputTokens: outputTokens,
     toolCallTotalPoints: llmTotalPoints,
     completeMessages,
-    assistantResponses,
+    assistantResponses: finalAssistantResponses,
     finish_reason,
     toolWorkflowInteractiveResponse: interactiveResponse
   };

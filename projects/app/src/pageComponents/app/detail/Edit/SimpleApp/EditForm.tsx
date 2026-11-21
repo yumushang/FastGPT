@@ -289,6 +289,29 @@ const EditForm = ({
           </Flex>
         </Box>
 
+        {/* Use Plan */}
+        <Box {...BoxStyles}>
+          <Flex alignItems={'center'}>
+            <Flex alignItems={'center'} flex={1}>
+              <MyIcon name={'core/app/agent/child/plan'} w={'20px'} />
+              <FormLabel ml={2}>{t('app:use_agent_plan')}</FormLabel>
+              <QuestionTip ml={1} label={t('app:use_agent_plan_desc')} />
+            </Flex>
+            <Switch
+              isChecked={appForm.aiSettings.useAgentPlan ?? false}
+              onChange={(e) => {
+                setAppForm((state) => ({
+                  ...state,
+                  aiSettings: {
+                    ...state.aiSettings,
+                    useAgentPlan: e.target.checked
+                  }
+                }));
+              }}
+            />
+          </Flex>
+        </Box>
+
         {/* tool choice */}
         <Box {...BoxStyles}>
           <ToolSelect

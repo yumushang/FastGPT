@@ -174,6 +174,7 @@ export enum NodeInputKeyEnum {
   datasetParams = 'agent_datasetParams',
   skills = 'skills',
   useAgentSandbox = 'useAgentSandbox',
+  useAgentPlan = 'useAgentPlan',
   useEditDebugSandbox = 'useEditDebugSandbox',
 
   // dataset

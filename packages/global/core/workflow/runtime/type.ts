@@ -210,6 +210,13 @@ export const DispatchNodeResponseSchema = z
       .meta({ description: '上下文预览' }), // completion context array. history will slice
     finishReason: CompletionFinishReasonSchema.optional(),
 
+    // plan (toolCall)
+    agentPlanStatus: z
+      .enum(['set_plan', 'update_plan'])
+      .optional()
+      .meta({ description: '计划操作类型' }),
+    agentPlanResult: z.string().optional().meta({ description: '计划工具响应文本' }),
+
     // dataset search
     embeddingModel: z.string().optional().meta({ description: '嵌入模型' }),
     embeddingTokens: z.number().optional().meta({ description: '嵌入 token' }),
