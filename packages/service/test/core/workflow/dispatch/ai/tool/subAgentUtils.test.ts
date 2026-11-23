@@ -96,6 +96,14 @@ describe('buildToolPoolCatalog / splitPoolForLLM', () => {
     expect(off.llmToolNodes.length).toBe(2);
     expect(off.catalog).toBe('');
   });
+
+  it('visibleToMain tools stay callable by main node in poolMode', () => {
+    const finished = { ...tool('idC', '成品报告'), visibleToMain: true };
+    const active = splitPoolForLLM([sub, t1, finished], true);
+    expect(active.llmToolNodes.map((t) => t.nodeId)).toEqual(['sub1', 'idC']);
+    expect(active.catalog).toContain('idA');
+    expect(active.catalog).not.toContain('成品报告');
+  });
 });
 
 describe('restoreToolStartParams', () => {

@@ -83,6 +83,7 @@ export const buildToolPoolCatalog = (hiddenPool: ToolNodeItemType[]): string => 
 
   return `## 工具池目录（委派追加用）
 子代理已自带其域内工具。需要跨域工具时，调用子代理工具并通过 toolWhitelist 参数按名称追加；留空则子代理仅用自带工具。
+目录中的工具仅能经子代理白名单使用；已直接出现在你工具列表中的工具（含声明直出的成品工具）可直接调用，成品工具调用后用户将直接收到其原文，你无需总结或添加开场白。
 
 ${lines.join('\n')}
 
@@ -104,8 +105,11 @@ export const splitPoolForLLM = (
   const active = poolMode && subAgents.length > 0;
   if (!active) return { llmToolNodes: toolNodes, catalog: '' };
 
-  const hidden = toolNodes.filter((t) => t.flowNodeType !== FlowNodeTypeEnum.subAgent);
-  return { llmToolNodes: subAgents, catalog: buildToolPoolCatalog(hidden) };
+  const isVisible = (t: ToolNodeItemType) =>
+    t.flowNodeType === FlowNodeTypeEnum.subAgent || t.visibleToMain === true;
+  const visible = toolNodes.filter(isVisible);
+  const hidden = toolNodes.filter((t) => !isVisible(t));
+  return { llmToolNodes: visible, catalog: buildToolPoolCatalog(hidden) };
 };
 
 export const restoreToolStartParams = (

@@ -32,6 +32,14 @@ export const SkillNode: FlowNodeTemplateType = {
       required: true,
       label: i18nT('workflow:skill_content'),
       placeholder: i18nT('workflow:skill_content_placeholder')
+    },
+    {
+      key: NodeInputKeyEnum.visibleToMain,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false,
+      label: i18nT('app:visible_to_main'),
+      description: i18nT('app:visible_to_main_desc')
     }
   ],
   outputs: [

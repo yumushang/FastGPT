@@ -180,6 +180,7 @@ export enum NodeInputKeyEnum {
   toolWhitelist = 'toolWhitelist',
   inheritCallerModel = 'inheritCallerModel',
   directOutput = 'directOutput',
+  visibleToMain = 'visibleToMain',
 
   // dataset
   datasetSelectList = 'datasets',

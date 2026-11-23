@@ -13,6 +13,7 @@
 - 主节点调用时传 `toolWhitelist`（名称数组），从主节点工具池按名追加跨域工具（id 精确优先，名称大小写不敏感，重名全给）。
 - **空 whitelist = 仅自身边工具**（弱主模型兜底闭合）；零命中不硬错（misses 提示并入 system）；自身边与追加均空才报错列可用名称。
 - 主节点 `toolPoolMode` 开关（默认关）：主 LLM tools 仅子代理类工具，隐藏池以紧凑目录（名称+id+简介截断80）注入 system prompt；无子代理连接时退化关闭。
+- **可见性开关 `visibleToMain`**（工具节点输入，默认关，技能/应用节点模板自带）：poolMode 下开启的工具保留在主 LLM 工具列表，可被直调——成品工具直调通道（配合 directOutput 默认 true 实现"主节点直调报告工具、原文直出、无总结轮"）。修复背景：原 poolMode 隐藏一切非子代理工具，导致主节点无法直调成品应用工具、被迫委派子代理再二次总结。
 - 池逐层透传：`parentToolNodes`=调用方全池（childToolPool），孙代理继承同一池，白名单单调收窄。
 
 ### 参数由主节点掌控
@@ -92,5 +93,6 @@ Tier 3 不委派：关 poolMode → 主节点直调池工具（现状兜底）
 - [x] 单测 29/29（utils/dispatch/toolCall 三层）
 - [x] 全量测试 + lint + typecheck（global 1588/1588、app 590/591、service 1754/1755；2 个失败为既有环境问题：Node24 rmdir recursive、zustand localStorage mock；lint 0 错误、typecheck 通过）
 - [x] E2E 12/12（本地隔离栈 + mock LLM）：poolMode 主 tools=2 隐藏池、白名单追加 own2+pool1=3、弱主仅任务→自身边 1 工具、直出钩子主仅 1 轮+子终答 fastAnswer 原样直达、无总结；画布：子代理节点渲染（跟随模型/计划/history=0/工具参数表）、工具池模式开关、9 条连线、面板入口
+- [x] visibleToMain 可见性开关（poolMode 成品直调通道）：单测 49/49；技能库中心维护形态暂缓（用户决策）
 - 注：入口豁免与深度逻辑在 runWorkflow 内部，由 E2E 覆盖（非单测）
 - E2E 环境要点：API 登录需 preLogin code + sha256 密码 + fastgpt_token cookie；新 Mongo 需插 team_subscriptions 默认 standard 文档；内置浏览器旧页面水合损坏时关闭开新页即恢复

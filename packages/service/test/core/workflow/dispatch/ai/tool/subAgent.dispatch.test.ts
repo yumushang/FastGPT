@@ -328,4 +328,32 @@ describe('dispatchRunTools poolMode (main node)', () => {
     await dispatchRunTools(props as any);
     expect(captured[0].toolNodes.length).toBe(2);
   });
+
+  it('visibleToMain finished tool stays in main tools and out of catalog', async () => {
+    const finished = {
+      ...rtTool('idC', '成品报告'),
+      inputs: [
+        ...rtTool('idC', '成品报告').inputs,
+        { key: 'visibleToMain', renderTypeList: ['switch'], valueType: 'boolean', value: true },
+        { key: 'directOutput', renderTypeList: ['switch'], valueType: 'boolean', value: true }
+      ]
+    };
+    const props = baseProps({
+      runtimeNodes: [sub, t1, finished],
+      runtimeEdges: [toolEdge('node1', 'sub1'), toolEdge('node1', 'idA'), toolEdge('node1', 'idC')],
+      params: {
+        model: 'm',
+        systemPrompt: '主提示词',
+        userChatInput: '问题',
+        history: 6,
+        toolPoolMode: true
+      }
+    });
+    await dispatchRunTools(props as any);
+    const p = captured[0];
+    expect(p.toolNodes.map((t: any) => t.nodeId)).toEqual(['sub1', 'idC']);
+    const sys = systemContent(p);
+    expect(sys).toContain('名称: 财务:报销 | id: idA');
+    expect(sys).not.toContain('成品报告');
+  });
 });

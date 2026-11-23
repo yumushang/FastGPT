@@ -51,6 +51,8 @@ export type ToolNodeItemType = {
 
   jsonSchema?: JSONSchemaInputType;
   toolParams: RuntimeNodeItemType['inputs'];
+  // 工具池模式下仍保留在主节点 LLM 工具列表（成品工具直调通道）
+  visibleToMain?: boolean;
 };
 
 export type ChildResponseItemType = {

@@ -28,6 +28,14 @@ export const RunAppNode: FlowNodeTemplateType = {
       description: i18nT('app:direct_output_desc'),
       toolDescription:
         'Output mode hook. true = send this workflow final answer to the user verbatim as the complete reply and end the loop (use ONLY for finished-product outputs, e.g. a pre-built workflow formatted reply). false/omit = result returns to you for integration (default).'
+    },
+    {
+      key: NodeInputKeyEnum.visibleToMain,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false,
+      label: i18nT('app:visible_to_main'),
+      description: i18nT('app:visible_to_main_desc')
     }
   ],
   outputs: []

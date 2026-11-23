@@ -134,7 +134,9 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
             intro: tool.intro,
             toolDescription: tool.toolDescription,
             jsonSchema: tool.jsonSchema,
-            toolParams
+            toolParams,
+            visibleToMain:
+              tool.inputs.find((i) => i.key === NodeInputKeyEnum.visibleToMain)?.value === true
           };
         });
     };
