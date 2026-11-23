@@ -113,6 +113,14 @@ export const ToolCallNode: FlowNodeTemplateType = {
       value: false
     },
     {
+      key: NodeInputKeyEnum.toolPoolMode,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:tool_pool_mode'),
+      description: i18nT('app:tool_pool_mode_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: false
+    },
+    {
       ...Input_Template_System_Prompt,
       label: i18nT('common:core.ai.Prompt'),
       description: systemPromptTip,

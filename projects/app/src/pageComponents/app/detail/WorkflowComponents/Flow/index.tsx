@@ -53,6 +53,7 @@ const nodeTypes: Record<FlowNodeTypeEnum, any> = {
   [FlowNodeTypeEnum.stopTool]: NodeStopTool,
   [FlowNodeTypeEnum.agent]: dynamic(() => import('./nodes/NodeAgent')),
   [FlowNodeTypeEnum.toolCall]: dynamic(() => import('./nodes/NodeToolCall')),
+  [FlowNodeTypeEnum.subAgent]: dynamic(() => import('./nodes/NodeSubAgent')),
   [FlowNodeTypeEnum.tool]: NodeSimple,
   [FlowNodeTypeEnum.toolSet]: dynamic(() => import('./nodes/NodeToolSet')),
   [FlowNodeTypeEnum.toolParams]: dynamic(() => import('./nodes/NodeToolParams')),

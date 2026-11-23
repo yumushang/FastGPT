@@ -1,5 +1,9 @@
 import { NodeInputKeyEnum, NodeOutputKeyEnum } from '@fastgpt/global/core/workflow/constants';
-import { DispatchNodeResponseKeyEnum } from '@fastgpt/global/core/workflow/runtime/constants';
+import {
+  DispatchNodeResponseKeyEnum,
+  SseResponseEventEnum
+} from '@fastgpt/global/core/workflow/runtime/constants';
+import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/utils';
 import type {
   ChatDispatchProps,
   DispatchNodeResultType,
@@ -36,6 +40,7 @@ import type { McpToolDataType } from '@fastgpt/global/core/app/tool/mcpTool/type
 import type { JSONSchemaInputType } from '@fastgpt/global/core/app/jsonschema';
 import { getToolConfigStatus } from '@fastgpt/global/core/app/formEdit/utils';
 import { readToolCallActivePlan } from './plan/activePlan';
+import { matchPoolByWhitelist, mergeToolNodes, splitPoolForLLM } from './subAgentUtils';
 
 type Response = DispatchNodeResultType<{
   [NodeOutputKeyEnum.answerText]: string;
@@ -63,12 +68,18 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       aiChatVision,
       aiChatReasoning,
       isResponseAnswerText = true,
-      useAgentPlan
+      useAgentPlan,
+      toolPoolMode,
+      toolWhitelist,
+      inheritCallerModel
     }
   } = props;
 
   try {
-    const toolModel = getLLMModel(model);
+    const isSubAgent = props.node.flowNodeType === FlowNodeTypeEnum.subAgent;
+    const toolModel = getLLMModel(
+      isSubAgent && inheritCallerModel !== false ? props.parentToolModel || model : model
+    );
     const useVision = aiChatVision && toolModel.vision;
     const chatHistories = getHistories(history, histories);
 
@@ -79,56 +90,83 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       fileLinks = undefined;
     }
 
-    const toolNodeIds = filterToolNodeIdByEdges({ nodeId, edges: runtimeEdges });
+    const getEdgeToolNodes = (): ToolNodeItemType[] => {
+      const toolNodeIds = filterToolNodeIdByEdges({ nodeId, edges: runtimeEdges });
 
-    // Gets the module to which the tool is connected
-    const toolNodes = toolNodeIds
-      .map((nodeId) => {
-        const tool = runtimeNodes.find((item) => item.nodeId === nodeId);
-        return tool;
-      })
-      .filter((tool) => {
-        if (!tool) return false;
-        // Check is valid and filter
-        const configStatus = getToolConfigStatus({
-          tool
-        });
-        if (configStatus.status === 'invalid' || configStatus.status === 'waitingForConfig') {
-          return false;
-        }
-        return true;
-      })
-      .map<ToolNodeItemType>((_) => {
-        const tool = _!;
-        const toolParams: FlowNodeInputItemType[] = [];
-        tool?.inputs.forEach((input) => {
-          if (input.toolDescription) {
-            toolParams.push(input);
+      // Gets the module to which the tool is connected
+      return toolNodeIds
+        .map((nodeId) => {
+          const tool = runtimeNodes.find((item) => item.nodeId === nodeId);
+          return tool;
+        })
+        .filter((tool) => {
+          if (!tool) return false;
+          // Check is valid and filter
+          const configStatus = getToolConfigStatus({
+            tool
+          });
+          if (configStatus.status === 'invalid' || configStatus.status === 'waitingForConfig') {
+            return false;
           }
-          if (
-            (input.key === NodeInputKeyEnum.toolData || input.key === 'toolData') &&
-            input.value?.inputSchema
-          ) {
-            const value = input.value as McpToolDataType;
-            tool.jsonSchema = value.inputSchema;
-          }
-        });
+          return true;
+        })
+        .map<ToolNodeItemType>((_) => {
+          const tool = _!;
+          const toolParams: FlowNodeInputItemType[] = [];
+          tool?.inputs.forEach((input) => {
+            if (input.toolDescription) {
+              toolParams.push(input);
+            }
+            if (
+              (input.key === NodeInputKeyEnum.toolData || input.key === 'toolData') &&
+              input.value?.inputSchema
+            ) {
+              const value = input.value as McpToolDataType;
+              tool.jsonSchema = value.inputSchema;
+            }
+          });
 
-        return {
-          nodeId: tool.nodeId,
-          name: tool.name,
-          flowNodeType: tool.flowNodeType,
-          avatar: tool.avatar,
-          intro: tool.intro,
-          toolDescription: tool.toolDescription,
-          jsonSchema: tool.jsonSchema,
-          toolParams
-        };
-      });
+          return {
+            nodeId: tool.nodeId,
+            name: tool.name,
+            flowNodeType: tool.flowNodeType,
+            avatar: tool.avatar,
+            intro: tool.intro,
+            toolDescription: tool.toolDescription,
+            jsonSchema: tool.jsonSchema,
+            toolParams
+          };
+        });
+    };
+
+    // 子代理：自身边工具（域内基线）+ 主节点工具池白名单追加
+    let fullToolNodes: ToolNodeItemType[];
+    let whitelistNote = '';
+    if (isSubAgent) {
+      const ownEdgeTools = getEdgeToolNodes();
+      const pool = props.parentToolNodes ?? [];
+      const { selected, misses } = matchPoolByWhitelist(pool, toolWhitelist);
+      fullToolNodes = mergeToolNodes(ownEdgeTools, selected);
+      if (fullToolNodes.length === 0) {
+        return getNodeErrResponse({
+          error: `子代理没有可用工具：自身未挂载工具，且白名单未匹配到工具池中的工具。当前工具池可用工具：${
+            pool.map((t) => `${t.name}(${t.nodeId})`).join('、') || '（空）'
+          }。请调整白名单后重试。`
+        });
+      }
+      if (misses.length > 0) {
+        whitelistNote = `注意：工具白名单中的 ${misses.join('、')} 不在工具池中，已忽略。`;
+      }
+    } else {
+      fullToolNodes = getEdgeToolNodes();
+    }
+    const { llmToolNodes, catalog } = isSubAgent
+      ? { llmToolNodes: fullToolNodes, catalog: '' }
+      : splitPoolForLLM(fullToolNodes, !!toolPoolMode);
 
     // Check interactive entry
     props.node.isEntry = false;
-    const hasReadFilesTool = toolNodes.some(
+    const hasReadFilesTool = fullToolNodes.some(
       (item) => item.flowNodeType === FlowNodeTypeEnum.readFiles
     );
 
@@ -151,6 +189,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
     const concatenateSystemPrompt = [
       toolModel.defaultSystemChatPrompt,
       systemPrompt,
+      catalog,
+      whitelistNote,
       documentQuoteText
         ? replaceVariable(getDocumentQuotePrompt(version), {
             quote: documentQuoteText
@@ -212,7 +252,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       assistantResponses = [], // FastGPT system store assistant.value response
       finish_reason,
       error,
-      requestIds
+      requestIds,
+      terminalResponse
     } = await (async () => {
       const adaptMessages = chats2GPTMessages({
         messages,
@@ -224,7 +265,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
         ...props,
         runtimeNodes,
         runtimeEdges,
-        toolNodes,
+        toolNodes: llmToolNodes,
+        childToolPool: fullToolNodes,
         toolModel,
         messages: adaptMessages,
         activePlan: useAgentPlan ? readToolCallActivePlan({ histories }) : undefined,
@@ -246,6 +288,22 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
 
     // Preview assistant responses
     const previewAssistantResponses = filterToolResponseToPreview(assistantResponses);
+
+    // 直接输出钩子：终端工具答复原样提升为最终回复，不再经过模型总结
+    const answerText =
+      terminalResponse ??
+      previewAssistantResponses
+        .filter((item) => item.text?.content)
+        .map((item) => item.text?.content || '')
+        .join('');
+    if (terminalResponse) {
+      props.workflowStreamResponse?.({
+        event: SseResponseEventEnum.fastAnswer,
+        data: textAdaptGptResponse({
+          text: terminalResponse
+        })
+      });
+    }
 
     if (error) {
       return getNodeErrResponse({
@@ -276,20 +334,20 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
 
     return {
       data: {
-        [NodeOutputKeyEnum.answerText]: previewAssistantResponses
-          .filter((item) => item.text?.content)
-          .map((item) => item.text?.content || '')
-          .join('')
+        [NodeOutputKeyEnum.answerText]: answerText
       },
       [DispatchNodeResponseKeyEnum.runTimes]: toolDispatchFlowResponses.reduce(
         (sum, item) => sum + item.runTimes,
         0
       ),
-      [DispatchNodeResponseKeyEnum.assistantResponses]: isResponseAnswerText
-        ? previewAssistantResponses
-        : useAgentPlan
-          ? previewAssistantResponses.filter((item) => item.plan)
-          : undefined,
+      [DispatchNodeResponseKeyEnum.assistantResponses]: terminalResponse
+        ? [{ text: { content: terminalResponse } }]
+        : isResponseAnswerText
+          ? previewAssistantResponses
+          : useAgentPlan
+            ? previewAssistantResponses.filter((item) => item.plan)
+            : undefined,
+      [DispatchNodeResponseKeyEnum.toolResponses]: answerText,
       [DispatchNodeResponseKeyEnum.nodeResponse]: {
         // 展示的积分消耗
         totalPoints: totalPointsUsage,

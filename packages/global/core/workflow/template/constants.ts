@@ -12,6 +12,7 @@ import { WorkflowStart } from './system/workflowStart';
 
 import { StopToolNode } from './system/stopTool';
 import { ToolCallNode } from './system/toolCall';
+import { SubAgentNode } from './system/subAgent';
 import { AgentNode } from './system/agent';
 
 import { RunAppModule } from './system/abandoned/runApp/index';
@@ -50,6 +51,7 @@ const systemNodes: FlowNodeTemplateType[] = [
   ContextExtractModule,
   DatasetConcatModule,
   ToolCallNode,
+  SubAgentNode,
   ToolParamsNode,
   StopToolNode,
   AgentNode,

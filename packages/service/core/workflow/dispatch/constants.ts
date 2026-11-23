@@ -52,6 +52,7 @@ export const callbackMap: Record<FlowNodeTypeEnum, Function> = {
   [FlowNodeTypeEnum.queryExtension]: dispatchQueryExtension,
   // Tool call
   [FlowNodeTypeEnum.toolCall]: dispatchRunTools,
+  [FlowNodeTypeEnum.subAgent]: dispatchRunTools,
   [FlowNodeTypeEnum.stopTool]: dispatchStopToolCall,
   [FlowNodeTypeEnum.toolParams]: dispatchToolParams,
 
@@ -119,6 +120,7 @@ export const FlowNodeTypeResTextMap: Record<FlowNodeTypeEnum, string> = {
   [FlowNodeTypeEnum.formInput]: 'formInputResult',
   [FlowNodeTypeEnum.tool]: 'toolRes',
   [FlowNodeTypeEnum.toolCall]: 'toolRes', // todo 需要确定
+  [FlowNodeTypeEnum.subAgent]: 'toolRes',
 
   [FlowNodeTypeEnum.systemConfig]: '',
   [FlowNodeTypeEnum.pluginConfig]: '',

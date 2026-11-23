@@ -176,6 +176,10 @@ export enum NodeInputKeyEnum {
   useAgentSandbox = 'useAgentSandbox',
   useAgentPlan = 'useAgentPlan',
   useEditDebugSandbox = 'useEditDebugSandbox',
+  toolPoolMode = 'toolPoolMode',
+  toolWhitelist = 'toolWhitelist',
+  inheritCallerModel = 'inheritCallerModel',
+  directOutput = 'directOutput',
 
   // dataset
   datasetSelectList = 'datasets',

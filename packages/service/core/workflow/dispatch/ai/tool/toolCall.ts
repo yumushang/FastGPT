@@ -37,6 +37,7 @@ import {
   updatePlanToolName
 } from './plan';
 import { compactToolCallPlanResponses } from './plan/assistantResponses';
+import { readDirectOutput, restoreToolStartParams } from './subAgentUtils';
 
 type ResponseType = {
   requestIds: string[];
@@ -49,6 +50,7 @@ type ResponseType = {
   assistantResponses: AIChatItemValueItemType[];
   finish_reason: CompletionFinishReason;
   toolWorkflowInteractiveResponse?: ToolCallChildrenInteractive;
+  terminalResponse?: string;
 };
 
 export const runToolCall = async (props: DispatchToolModuleProps): Promise<ResponseType> => {
@@ -57,6 +59,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     toolNodes,
     toolModel,
     childrenInteractiveParams,
+    childToolPool,
 
     ...workflowProps
   } = props;
@@ -182,7 +185,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     interactiveResponse,
     finish_reason,
     error,
-    requestIds
+    requestIds,
+    terminalResponse
   } = await runAgentCall({
     maxRunAgentTimes: 50,
     body: {
@@ -281,7 +285,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         assistantMessages = [],
         usages = [],
         interactive,
-        stop
+        stop,
+        terminalResponse
       } = await (async () => {
         // 拦截 plan 控制工具调用
         if (isPlanToolName(call.function?.name)) {
@@ -350,11 +355,20 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           const toolRunResponse = await runWorkflow({
             ...workflowProps,
             runtimeNodes,
+            parentToolNodes: childToolPool ?? toolNodes,
+            parentToolModel: toolModel.model,
             isToolCall: true
           });
 
           // Format tool response
           const stringToolResponse = formatToolResponse(toolRunResponse.toolResponses);
+
+          // 直接输出钩子：调用时读取覆写后的参数，成品答复终止循环并原样提升
+          const isTerminal =
+            readDirectOutput(
+              runtimeNodes.find((n) => n.nodeId === toolNode.nodeId),
+              startParams
+            ) && !toolRunResponse.workflowInteractiveResponse;
 
           return {
             response: stringToolResponse,
@@ -370,7 +384,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
             }),
             usages: toolRunResponse.flowUsages,
             interactive: toolRunResponse.workflowInteractiveResponse,
-            stop: toolRunResponse.flowResponses?.some((item) => item.toolStop)
+            stop: toolRunResponse.flowResponses?.some((item) => item.toolStop) || isTerminal,
+            terminalResponse: isTerminal ? stringToolResponse : undefined
           };
         }
       })();
@@ -400,11 +415,18 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         assistantMessages,
         usages,
         interactive,
-        stop
+        stop,
+        terminalResponse
       };
     },
     handleInteractiveTool: async ({ childrenResponse, toolParams }) => {
-      initToolNodes(runtimeNodes, childrenResponse.entryNodeIds);
+      // 还原上一轮 LLM 注入的参数（systemPrompt/任务/白名单/输出钩子），避免 resume 丢参
+      const startParams = restoreToolStartParams(
+        toolParams.memoryRequestMessages,
+        toolParams.toolCallId,
+        childrenResponse.entryNodeIds
+      );
+      initToolNodes(runtimeNodes, childrenResponse.entryNodeIds, startParams);
       initToolCallEdges(runtimeEdges, childrenResponse.entryNodeIds);
 
       const toolRunResponse = await runWorkflow({
@@ -412,6 +434,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         lastInteractive: childrenResponse,
         runtimeNodes,
         runtimeEdges,
+        parentToolNodes: childToolPool ?? toolNodes,
+        parentToolModel: toolModel.model,
         isToolCall: true
       });
       // console.dir(runtimeEdges, { depth: null });
@@ -444,12 +468,21 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         reserveId: false
       });
 
+      const isTerminal =
+        childrenResponse.entryNodeIds.some((id) =>
+          readDirectOutput(
+            runtimeNodes.find((n) => n.nodeId === id),
+            startParams
+          )
+        ) && !toolRunResponse.workflowInteractiveResponse;
+
       return {
         response: stringToolResponse,
         assistantMessages,
         usages: toolRunResponse.flowUsages,
         interactive: toolRunResponse.workflowInteractiveResponse,
-        stop: toolRunResponse.flowResponses?.some((item) => item.toolStop)
+        stop: toolRunResponse.flowResponses?.some((item) => item.toolStop) || isTerminal,
+        terminalResponse: isTerminal ? stringToolResponse : undefined
       };
     }
   });
@@ -477,6 +510,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     completeMessages,
     assistantResponses: finalAssistantResponses,
     finish_reason,
-    toolWorkflowInteractiveResponse: interactiveResponse
+    toolWorkflowInteractiveResponse: interactiveResponse,
+    terminalResponse
   };
 };

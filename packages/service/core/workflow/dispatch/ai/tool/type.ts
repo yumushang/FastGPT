@@ -27,12 +27,18 @@ export type DispatchToolModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.aiChatJsonSchema]?: string;
   [NodeInputKeyEnum.useAgentSandbox]?: boolean;
   [NodeInputKeyEnum.useAgentPlan]?: boolean;
+  [NodeInputKeyEnum.toolPoolMode]?: boolean;
+  [NodeInputKeyEnum.toolWhitelist]?: string[] | string;
+  [NodeInputKeyEnum.inheritCallerModel]?: boolean;
+  [NodeInputKeyEnum.directOutput]?: boolean;
 }> & {
   messages: ChatCompletionMessageParam[];
   toolNodes: ToolNodeItemType[];
   toolModel: LLMModelItemType;
   childrenInteractiveParams?: ToolCallChildrenInteractive['params'];
   activePlan?: AgentPlanType;
+  // 传递给子代理的工具池（poolMode 下为全池，≠ LLM 可见子集）
+  childToolPool?: ToolNodeItemType[];
 };
 
 export type ToolNodeItemType = {

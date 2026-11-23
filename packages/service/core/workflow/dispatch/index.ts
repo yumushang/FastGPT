@@ -1632,6 +1632,10 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
   data.workflowDispatchDeep++;
   const isRootRuntime = data.workflowDispatchDeep === 1;
   if (data.workflowDispatchDeep > 20) {
+    logger.warn('Workflow nesting depth limit exceeded', {
+      appId: data.runningAppInfo.id,
+      deep: data.workflowDispatchDeep
+    });
     return {
       flowResponses: [],
       flowUsages: [],
@@ -1644,7 +1648,8 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
       },
       [DispatchNodeResponseKeyEnum.runTimes]: 1,
       [DispatchNodeResponseKeyEnum.assistantResponses]: [],
-      [DispatchNodeResponseKeyEnum.toolResponses]: null,
+      [DispatchNodeResponseKeyEnum.toolResponses]:
+        '工作流嵌套深度超过上限（20 层），请减少子代理委派层级后重试。',
       [DispatchNodeResponseKeyEnum.newVariables]: data.variableState.toStoreRecord(),
       durationSeconds: 0
     };
@@ -1698,7 +1703,8 @@ export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowR
             if (
               item.flowNodeType !== FlowNodeTypeEnum.userSelect &&
               item.flowNodeType !== FlowNodeTypeEnum.formInput &&
-              item.flowNodeType !== FlowNodeTypeEnum.toolCall
+              item.flowNodeType !== FlowNodeTypeEnum.toolCall &&
+              item.flowNodeType !== FlowNodeTypeEnum.subAgent
             ) {
               item.isEntry = false;
             }

@@ -511,6 +511,10 @@ export const checkWorkflowNodeAndConnection = ({
         return [data.nodeId];
       }
     }
+    // 子代理必须挂载到某个工具调用节点（作为工具被委派）
+    if (data.flowNodeType === FlowNodeTypeEnum.subAgent && !isToolNode) {
+      return [data.nodeId];
+    }
 
     // check node input
     if (
@@ -573,10 +577,7 @@ export const checkWorkflowNodeAndConnection = ({
     // Check node has invalid edge
     const edgeFilted = edges.filter(
       (edge) =>
-        !(
-          data.flowNodeType === FlowNodeTypeEnum.toolCall &&
-          edge.sourceHandle === NodeOutputKeyEnum.selectedTools
-        )
+        !(edge.source === data.nodeId && edge.sourceHandle === NodeOutputKeyEnum.selectedTools)
     );
     // Check node has edge
     const hasEdge = edgeFilted.some(

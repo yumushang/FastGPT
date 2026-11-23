@@ -146,6 +146,7 @@ export enum FlowNodeTypeEnum {
   queryExtension = 'cfr',
   agent = 'agent',
   toolCall = 'tools',
+  subAgent = 'subAgent',
   stopTool = 'stopTool',
   toolParams = 'toolParams',
   lafModule = 'lafModule',
