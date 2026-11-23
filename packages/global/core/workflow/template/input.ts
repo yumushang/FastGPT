@@ -123,3 +123,23 @@ export const Input_Template_Stream_MODE: FlowNodeInputItemType = {
   description: i18nT('workflow:template.forbid_stream_desc'),
   value: false
 };
+
+export const Input_Template_DirectOutput: FlowNodeInputItemType = {
+  key: NodeInputKeyEnum.directOutput,
+  renderTypeList: [FlowNodeInputTypeEnum.switch],
+  valueType: WorkflowIOValueTypeEnum.boolean,
+  value: false,
+  label: i18nT('app:direct_output'),
+  description: i18nT('app:direct_output_desc'),
+  toolDescription:
+    'Output mode hook. true = send this workflow final answer to the user verbatim as the complete reply and end the loop (use ONLY for finished-product outputs, e.g. a pre-built workflow formatted reply). false/omit = result returns to you for integration (default).'
+};
+
+export const Input_Template_VisibleToMain: FlowNodeInputItemType = {
+  key: NodeInputKeyEnum.visibleToMain,
+  renderTypeList: [FlowNodeInputTypeEnum.switch],
+  valueType: WorkflowIOValueTypeEnum.boolean,
+  value: false,
+  label: i18nT('app:visible_to_main'),
+  description: i18nT('app:visible_to_main_desc')
+};

@@ -118,8 +118,8 @@ export async function rewriteAppWorkflowToDetail({
               const input = inputsMap.get(item.key);
               return {
                 ...item,
-                value: input?.value,
-                selectedTypeIndex: input?.selectedTypeIndex
+                value: input?.value ?? item.value,
+                selectedTypeIndex: input?.selectedTypeIndex ?? item.selectedTypeIndex
               };
             });
             node.outputs = preview.outputs.map((item) => {

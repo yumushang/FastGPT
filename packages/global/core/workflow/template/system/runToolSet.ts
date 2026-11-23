@@ -1,6 +1,7 @@
 import { FlowNodeTemplateTypeEnum } from '../../constants';
 import { FlowNodeTypeEnum } from '../../node/constant';
 import { type FlowNodeTemplateType } from '../../type/node';
+import { Input_Template_DirectOutput, Input_Template_VisibleToMain } from '../input';
 
 export const RunToolSetNode: FlowNodeTemplateType = {
   id: FlowNodeTypeEnum.toolSet,
@@ -13,6 +14,6 @@ export const RunToolSetNode: FlowNodeTemplateType = {
   intro: '',
   name: '',
   showStatus: false,
-  inputs: [],
+  inputs: [Input_Template_DirectOutput, Input_Template_VisibleToMain],
   outputs: []
 };

@@ -84,6 +84,12 @@ export const checkNeedsUserConfiguration = (toolTemplate: {
         if (input.key === NodeInputKeyEnum.forbidStream) return false;
         // 历史记录不需要配置
         if (input.key === NodeInputKeyEnum.history) return false;
+        // 直出/可见性钩子为节点侧开关，不需要用户配置
+        if (
+          input.key === NodeInputKeyEnum.visibleToMain ||
+          input.key === NodeInputKeyEnum.directOutput
+        )
+          return false;
         // 系统输入配置需要配置
         if (input.key === NodeInputKeyEnum.systemInputConfig) return true;
 

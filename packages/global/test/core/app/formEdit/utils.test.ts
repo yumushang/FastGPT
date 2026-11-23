@@ -736,3 +736,22 @@ describe('getToolConfigStatus', () => {
     });
   });
 });
+
+describe('hook switches do not require user configuration', () => {
+  const hookInput = (key: string) =>
+    ({
+      key,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      valueType: 'boolean',
+      value: false,
+      label: key
+    }) as any as FlowNodeInputItemType;
+
+  it('visibleToMain/directOutput only tool stays noConfig', () => {
+    const tool = {
+      inputs: [hookInput(NodeInputKeyEnum.visibleToMain), hookInput(NodeInputKeyEnum.directOutput)]
+    } as any as FlowNodeTemplateType;
+    expect(checkNeedsUserConfiguration(tool)).toBe(false);
+    expect(getToolConfigStatus({ tool })).toEqual({ needConfig: false, status: 'noConfig' });
+  });
+});

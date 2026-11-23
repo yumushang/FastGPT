@@ -94,5 +94,8 @@ Tier 3 不委派：关 poolMode → 主节点直调池工具（现状兜底）
 - [x] 全量测试 + lint + typecheck（global 1588/1588、app 590/591、service 1754/1755；2 个失败为既有环境问题：Node24 rmdir recursive、zustand localStorage mock；lint 0 错误、typecheck 通过）
 - [x] E2E 12/12（本地隔离栈 + mock LLM）：poolMode 主 tools=2 隐藏池、白名单追加 own2+pool1=3、弱主仅任务→自身边 1 工具、直出钩子主仅 1 轮+子终答 fastAnswer 原样直达、无总结；画布：子代理节点渲染（跟随模型/计划/history=0/工具参数表）、工具池模式开关、9 条连线、面板入口
 - [x] visibleToMain 可见性开关（poolMode 成品直调通道）：单测 49/49；技能库中心维护形态暂缓（用户决策）
+- [x] 开关全链路修复（fix22）：预览单点注入 concatToolVisibilityInputs（controller return，AppNodeFlowNodeTypeMap 四类）+ 覆盖保值（app/utils `?? item.value`）+ toolSet 父→子传播 inheritToolSetSwitchInputs（三分支）+ 旧版 MCP fallback 跳过钩子键 + NodeToolSet 补 RenderInput + splitToolInputs 钩子键强制 commonInputs + formEdit 配置态排除 + ToolSelectModal 隐藏；模板常量收敛 Input_Template_DirectOutput/VisibleToMain（runApp/skill/runToolSet/http468 共用）
+  - 验证：global 1593、service 1764/1765（既有 Node24）、app 590/591（既有 zustand）、lint/typecheck 通过；E2E 8/8（详情持久化/翻转回读/主 tools 含 reportApp+httpSet0+subFin 排除隐藏/直出 1 轮 fastAnswer 原文）+ 画布开关可见可编辑（appModule/toolSet/skill）
+  - 边界：http/mcp 走 jsonSchema 忽略 toolParams → directOutput 仅节点开关生效；agent 路径无 poolMode（visibleToMain 惰性）；固定版本旧 tool 节点画布不显开关（切最新版恢复）
 - 注：入口豁免与深度逻辑在 runWorkflow 内部，由 E2E 覆盖（非单测）
 - E2E 环境要点：API 登录需 preLogin code + sha256 密码 + fastgpt_token cookie；新 Mongo 需插 team_subscriptions 默认 standard 文档；内置浏览器旧页面水合损坏时关闭开新页即恢复

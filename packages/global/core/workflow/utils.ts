@@ -18,6 +18,7 @@ import {
   type ReferenceArrayValueType,
   type ReferenceItemValueType
 } from './type/io';
+import { Input_Template_DirectOutput, Input_Template_VisibleToMain } from './template/input';
 import type { NodeToolConfigType, StoreNodeItemType } from './type/node';
 import type {
   VariableItemType,
@@ -321,6 +322,16 @@ export const appData2FlowNodeIO = ({
       }
     ]
   };
+};
+
+export const concatToolVisibilityInputs = (
+  inputs: FlowNodeInputItemType[]
+): FlowNodeInputItemType[] => {
+  const existing = new Set(inputs.map((i) => i.key));
+  const extra = [Input_Template_DirectOutput, Input_Template_VisibleToMain].filter(
+    (t) => !existing.has(t.key)
+  );
+  return extra.length ? [...inputs, ...extra] : inputs;
 };
 
 export const toolData2FlowNodeIO = ({ nodes }: { nodes: StoreNodeItemType[] }) => {

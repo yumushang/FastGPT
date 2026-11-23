@@ -11,7 +11,11 @@ import {
   ContentTypes,
   FlowNodeTemplateTypeEnum
 } from '../../constants';
-import { Input_Template_DynamicInput } from '../input';
+import {
+  Input_Template_DynamicInput,
+  Input_Template_DirectOutput,
+  Input_Template_VisibleToMain
+} from '../input';
 import { Output_Template_AddOutput } from '../output';
 import { i18nT } from '../../../../../web/i18n/utils';
 
@@ -31,6 +35,8 @@ export const HttpNode468: FlowNodeTemplateType = {
   catchError: false,
   courseUrl: '/docs/introduction/guide/dashboard/workflow/http/',
   inputs: [
+    Input_Template_DirectOutput,
+    Input_Template_VisibleToMain,
     {
       ...Input_Template_DynamicInput,
       description: i18nT('common:core.module.input.description.HTTP Dynamic Input'),

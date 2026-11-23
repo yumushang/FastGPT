@@ -1052,3 +1052,127 @@ describe('safePoints', () => {
     expect(safePoints(undefined)).toBe(0);
   });
 });
+
+describe('toolSet switch propagation (visibleToMain/directOutput)', () => {
+  const mkNode = (nodeId: string, flowNodeType: string, extra: Partial<RuntimeNodeItemType> = {}) =>
+    ({ nodeId, flowNodeType, inputs: [], outputs: [], ...extra }) as any as RuntimeNodeItemType;
+  const mkEdge = (source: string, target: string) =>
+    ({
+      source,
+      target,
+      sourceHandle: 's',
+      targetHandle: 'selectedTools',
+      status: 'active'
+    }) as any as RuntimeEdgeItemType;
+  const switchInputs = (visible: boolean, direct = false) => [
+    { key: 'visibleToMain', valueType: 'boolean', value: visible },
+    { key: 'directOutput', valueType: 'boolean', value: direct }
+  ];
+  const findSwitch = (node: any, key: string) => node.inputs.find((i: any) => i.key === key)?.value;
+
+  it('http toolSet children inherit parent switches', async () => {
+    const toolSetNode = mkNode('ts', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'p1',
+      name: 'set',
+      inputs: switchInputs(true, true),
+      toolConfig: { httpToolSet: {} } as any
+    });
+    const nodes = [mkNode('main', FlowNodeTypeEnum.toolCall), toolSetNode];
+    const edges = [mkEdge('main', 'ts')];
+    mockMongoAppFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'p1' }) });
+    mockGetHTTPToolList.mockResolvedValue([{ name: 'a1', description: 'd', url: 'http://x' }]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes, edges });
+    const child = nodes.find((n) => n.nodeId === 'ts0');
+    expect(child).toBeDefined();
+    expect(findSwitch(child, 'visibleToMain')).toBe(true);
+    expect(findSwitch(child, 'directOutput')).toBe(true);
+  });
+
+  it('mcp toolSet children inherit parent switches', async () => {
+    const toolSetNode = mkNode('ts', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'p2',
+      name: 'set',
+      inputs: switchInputs(true),
+      toolConfig: { mcpToolSet: { toolList: [] } } as any
+    });
+    const nodes = [mkNode('main', FlowNodeTypeEnum.toolCall), toolSetNode];
+    const edges = [mkEdge('main', 'ts')];
+    mockMongoAppFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'p2' }) });
+    mockGetMCPChildren.mockResolvedValue([
+      { name: 'mA', description: 'd', inputSchema: { type: 'object', properties: {} } }
+    ]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes, edges });
+    const child = nodes.find((n) => n.nodeId === 'ts0');
+    expect(child).toBeDefined();
+    expect(findSwitch(child, 'visibleToMain')).toBe(true);
+  });
+
+  it('system toolSet children inherit parent switches', async () => {
+    const toolSetNode = mkNode('ts', FlowNodeTypeEnum.toolSet, {
+      name: 'set',
+      inputs: switchInputs(true),
+      toolConfig: { systemToolSet: { toolId: 'sys' } } as any
+    });
+    const nodes = [mkNode('main', FlowNodeTypeEnum.toolCall), toolSetNode];
+    const edges = [mkEdge('main', 'ts')];
+    mockGetSystemToolRunTimeNodeFromSystemToolset.mockResolvedValue([
+      mkNode('sys0', FlowNodeTypeEnum.tool, { inputs: [] })
+    ]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes, edges });
+    const child = nodes.find((n) => n.nodeId === 'sys0');
+    expect(child).toBeDefined();
+    expect(findSwitch(child, 'visibleToMain')).toBe(true);
+  });
+
+  it('child existing switch value is not overwritten; parent without switches leaves child unchanged', async () => {
+    const toolSetNode = mkNode('ts', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'p3',
+      name: 'set',
+      inputs: switchInputs(true),
+      toolConfig: { httpToolSet: {} } as any
+    });
+    const nodes = [mkNode('main', FlowNodeTypeEnum.toolCall), toolSetNode];
+    const edges = [mkEdge('main', 'ts')];
+    mockMongoAppFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'p3' }) });
+    mockGetHTTPToolList.mockResolvedValue([{ name: 'a1', description: 'd', url: 'http://x' }]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes, edges });
+    const child = nodes.find((n) => n.nodeId === 'ts0');
+    expect(findSwitch(child, 'visibleToMain')).toBe(true);
+
+    // parent without switches
+    const toolSetNode2 = mkNode('ts2', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'p4',
+      name: 'set2',
+      inputs: [],
+      toolConfig: { httpToolSet: {} } as any
+    });
+    const nodes2 = [mkNode('main2', FlowNodeTypeEnum.toolCall), toolSetNode2];
+    const edges2 = [mkEdge('main2', 'ts2')];
+    mockMongoAppFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'p4' }) });
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes: nodes2, edges: edges2 });
+    const child2 = nodes2.find((n) => n.nodeId === 'ts20');
+    expect(findSwitch(child2, 'visibleToMain')).toBeUndefined();
+  });
+
+  it('legacy MCP fallback skips hook inputs when reading inputs[0] config', async () => {
+    const mcpConfig = { toolId: 'legacy', url: 'http://mcp', headerSecret: {} };
+    const toolSetNode = mkNode('ts', FlowNodeTypeEnum.toolSet, {
+      pluginId: 'p5',
+      name: 'legacy',
+      inputs: [...switchInputs(false), { key: 'mcpConfig', value: mcpConfig }] as any
+    });
+    const nodes = [mkNode('main', FlowNodeTypeEnum.toolCall), toolSetNode];
+    const edges = [mkEdge('main', 'ts')];
+    mockMongoAppFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'p5' }) });
+    mockGetMCPChildren.mockResolvedValue([
+      { name: 'mA', description: 'd', inputSchema: { type: 'object', properties: {} } }
+    ]);
+
+    await rewriteRuntimeWorkFlow({ teamId: 't', nodes, edges });
+    expect(nodes.find((n) => n.nodeId === 'ts0')).toBeDefined();
+  });
+});

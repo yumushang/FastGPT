@@ -4,13 +4,22 @@ import { type NodeProps } from 'reactflow';
 import NodeCard from './render/NodeCard';
 import IOTitle from '../components/IOTitle';
 import Container from '../components/Container';
+import RenderInput from './render/RenderInput';
 import { useTranslation } from 'next-i18next';
 import { Box, Flex } from '@chakra-ui/react';
+import { useContextSelector } from 'use-context-selector';
+import { useMemoEnhance } from '@fastgpt/web/hooks/useMemoEnhance';
+import { WorkflowUtilsContext } from '../../context/workflowUtilsContext';
 
 const NodeToolSet = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
   const { t } = useTranslation();
 
-  const { toolConfig } = data;
+  const { toolConfig, inputs, nodeId } = data;
+  const splitToolInputs = useContextSelector(WorkflowUtilsContext, (v) => v.splitToolInputs);
+  const { commonInputs } = useMemoEnhance(
+    () => splitToolInputs(inputs, nodeId),
+    [inputs, nodeId, splitToolInputs]
+  );
   const toolList =
     toolConfig?.mcpToolSet?.toolList ??
     toolConfig?.httpToolSet?.toolList ??
@@ -59,6 +68,12 @@ const NodeToolSet = ({ data, selected }: NodeProps<FlowNodeItemType>) => {
           ))}
         </Box>
       </Container>
+      {commonInputs.length > 0 && (
+        <Container>
+          <IOTitle text={t('common:Input')} nodeId={nodeId} inputs={inputs} />
+          <RenderInput nodeId={nodeId} flowInputList={commonInputs} />
+        </Container>
+      )}
     </NodeCard>
   );
 };

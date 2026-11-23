@@ -5,13 +5,15 @@ import type {
 import {
   FlowNodeOutputTypeEnum,
   FlowNodeInputTypeEnum,
-  FlowNodeTypeEnum
+  FlowNodeTypeEnum,
+  AppNodeFlowNodeTypeMap
 } from '@fastgpt/global/core/workflow/node/constant';
 import {
   appData2FlowNodeIO,
   pluginData2FlowNodeIO,
   toolData2FlowNodeIO,
-  toolSetData2FlowNodeIO
+  toolSetData2FlowNodeIO,
+  concatToolVisibilityInputs
 } from '@fastgpt/global/core/workflow/utils';
 import { MongoApp } from '../schema';
 import type { localeType } from '@fastgpt/global/common/i18n/type';
@@ -614,6 +616,9 @@ export async function getChildAppPreviewNode({
     status: app.status,
 
     ...nodeIOConfig,
+    inputs: AppNodeFlowNodeTypeMap[flowNodeType]
+      ? concatToolVisibilityInputs(nodeIOConfig.inputs)
+      : nodeIOConfig.inputs,
     outputs: nodeIOConfig.outputs.some((item) => item.type === FlowNodeOutputTypeEnum.error)
       ? nodeIOConfig.outputs
       : [...nodeIOConfig.outputs, Output_Template_Error_Message]

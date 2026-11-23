@@ -53,7 +53,9 @@ export const childAppSystemKey: string[] = [
   NodeInputKeyEnum.forbidStream,
   NodeInputKeyEnum.history,
   NodeInputKeyEnum.historyMaxAmount,
-  NodeInputKeyEnum.userChatInput
+  NodeInputKeyEnum.userChatInput,
+  NodeInputKeyEnum.directOutput,
+  NodeInputKeyEnum.visibleToMain
 ];
 
 enum TemplateTypeEnum {

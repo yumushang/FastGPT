@@ -12,6 +12,7 @@ import {
 } from '@/web/core/workflow/utils';
 import { uiWorkflow2StoreWorkflow } from '../utils';
 import { FlowNodeOutputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import { NodeInputKeyEnum } from '@fastgpt/global/core/workflow/constants';
 import { WorkflowBufferDataContext } from './workflowInitContext';
 import type { StoreNodeItemType } from '@fastgpt/global/core/workflow/type/node';
 import type { StoreEdgeItemType } from '@fastgpt/global/core/workflow/type/edge';
@@ -155,11 +156,17 @@ export const WorkflowUtilsProvider = ({ children }: { children: ReactNode }) => 
 
       const toolInputs: FlowNodeInputItemType[] = [];
       const commonInputs: FlowNodeInputItemType[] = [];
+      // 直出/可见性钩子键始终渲染为可编辑开关（不进只读工具参数表）
+      const hookKeys = new Set<string>([
+        NodeInputKeyEnum.visibleToMain,
+        NodeInputKeyEnum.directOutput
+      ]);
       inputs.forEach((item) => {
-        if (isTool && item.toolDescription) {
+        const forceCommon = hookKeys.has(item.key);
+        if (isTool && item.toolDescription && !forceCommon) {
           toolInputs.push(item);
         }
-        if (!isTool || !item.toolDescription) {
+        if (!isTool || !item.toolDescription || forceCommon) {
           commonInputs.push(item);
         }
       });

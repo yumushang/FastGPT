@@ -1324,3 +1324,47 @@ describe('removeUnauthModels', () => {
     expect(result?.[1].inputs[0].value).toBeUndefined();
   });
 });
+
+describe('concatToolVisibilityInputs', () => {
+  it('appends both hook switches to empty inputs', async () => {
+    const { concatToolVisibilityInputs } = await import('@fastgpt/global/core/workflow/utils');
+    const result = concatToolVisibilityInputs([]);
+    expect(result.map((i) => i.key)).toEqual(['directOutput', 'visibleToMain']);
+    expect(result.every((i) => i.value === false)).toBe(true);
+  });
+
+  it('does not duplicate or overwrite existing keys', async () => {
+    const { concatToolVisibilityInputs } = await import('@fastgpt/global/core/workflow/utils');
+    const existing = [
+      { key: 'userChatInput', valueType: 'string', value: 'q' },
+      { key: 'visibleToMain', valueType: 'boolean', value: true }
+    ] as any;
+    const result = concatToolVisibilityInputs(existing);
+    expect(result.length).toBe(3);
+    expect(result[1].value).toBe(true);
+    expect(result[2].key).toBe('directOutput');
+  });
+
+  it('returns same content when both keys present', async () => {
+    const { concatToolVisibilityInputs } = await import('@fastgpt/global/core/workflow/utils');
+    const existing = [
+      { key: 'directOutput', valueType: 'boolean', value: true },
+      { key: 'visibleToMain', valueType: 'boolean', value: true }
+    ] as any;
+    expect(concatToolVisibilityInputs(existing)).toEqual(existing);
+  });
+});
+
+describe('tool hook input templates', () => {
+  it('directOutput carries toolDescription; visibleToMain does not', async () => {
+    const { Input_Template_DirectOutput, Input_Template_VisibleToMain } = await import(
+      '@fastgpt/global/core/workflow/template/input'
+    );
+    expect(Input_Template_DirectOutput.key).toBe('directOutput');
+    expect(Input_Template_DirectOutput.toolDescription).toBeTruthy();
+    expect(Input_Template_DirectOutput.value).toBe(false);
+    expect(Input_Template_VisibleToMain.key).toBe('visibleToMain');
+    expect(Input_Template_VisibleToMain.toolDescription).toBeUndefined();
+    expect(Input_Template_VisibleToMain.value).toBe(false);
+  });
+});

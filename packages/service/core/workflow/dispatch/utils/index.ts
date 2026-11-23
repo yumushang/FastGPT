@@ -242,6 +242,19 @@ export const formatHttpError = (error: any) => {
  * @param edges
  * @returns
  */
+const inheritToolSetSwitchInputs = (
+  child: RuntimeNodeItemType,
+  parent: RuntimeNodeItemType
+): RuntimeNodeItemType => {
+  const childKeys = new Set(child.inputs.map((i) => i.key));
+  const inherited = parent.inputs.filter(
+    (i) =>
+      (i.key === NodeInputKeyEnum.visibleToMain || i.key === NodeInputKeyEnum.directOutput) &&
+      !childKeys.has(i.key)
+  );
+  return inherited.length ? { ...child, inputs: [...child.inputs, ...inherited] } : child;
+};
+
 export const rewriteRuntimeWorkFlow = async ({
   teamId,
   nodes,
@@ -264,7 +277,13 @@ export const rewriteRuntimeWorkFlow = async ({
         nodeIdsToRemove.add(toolSetNode.nodeId);
 
         const systemToolId = toolSetNode.toolConfig?.systemToolSet?.toolId;
-        const mcpToolsetVal = toolSetNode.toolConfig?.mcpToolSet ?? toolSetNode.inputs?.[0]?.value;
+        // 旧版 MCP 配置存于首个非开关 input（模板合并可能把开关排到前面，不能按索引取）
+        const mcpToolsetVal =
+          toolSetNode.toolConfig?.mcpToolSet ??
+          toolSetNode.inputs?.find(
+            (i) =>
+              i.key !== NodeInputKeyEnum.directOutput && i.key !== NodeInputKeyEnum.visibleToMain
+          )?.value;
         const httpToolsetVal = toolSetNode.toolConfig?.httpToolSet;
 
         const incomingEdges = edges.filter((edge) => edge.target === toolSetNode.nodeId);
@@ -287,8 +306,9 @@ export const rewriteRuntimeWorkFlow = async ({
             lang
           });
           children.forEach((node) => {
-            nodes.push(node);
-            pushEdges(node.nodeId);
+            const inherited = inheritToolSetSwitchInputs(node, toolSetNode);
+            nodes.push(inherited);
+            pushEdges(inherited.nodeId);
           });
         } else if (mcpToolsetVal) {
           const app = await MongoApp.findOne({ _id: toolSetNode.pluginId }).lean();
@@ -298,13 +318,16 @@ export const rewriteRuntimeWorkFlow = async ({
           // mcpToolsetVal.toolId: 旧版 MCP
           const toolSetId = mcpToolsetVal.toolId || toolSetNode.pluginId;
           toolList.forEach((tool, index) => {
-            const newToolNode = getMCPToolRuntimeNode({
-              nodeId: `${toolSetNode.nodeId}${index}`,
-              toolSetId,
-              toolsetName: toolSetNode.name,
-              avatar: toolSetNode.avatar,
-              tool
-            });
+            const newToolNode = inheritToolSetSwitchInputs(
+              getMCPToolRuntimeNode({
+                nodeId: `${toolSetNode.nodeId}${index}`,
+                toolSetId,
+                toolsetName: toolSetNode.name,
+                avatar: toolSetNode.avatar,
+                tool
+              }),
+              toolSetNode
+            );
             nodes.push(newToolNode);
             pushEdges(newToolNode.nodeId);
           });
@@ -315,13 +338,16 @@ export const rewriteRuntimeWorkFlow = async ({
           const toolList = await getHTTPToolList(app);
 
           toolList.forEach((tool: HttpToolConfigType, index: number) => {
-            const newToolNode = getHTTPToolRuntimeNode({
-              tool,
-              nodeId: `${toolSetNode.nodeId}${index}`,
-              avatar: toolSetNode.avatar,
-              toolSetId: toolSetNode.pluginId!,
-              toolsetName: toolSetNode.name
-            });
+            const newToolNode = inheritToolSetSwitchInputs(
+              getHTTPToolRuntimeNode({
+                tool,
+                nodeId: `${toolSetNode.nodeId}${index}`,
+                avatar: toolSetNode.avatar,
+                toolSetId: toolSetNode.pluginId!,
+                toolsetName: toolSetNode.name
+              }),
+              toolSetNode
+            );
             nodes.push(newToolNode);
             pushEdges(newToolNode.nodeId);
           });

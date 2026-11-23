@@ -11,6 +11,7 @@ import {
   FlowNodeTemplateTypeEnum
 } from '../../constants';
 import { i18nT } from '../../../../../web/i18n/utils';
+import { Input_Template_VisibleToMain } from '../input';
 
 export const SkillNode: FlowNodeTemplateType = {
   id: FlowNodeTypeEnum.skill,
@@ -33,14 +34,7 @@ export const SkillNode: FlowNodeTemplateType = {
       label: i18nT('workflow:skill_content'),
       placeholder: i18nT('workflow:skill_content_placeholder')
     },
-    {
-      key: NodeInputKeyEnum.visibleToMain,
-      renderTypeList: [FlowNodeInputTypeEnum.switch],
-      valueType: WorkflowIOValueTypeEnum.boolean,
-      value: false,
-      label: i18nT('app:visible_to_main'),
-      description: i18nT('app:visible_to_main_desc')
-    }
+    Input_Template_VisibleToMain
   ],
   outputs: [
     {
