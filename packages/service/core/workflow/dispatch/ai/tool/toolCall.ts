@@ -469,7 +469,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       });
 
       const isTerminal =
-        childrenResponse.entryNodeIds.some((id) =>
+        childrenResponse.entryNodeIds.some((id: string) =>
           readDirectOutput(
             runtimeNodes.find((n) => n.nodeId === id),
             startParams
