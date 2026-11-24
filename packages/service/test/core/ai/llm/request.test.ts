@@ -1577,3 +1577,313 @@ describe('createStreamResponse', () => {
     expect(answerText).toBe('Answer');
   });
 });
+
+describe('createStreamResponse tool call compatibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetLLMModel.mockReturnValue(createMockModelData());
+  });
+
+  const stubToolCallStream = (initialFinish: 'tool_calls' | 'close' = 'tool_calls') => {
+    let finish: string = initialFinish;
+    mockParseLLMStreamResponse.mockReturnValue({
+      parsePart: () => ({
+        reasoningContent: '',
+        content: '',
+        responseContent: '',
+        finishReason: null
+      }),
+      getResponseData: () => ({
+        error: undefined,
+        reasoningContent: '',
+        content: '',
+        finish_reason: finish as 'tool_calls',
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      }),
+      updateFinishReason: (reason: string) => {
+        finish = reason;
+      },
+      updateError: vi.fn()
+    });
+  };
+
+  const tools = [
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_weather',
+        description: 'Get weather',
+        parameters: { type: 'object', properties: { location: { type: 'string' } } }
+      }
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_time',
+        description: 'Get time',
+        parameters: { type: 'object', properties: { timezone: { type: 'string' } } }
+      }
+    }
+  ];
+
+  const runStream = (chunks: any[], extra?: Record<string, any>) =>
+    createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      ...extra
+    });
+
+  it('should accumulate fragmented tool name across chunks', async () => {
+    stubToolCallStream();
+    const toolCallResults: ChatCompletionMessageToolCall[] = [];
+    const result = await runStream(
+      [
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'get_' } }] },
+              finish_reason: null
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { name: 'weather' } }] },
+              finish_reason: null
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, function: { arguments: '{"location":"Beijing"}' } }]
+              },
+              finish_reason: 'tool_calls'
+            }
+          ]
+        }
+      ],
+      { onToolCall: ({ call }: any) => toolCallResults.push(call) }
+    );
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].id).toBe('call_1');
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.toolCalls![0].function.arguments).toBe('{"location":"Beijing"}');
+    expect(toolCallResults).toHaveLength(1);
+  });
+
+  it('should keep arguments arriving before the name is complete', async () => {
+    stubToolCallStream();
+    const toolParamResults: string[] = [];
+    const result = await runStream(
+      [
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { name: 'get_' } }] },
+              finish_reason: null
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { arguments: '{"loc' } }] },
+              finish_reason: null
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { name: 'weather' } }] },
+              finish_reason: null
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { arguments: 'ation":"Beijing"}' } }] },
+              finish_reason: 'tool_calls'
+            }
+          ]
+        }
+      ],
+      { onToolParam: ({ params }: any) => toolParamResults.push(params) }
+    );
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.toolCalls![0].function.arguments).toBe('{"location":"Beijing"}');
+    expect(toolParamResults).toEqual(['ation":"Beijing"}']);
+  });
+
+  it('should not cross-contaminate parallel tool calls with interleaved chunks', async () => {
+    stubToolCallStream();
+    const result = await runStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'a', function: { name: 'get_weather' } },
+                { index: 1, id: 'b', function: { name: 'get_time' } }
+              ]
+            },
+            finish_reason: null
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            delta: { tool_calls: [{ index: 1, function: { arguments: '{"b":' } }] },
+            finish_reason: null
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            delta: { tool_calls: [{ index: 0, function: { arguments: '{"a":1}' } }] },
+            finish_reason: null
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            delta: { tool_calls: [{ index: 1, function: { arguments: '2}' } }] },
+            finish_reason: 'tool_calls'
+          }
+        ]
+      }
+    ]);
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.toolCalls![0].function.arguments).toBe('{"a":1}');
+    expect(result.toolCalls![1].function.name).toBe('get_time');
+    expect(result.toolCalls![1].function.arguments).toBe('{"b":2}');
+  });
+
+  it('should parse whole-message tool_calls chunks', async () => {
+    stubToolCallStream();
+    const result = await runStream([
+      {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  id: 'call_9',
+                  type: 'function',
+                  function: { name: 'get_weather', arguments: '{"location":"Beijing"}' }
+                }
+              ]
+            },
+            finish_reason: 'tool_calls'
+          }
+        ]
+      }
+    ]);
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].id).toBe('call_9');
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+  });
+
+  it('should parse legacy streamed function_call', async () => {
+    stubToolCallStream();
+    const result = await runStream([
+      {
+        choices: [{ delta: { function_call: { name: 'get_weather' } }, finish_reason: null }]
+      },
+      {
+        choices: [
+          {
+            delta: { function_call: { arguments: '{"location":"Beijing"}' } },
+            finish_reason: 'tool_calls'
+          }
+        ]
+      }
+    ]);
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.toolCalls![0].function.arguments).toBe('{"location":"Beijing"}');
+    expect(result.toolCalls![0].id).toBeTruthy();
+  });
+
+  it('should pass through tool names not in the whitelist', async () => {
+    stubToolCallStream();
+    const result = await runStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, function: { name: 'unknown_tool', arguments: '{}' } }]
+            },
+            finish_reason: 'tool_calls'
+          }
+        ]
+      }
+    ]);
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('unknown_tool');
+  });
+
+  it('should keep committed tool calls when aborted', async () => {
+    stubToolCallStream('close');
+    let abortCheckTimes = 0;
+    const result = await runStream(
+      [
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, id: 'call_1', function: { name: 'get_weather' } }]
+              },
+              finish_reason: null
+            }
+          ]
+        },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }
+      ],
+      { isAborted: () => ++abortCheckTimes > 1 }
+    );
+
+    expect(result.finish_reason).toBe('close');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+  });
+
+  it('should fall back to message.function_call in non-stream response', async () => {
+    const result = await createCompleteResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: false },
+      response: {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              function_call: { name: 'get_weather', arguments: '{"location":"Beijing"}' }
+            },
+            finish_reason: 'tool_calls'
+          }
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      } as any
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.toolCalls![0].function.arguments).toBe('{"location":"Beijing"}');
+  });
+});

@@ -19,6 +19,9 @@ import { filterEmptyAssistantMessages } from './utils';
 import { countGptMessagesTokens } from '../../../../common/string/tiktoken/index';
 import { formatModelChars2Points } from '../../../../support/wallet/usage/utils';
 import { i18nT } from '../../../../../web/i18n/utils';
+import { getLogger, LogCategories } from '../../../../common/logger';
+
+const logger = getLogger(LogCategories.MODULE.AI.AGENT);
 
 type RunAgentCallProps = {
   maxRunAgentTimes: number;
@@ -305,6 +308,19 @@ export const runAgentCall = async ({
     }
     if (responseEmptyTip) {
       return Promise.reject(responseEmptyTip);
+    }
+    if (
+      (finishReason === 'tool_calls' || finishReason === 'function_call') &&
+      toolCalls.length === 0 &&
+      !answer &&
+      !isAborted?.()
+    ) {
+      logger.warn('[Agent] tool_calls finish_reason but empty toolCalls', {
+        requestId,
+        model: modelData.model,
+        finishReason
+      });
+      return Promise.reject(i18nT('chat:LLM_tool_call_response_empty'));
     }
     if (toolCalls.length) {
       const pureControlTurn =
