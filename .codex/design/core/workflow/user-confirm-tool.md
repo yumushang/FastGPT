@@ -76,4 +76,4 @@ handleInteractiveTool 拦截解析 ──> 替换占位 tool message.content ─
 - [x] v2 后端：options {label,description}、list.description、confirmCard 标记、skip 语义（单测 +2）
 - [x] v2 前端：ConfirmCard 卡片（翻页/点选即答/多选勾选/自定义/跳过）+ ChatBox 挂载 + 摘要回显 + i18n
 - [x] v2 验证：API E2E 7/7（confirmCard/description/skip/嵌套）；浏览器卡片全链路（布局对照截图/翻页/点选即答/多选勾选/末题完成/自定义回车/跳过/摘要回显）；global 1593、service 1777/1778、app 590/591（仅存量失败）；tsc 与 next build 类型门禁通过；E2E 环境已清理
-- [ ] 提交并打 tag：用户 2026-11-24 选择暂不提交，改动保留在工作区
+- [x] 提交并打 tag：bf33ddd15 / v4.14.31-ch-fix23（2026-11-24，用户指示；branch 与 tag 已 push origin）
