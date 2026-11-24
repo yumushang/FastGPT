@@ -38,6 +38,8 @@ export const nodeInputTypeToInputType = (inputTypes: FlowNodeInputTypeEnum[] = [
   if (inputType === FlowNodeInputTypeEnum.switch) return InputTypeEnum.switch;
   if (inputType === FlowNodeInputTypeEnum.select) return InputTypeEnum.select;
   if (inputType === FlowNodeInputTypeEnum.multipleSelect) return InputTypeEnum.multipleSelect;
+  if (inputType === FlowNodeInputTypeEnum.radio) return InputTypeEnum.radio;
+  if (inputType === FlowNodeInputTypeEnum.checkbox) return InputTypeEnum.checkbox;
   if (inputType === FlowNodeInputTypeEnum.JSONEditor) return InputTypeEnum.JSONEditor;
   if (inputType === FlowNodeInputTypeEnum.selectLLMModel) return InputTypeEnum.selectLLMModel;
   if (inputType === FlowNodeInputTypeEnum.fileSelect) return InputTypeEnum.fileSelect;

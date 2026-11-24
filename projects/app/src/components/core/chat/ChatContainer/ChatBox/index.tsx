@@ -34,6 +34,7 @@ import { postQuestionGuide } from '@/web/core/ai/api';
 import type { ChatBoxInputType, ChatBoxInputFormType, SendPromptFnType } from './type';
 import type { StartChatFnProps, generatingMessageProps } from '../type';
 import ChatInput from './Input/ChatInput';
+import ConfirmCard from '@/components/core/chat/components/Interactive/ConfirmCard';
 import ChatBoxDivider from '../../Divider';
 import { type OutLinkChatAuthProps } from '@fastgpt/global/support/permission/chat';
 import { getNanoid } from '@fastgpt/global/common/string/tools';
@@ -256,6 +257,13 @@ const ChatBox = ({
     () => getInteractiveByHistories(chatRecords),
     [chatRecords]
   );
+
+  const confirmCardInteractive =
+    lastInteractive?.type === 'userInput' &&
+    lastInteractive.params.confirmCard &&
+    !lastInteractive.params.submitted
+      ? lastInteractive
+      : undefined;
 
   const showExternalVariable = useMemo(() => {
     const map: Record<string, boolean> = {
@@ -1913,24 +1921,38 @@ const ChatBox = ({
       ) : (
         <>
           {AppChatRenderBox}
-          {canSendPrompt && (
+          {confirmCardInteractive ? (
             <Box
               px={[3, 5]}
               m={['0 auto 10px', '10px auto']}
               w={'100%'}
               maxW={['auto', 'min(820px, 100%)']}
             >
-              {showWorkorder && <WorkorderEntrance />}
-
-              <ChatInput
-                onSendMessage={sendPrompt}
-                lastInteractive={lastInteractive}
-                onStop={() => abortRequest('stop')}
-                TextareaDom={TextareaDom}
-                resetInputVal={resetInputVal}
-                chatForm={chatForm}
+              <ConfirmCard
+                interactive={confirmCardInteractive}
+                onAnswer={(text) => sendPrompt({ text, interactive: lastInteractive })}
               />
             </Box>
+          ) : (
+            canSendPrompt && (
+              <Box
+                px={[3, 5]}
+                m={['0 auto 10px', '10px auto']}
+                w={'100%'}
+                maxW={['auto', 'min(820px, 100%)']}
+              >
+                {showWorkorder && <WorkorderEntrance />}
+
+                <ChatInput
+                  onSendMessage={sendPrompt}
+                  lastInteractive={lastInteractive}
+                  onStop={() => abortRequest('stop')}
+                  TextareaDom={TextareaDom}
+                  resetInputVal={resetInputVal}
+                  chatForm={chatForm}
+                />
+              </Box>
+            )
           )}
         </>
       )}

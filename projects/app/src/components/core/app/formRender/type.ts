@@ -44,6 +44,9 @@ export type SpecificProps = {
   list?: { label: string; value: string }[];
   enums?: { value: string }[]; // old version
 
+  // radio & checkbox (interactive confirm): allow typing a custom answer
+  allowCustom?: boolean;
+
   // selectDataset
   datasetOptions?: SelectedDatasetType[];
 

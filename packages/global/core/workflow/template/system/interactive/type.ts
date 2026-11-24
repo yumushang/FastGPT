@@ -116,7 +116,10 @@ export const UserInputFormItemSchema = AppFileSelectConfigTypeSchema.extend({
   minLength: z.number().optional(), // password
   max: z.number().optional(), // numberInput
   min: z.number().optional(), // numberInput
-  list: z.array(z.object({ label: z.string(), value: z.string() })).optional() // select
+  list: z
+    .array(z.object({ label: z.string(), value: z.string(), description: z.string().optional() }))
+    .optional(), // select
+  allowCustom: z.boolean().optional() // radio/checkbox: allow typing a custom answer
 });
 export type UserInputFormItemType = z.infer<typeof UserInputFormItemSchema>;
 export const UserInputInteractiveSchema = z.object({
@@ -124,7 +127,8 @@ export const UserInputInteractiveSchema = z.object({
   params: z.object({
     description: z.string(),
     inputForm: z.array(UserInputFormItemSchema),
-    submitted: z.boolean().optional()
+    submitted: z.boolean().optional(),
+    confirmCard: z.boolean().optional() // docked question-card UI (user_confirm)
   })
 });
 export type UserInputInteractive = z.infer<typeof UserInputInteractiveSchema>;

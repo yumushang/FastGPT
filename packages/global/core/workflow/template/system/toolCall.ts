@@ -121,6 +121,14 @@ export const ToolCallNode: FlowNodeTemplateType = {
       value: false
     },
     {
+      key: NodeInputKeyEnum.useUserConfirm,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:use_user_confirm'),
+      description: i18nT('app:use_user_confirm_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
       ...Input_Template_System_Prompt,
       label: i18nT('common:core.ai.Prompt'),
       description: systemPromptTip,

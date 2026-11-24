@@ -53,6 +53,37 @@ export const getSandboxToolWorkflowResponse = ({
   };
 };
 
+export const getConfirmToolWorkflowResponse = ({
+  name,
+  toolId,
+  input,
+  response
+}: {
+  name: string;
+  toolId: string;
+  input: Record<string, any>;
+  response: string;
+}): ChildResponseItemType => {
+  return {
+    flowResponses: [
+      {
+        moduleName: name,
+        moduleType: FlowNodeTypeEnum.tool,
+        moduleLogo: 'core/workflow/template/userSelect',
+        toolId,
+        toolInput: input,
+        toolRes: response,
+        totalPoints: 0,
+        id: getNanoid(),
+        nodeId: getNanoid(),
+        runningTime: 0
+      }
+    ],
+    flowUsages: [],
+    runTimes: 0
+  };
+};
+
 export const getPlanToolWorkflowResponse = ({
   callId,
   operation,

@@ -223,12 +223,28 @@ describe('dispatchRunTools subAgent branch', () => {
           systemPrompt: '',
           userChatInput: '任务',
           history: 0,
-          toolWhitelist: ['不存在']
+          toolWhitelist: ['不存在'],
+          useUserConfirm: false
         }
       }) as any
     );
     expect(res.toolResponses.error).toContain('财务:报销');
     expect(captured.length).toBe(0);
+  });
+
+  it('bare subAgent still runs when confirm tool enabled (default)', async () => {
+    const res: any = await dispatchRunTools(
+      baseProps({
+        node: { ...subNode, isEntry: true },
+        runtimeNodes: [subNode],
+        runtimeEdges: [],
+        parentToolNodes: [poolA],
+        params: { model: 'm', systemPrompt: '', userChatInput: '任务', history: 0 }
+      }) as any
+    );
+    expect(res.toolResponses?.error).toBeUndefined();
+    expect(captured.length).toBe(1);
+    expect(captured[0].toolNodes).toEqual([]);
   });
 
   it('overrides system prompt and keeps context isolated (history=0)', async () => {

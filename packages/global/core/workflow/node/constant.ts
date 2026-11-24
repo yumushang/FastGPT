@@ -8,6 +8,8 @@ export enum FlowNodeInputTypeEnum { // render ui
   switch = 'switch', // true/false
   select = 'select',
   multipleSelect = 'multipleSelect',
+  radio = 'radio', // flat radio list (interactive confirm)
+  checkbox = 'checkbox', // flat checkbox list (interactive confirm)
 
   // editor
   JSONEditor = 'JSONEditor',
@@ -52,6 +54,12 @@ export const FlowNodeInputMap: Record<
     icon: 'core/workflow/inputType/option'
   },
   [FlowNodeInputTypeEnum.multipleSelect]: {
+    icon: 'core/workflow/inputType/multipleSelect'
+  },
+  [FlowNodeInputTypeEnum.radio]: {
+    icon: 'core/workflow/inputType/select'
+  },
+  [FlowNodeInputTypeEnum.checkbox]: {
     icon: 'core/workflow/inputType/multipleSelect'
   },
   [FlowNodeInputTypeEnum.switch]: {

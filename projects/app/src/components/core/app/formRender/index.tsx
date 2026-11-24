@@ -1,5 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Input, Switch, Flex, IconButton } from '@chakra-ui/react';
+import {
+  Box,
+  Input,
+  Switch,
+  Flex,
+  IconButton,
+  Checkbox,
+  CheckboxGroup,
+  Stack
+} from '@chakra-ui/react';
 import MyIcon from '@fastgpt/web/components/common/Icon';
 import type { InputRenderProps } from './type';
 import { InputTypeEnum } from './constant';
@@ -7,6 +16,7 @@ import PromptEditor from '@fastgpt/web/components/common/Textarea/PromptEditor';
 import MyNumberInput from '@fastgpt/web/components/common/Input/NumberInput';
 import MySelect from '@fastgpt/web/components/common/MySelect';
 import MultipleSelect from '@fastgpt/web/components/common/MySelect/MultipleSelect';
+import LeftRadio from '@fastgpt/web/components/common/Radio/LeftRadio';
 import JSONEditor from '@fastgpt/web/components/common/Textarea/JsonEditor';
 import AIModelSelector from '../../../Select/AIModelSelector';
 import TimeInput from './TimeInput';
@@ -36,6 +46,8 @@ const InputRender = (props: InputRenderProps) => {
 
   // Password
   const [isPasswordEditing, setIsPasswordEditing] = useState(false);
+  // radio/checkbox custom answer draft
+  const [customDraft, setCustomDraft] = useState('');
 
   const multipleSelectList = useMemo(() => {
     if (inputType !== InputTypeEnum.multipleSelect) return [];
@@ -194,6 +206,83 @@ const InputRender = (props: InputRenderProps) => {
         isSelectAll={isSelectAll}
         itemWrap
       />
+    );
+  }
+
+  if (inputType === InputTypeEnum.radio) {
+    const list =
+      props.list || props.enums?.map((item) => ({ label: item.value, value: item.value })) || [];
+    const customActive =
+      typeof value === 'string' && value !== '' && !list.some((i) => i.value === value);
+    return (
+      <Box>
+        <LeftRadio<string>
+          list={list.map((item) => ({ title: item.label, value: item.value }))}
+          value={value}
+          onChange={(e) => onChange?.(e)}
+          isDisabled={isDisabled}
+        />
+        {props.allowCustom && (
+          <Input
+            mt={2}
+            size={'sm'}
+            bg={bg}
+            isDisabled={isDisabled}
+            placeholder={t('app:confirm_custom_placeholder' as any)}
+            value={
+              customActive ? String(value) : list.some((i) => i.value === value) ? '' : customDraft
+            }
+            onChange={(e) => {
+              setCustomDraft(e.target.value);
+              onChange?.(e.target.value);
+            }}
+          />
+        )}
+      </Box>
+    );
+  }
+
+  if (inputType === InputTypeEnum.checkbox) {
+    const list =
+      props.list || props.enums?.map((item) => ({ label: item.value, value: item.value })) || [];
+    const arr: string[] = Array.isArray(value) ? value : [];
+    const extras = arr.filter((v) => !list.some((i) => i.value === v));
+    return (
+      <Box>
+        <CheckboxGroup value={arr} onChange={(vals) => onChange?.(vals as string[])}>
+          <Stack direction={'column'} spacing={1}>
+            {list.map((item) => (
+              <Checkbox key={item.value} value={item.value} isDisabled={isDisabled}>
+                {item.label}
+              </Checkbox>
+            ))}
+            {extras.map((v) => (
+              <Checkbox key={v} value={v} isDisabled={isDisabled}>
+                {v}
+              </Checkbox>
+            ))}
+          </Stack>
+        </CheckboxGroup>
+        {props.allowCustom && (
+          <Input
+            mt={2}
+            size={'sm'}
+            bg={bg}
+            isDisabled={isDisabled}
+            placeholder={t('app:confirm_custom_placeholder' as any)}
+            value={customDraft}
+            onChange={(e) => setCustomDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && customDraft.trim()) {
+                e.preventDefault();
+                const v = customDraft.trim();
+                if (!arr.includes(v)) onChange?.([...arr, v]);
+                setCustomDraft('');
+              }
+            }}
+          />
+        )}
+      </Box>
     );
   }
 

@@ -181,6 +181,7 @@ export enum NodeInputKeyEnum {
   inheritCallerModel = 'inheritCallerModel',
   directOutput = 'directOutput',
   visibleToMain = 'visibleToMain',
+  useUserConfirm = 'useUserConfirm',
 
   // dataset
   datasetSelectList = 'datasets',

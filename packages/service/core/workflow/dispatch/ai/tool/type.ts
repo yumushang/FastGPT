@@ -31,6 +31,7 @@ export type DispatchToolModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.toolWhitelist]?: string[] | string;
   [NodeInputKeyEnum.inheritCallerModel]?: boolean;
   [NodeInputKeyEnum.directOutput]?: boolean;
+  [NodeInputKeyEnum.useUserConfirm]?: boolean;
 }> & {
   messages: ChatCompletionMessageParam[];
   toolNodes: ToolNodeItemType[];

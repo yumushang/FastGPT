@@ -5,6 +5,8 @@ export enum InputTypeEnum {
   switch = 'switch',
   select = 'select',
   multipleSelect = 'multipleSelect',
+  radio = 'radio',
+  checkbox = 'checkbox',
   password = 'password',
   timePointSelect = 'timePointSelect',
   timeRangeSelect = 'timeRangeSelect',

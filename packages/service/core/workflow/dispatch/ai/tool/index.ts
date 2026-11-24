@@ -71,7 +71,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       useAgentPlan,
       toolPoolMode,
       toolWhitelist,
-      inheritCallerModel
+      inheritCallerModel,
+      useUserConfirm
     }
   } = props;
 
@@ -149,7 +150,7 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       const pool = props.parentToolNodes ?? [];
       const { selected, misses } = matchPoolByWhitelist(pool, toolWhitelist);
       fullToolNodes = mergeToolNodes(ownEdgeTools, selected);
-      if (fullToolNodes.length === 0) {
+      if (fullToolNodes.length === 0 && useUserConfirm === false) {
         return getNodeErrResponse({
           error: `子代理没有可用工具：自身未挂载工具，且白名单未匹配到工具池中的工具。当前工具池可用工具：${
             pool.map((t) => `${t.name}(${t.nodeId})`).join('、') || '（空）'

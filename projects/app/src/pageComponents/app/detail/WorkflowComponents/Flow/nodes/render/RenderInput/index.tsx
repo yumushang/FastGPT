@@ -74,6 +74,8 @@ const RenderList: Record<
   [FlowNodeInputTypeEnum.multipleSelect]: {
     Component: CommonInputForm
   },
+  [FlowNodeInputTypeEnum.radio]: undefined,
+  [FlowNodeInputTypeEnum.checkbox]: undefined,
   [FlowNodeInputTypeEnum.JSONEditor]: {
     Component: CommonInputForm
   },

@@ -30,6 +30,7 @@ import { isEqual } from 'lodash';
 import { useTranslation } from 'next-i18next';
 import { eventBus, EventNameEnum } from '@/web/common/utils/eventbus';
 import { SelectOptionsComponent, FormInputComponent } from './Interactive/InteractiveComponents';
+import { ConfirmCardSummary } from './Interactive/ConfirmCard';
 import { extractDeepestInteractive } from '@fastgpt/global/core/workflow/runtime/utils';
 import { useContextSelector } from 'use-context-selector';
 import {
@@ -635,6 +636,9 @@ const AIResponseBox = ({
     const interactive = extractDeepestInteractive(value.interactive);
     if (interactive.type === 'userSelect' || interactive.type === 'agentPlanAskUserSelect') {
       return <RenderUserSelectInteractive interactive={interactive} />;
+    }
+    if (interactive.type === 'userInput' && interactive.params.confirmCard) {
+      return interactive.params.submitted ? <ConfirmCardSummary interactive={interactive} /> : null;
     }
     if (interactive.type === 'userInput' || interactive.type === 'agentPlanAskUserForm') {
       return (

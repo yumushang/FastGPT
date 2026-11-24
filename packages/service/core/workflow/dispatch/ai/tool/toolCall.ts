@@ -7,13 +7,29 @@ import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/cons
 import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/utils';
 import { runWorkflow } from '../../index';
 import type { ChildResponseItemType, DispatchToolModuleProps, ToolNodeItemType } from './type';
-import { chats2GPTMessages, GPTMessages2Chats } from '@fastgpt/global/core/chat/adapt';
+import {
+  chats2GPTMessages,
+  GPTMessages2Chats,
+  chatValue2RuntimePrompt
+} from '@fastgpt/global/core/chat/adapt';
 import type { AIChatItemValueItemType } from '@fastgpt/global/core/chat/type';
 import { formatToolResponse, initToolCallEdges, initToolNodes } from './utils';
 import { parseJsonArgs } from '../../../../ai/utils';
 import { sliceStrStartEnd } from '@fastgpt/global/common/string/tools';
 import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
-import { toolValueTypeList, valueTypeJsonSchemaMap } from '@fastgpt/global/core/workflow/constants';
+import {
+  toolValueTypeList,
+  valueTypeJsonSchemaMap,
+  WorkflowIOValueTypeEnum
+} from '@fastgpt/global/core/workflow/constants';
+import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import type { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
+import {
+  CONFIRM_TOOL,
+  CONFIRM_TOOL_NAME,
+  ConfirmToolSchema,
+  normalizeConfirm
+} from '@fastgpt/global/core/workflow/node/agent/confirmTools';
 import { runAgentCall } from '../../../../ai/llm/agentCall';
 import type { ToolCallChildrenInteractive } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import type { JsonSchemaPropertiesItemType } from '@fastgpt/global/core/app/jsonschema';
@@ -24,7 +40,11 @@ import {
   SANDBOX_GET_FILE_URL_TOOL_NAME,
   SANDBOX_TOOLS
 } from '@fastgpt/global/core/ai/sandbox/constants';
-import { getSandboxToolWorkflowResponse, getPlanToolWorkflowResponse } from './constants';
+import {
+  getSandboxToolWorkflowResponse,
+  getPlanToolWorkflowResponse,
+  getConfirmToolWorkflowResponse
+} from './constants';
 import { callSandboxTool } from '../../../../ai/sandbox/toolCall';
 import { systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
 import { parseI18nString } from '@fastgpt/global/common/i18n/utils';
@@ -84,7 +104,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       aiChatReasoning,
       isResponseAnswerText = true,
       useAgentSandbox,
-      useAgentPlan
+      useAgentPlan,
+      useUserConfirm
     }
   } = workflowProps;
 
@@ -151,8 +172,13 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
   if (useAgentPlan) {
     tools.push(...createPlanAgentTools());
   }
+  // 注入内置人工确认工具（默认开，存量节点无该 key 时视为开）
+  if (useUserConfirm !== false) {
+    tools.push(CONFIRM_TOOL);
+  }
   const planValueId = getNanoid();
   let activePlan = props.activePlan;
+  let pendingInteractive = false;
   const isPlanToolName = (name?: string) =>
     !!useAgentPlan && (name === setPlanToolName || name === updatePlanToolName);
 
@@ -338,6 +364,66 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           });
 
           return { response, flowResponse };
+        }
+        // 拦截内置人工确认工具：合成 userInput 交互挂起循环
+        if (call.function?.name === CONFIRM_TOOL_NAME) {
+          if (pendingInteractive) {
+            return {
+              response: '本轮已有待处理交互，请等待用户完成后再发起确认。'
+            };
+          }
+          const parsed = ConfirmToolSchema.safeParse(parseJsonArgs(call.function.arguments));
+          if (!parsed.success) {
+            return {
+              response: `确认工具参数无效：${parsed.error.message}。请提供 questions（1-5 问，每问含 question 与可选 options）。`
+            };
+          }
+          const questions = normalizeConfirm(parsed.data.questions);
+          if (!questions.length) {
+            return { response: '确认工具参数无效：questions 不能为空。' };
+          }
+          const interactive: WorkflowInteractiveResponseType = {
+            type: 'userInput',
+            params: {
+              description: questions.map((q) => q.question).join('\n'),
+              confirmCard: true,
+              inputForm: questions.map((q, i) => ({
+                key: `q${i}`,
+                label: q.question,
+                type: q.options.length
+                  ? q.multiple
+                    ? FlowNodeInputTypeEnum.checkbox
+                    : FlowNodeInputTypeEnum.radio
+                  : FlowNodeInputTypeEnum.input,
+                list: q.options.map((o) => ({
+                  label: o.label,
+                  value: o.label,
+                  ...(o.description ? { description: o.description } : {})
+                })),
+                value: q.multiple ? [] : '',
+                valueType: q.multiple
+                  ? WorkflowIOValueTypeEnum.arrayString
+                  : WorkflowIOValueTypeEnum.string,
+                required: true,
+                allowCustom: true
+              }))
+            },
+            entryNodeIds: [CONFIRM_TOOL_NAME],
+            memoryEdges: [],
+            nodeOutputs: [],
+            usageId: workflowProps.usageId
+          };
+          return {
+            response: `等待用户确认：${questions.map((q) => q.question).join('；')}`,
+            interactive,
+            flowResponse: getConfirmToolWorkflowResponse({
+              name: tool.name,
+              toolId: CONFIRM_TOOL_NAME,
+              input: { questions },
+              response: '等待用户确认'
+            }),
+            usages: []
+          };
         } else {
           const toolNode = tool?.rawData;
 
@@ -390,6 +476,9 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         }
       })();
 
+      if (interactive) {
+        pendingInteractive = true;
+      }
       if (isResponseAnswerText && !isPlanToolName(call.function?.name)) {
         workflowStreamResponse?.({
           id: call.id,
@@ -420,6 +509,55 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       };
     },
     handleInteractiveTool: async ({ childrenResponse, toolParams }) => {
+      // 内置人工确认工具 resume：无画布节点，直接解析用户答案回流
+      const confirmCall = toolParams.memoryRequestMessages
+        .filter((m) => m.role === 'assistant' && m.tool_calls)
+        .flatMap((m) => (m.role === 'assistant' ? m.tool_calls : undefined) ?? [])
+        .find((tc) => tc.id === toolParams.toolCallId);
+      if (confirmCall?.function.name === CONFIRM_TOOL_NAME) {
+        const { text } = chatValue2RuntimePrompt(workflowProps.query);
+        const answers = (() => {
+          try {
+            return JSON.parse(text);
+          } catch {
+            return {};
+          }
+        })();
+        const hasAnswer = Object.values(answers ?? {}).some((v) =>
+          Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null && v !== ''
+        );
+        if ((answers as { skip?: boolean })?.skip === true) {
+          return {
+            response: '用户跳过本次确认，请按默认策略继续执行。',
+            assistantMessages: [],
+            usages: []
+          };
+        }
+        if (!hasAnswer) {
+          return {
+            response: '用户未提供有效答案，请重新询问或按默认策略继续。',
+            assistantMessages: [],
+            usages: []
+          };
+        }
+        const response = formatToolResponse(answers);
+        if (isResponseAnswerText) {
+          workflowStreamResponse?.({
+            id: toolParams.toolCallId,
+            event: SseResponseEventEnum.toolResponse,
+            data: {
+              tool: {
+                id: toolParams.toolCallId,
+                toolName: '',
+                toolAvatar: '',
+                params: '',
+                response
+              }
+            }
+          });
+        }
+        return { response, assistantMessages: [], usages: [] };
+      }
       // 还原上一轮 LLM 注入的参数（systemPrompt/任务/白名单/输出钩子），避免 resume 丢参
       const startParams = restoreToolStartParams(
         toolParams.memoryRequestMessages,

@@ -54,6 +54,14 @@ export const SubAgentNode: FlowNodeTemplateType = {
       value: false
     },
     {
+      key: NodeInputKeyEnum.useUserConfirm,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:use_user_confirm'),
+      description: i18nT('app:use_user_confirm_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
       key: NodeInputKeyEnum.aiChatTemperature,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
