@@ -109,6 +109,7 @@ const baseProps = (over: any = {}) => ({
   workflowStreamResponse: vi.fn(),
   usagePush: vi.fn(),
   params: {
+    useReadSkill: false,
     model: 'main-model',
     systemPrompt: '静态人设',
     userChatInput: '任务',
@@ -167,7 +168,13 @@ describe('dispatchRunTools subAgent branch', () => {
       runtimeEdges: [toolEdge('sub1', 'own1')],
       parentToolNodes: [poolA, poolB],
       parentToolModel: 'caller-model',
-      params: { model: 'main-model', systemPrompt: '静态人设', userChatInput: '任务', history: 0 },
+      params: {
+        useReadSkill: false,
+        model: 'main-model',
+        systemPrompt: '静态人设',
+        userChatInput: '任务',
+        history: 0
+      },
       ...over
     });
 
@@ -175,6 +182,7 @@ describe('dispatchRunTools subAgent branch', () => {
     await dispatchRunTools(
       subProps({
         params: {
+          useReadSkill: false,
           model: 'main-model',
           systemPrompt: '静态人设',
           userChatInput: '任务',
@@ -198,6 +206,7 @@ describe('dispatchRunTools subAgent branch', () => {
     await dispatchRunTools(
       subProps({
         params: {
+          useReadSkill: false,
           model: 'm',
           systemPrompt: '静态人设',
           userChatInput: '任务',
@@ -219,6 +228,7 @@ describe('dispatchRunTools subAgent branch', () => {
         runtimeEdges: [],
         parentToolNodes: [poolA],
         params: {
+          useReadSkill: false,
           model: 'm',
           systemPrompt: '',
           userChatInput: '任务',
@@ -239,7 +249,13 @@ describe('dispatchRunTools subAgent branch', () => {
         runtimeNodes: [subNode],
         runtimeEdges: [],
         parentToolNodes: [poolA],
-        params: { model: 'm', systemPrompt: '', userChatInput: '任务', history: 0 }
+        params: {
+          useReadSkill: false,
+          model: 'm',
+          systemPrompt: '',
+          userChatInput: '任务',
+          history: 0
+        }
       }) as any
     );
     expect(res.toolResponses?.error).toBeUndefined();
@@ -251,7 +267,13 @@ describe('dispatchRunTools subAgent branch', () => {
     await dispatchRunTools(
       subProps({
         histories: [{ obj: 'Human', value: [{ text: { content: '旧对话' } }] }],
-        params: { model: 'm', systemPrompt: '动态人设', userChatInput: '任务', history: 0 }
+        params: {
+          useReadSkill: false,
+          model: 'm',
+          systemPrompt: '动态人设',
+          userChatInput: '任务',
+          history: 0
+        }
       }) as any
     );
     const p = captured[0];
@@ -264,6 +286,7 @@ describe('dispatchRunTools subAgent branch', () => {
     await dispatchRunTools(
       subProps({
         params: {
+          useReadSkill: false,
           model: 'own-model',
           systemPrompt: '',
           userChatInput: '任务',
@@ -316,6 +339,7 @@ describe('dispatchRunTools poolMode (main node)', () => {
       runtimeNodes: [sub, t1, t2],
       runtimeEdges: [toolEdge('node1', 'sub1'), toolEdge('node1', 'idA'), toolEdge('node1', 'idB')],
       params: {
+        useReadSkill: false,
         model: 'm',
         systemPrompt: '主提示词',
         userChatInput: '问题',
@@ -347,6 +371,7 @@ describe('dispatchRunTools poolMode (main node)', () => {
       runtimeNodes: [t1, t2],
       runtimeEdges: [toolEdge('node1', 'idA'), toolEdge('node1', 'idB')],
       params: {
+        useReadSkill: false,
         model: 'm',
         systemPrompt: '',
         userChatInput: '问题',
@@ -371,6 +396,7 @@ describe('dispatchRunTools poolMode (main node)', () => {
       runtimeNodes: [sub, t1, finished],
       runtimeEdges: [toolEdge('node1', 'sub1'), toolEdge('node1', 'idA'), toolEdge('node1', 'idC')],
       params: {
+        useReadSkill: false,
         model: 'm',
         systemPrompt: '主提示词',
         userChatInput: '问题',
@@ -384,5 +410,79 @@ describe('dispatchRunTools poolMode (main node)', () => {
     const sys = systemContent(p);
     expect(sys).toContain('名称: 财务:报销 | id: idA');
     expect(sys).not.toContain('成品报告');
+  });
+});
+
+describe('dispatchRunTools read_skill catalog mode', () => {
+  const sk = rtTool('sk1', '池技能', FlowNodeTypeEnum.skill);
+  const mainWithSkill = (over: any = {}) =>
+    baseProps({
+      runtimeNodes: [sk],
+      runtimeEdges: [toolEdge('node1', 'sk1')],
+      params: { model: 'm', systemPrompt: '主提示词', userChatInput: 'q', history: 6 },
+      ...over
+    });
+
+  it('mode on: skills excluded from llm tools but kept in pool and skillNodes', async () => {
+    await dispatchRunTools(mainWithSkill() as any);
+    expect(captured[0].toolNodes.map((t: any) => t.nodeId)).toEqual([]);
+    expect(captured[0].skillNodes.map((t: any) => t.nodeId)).toEqual(['sk1']);
+    expect(captured[0].childToolPool.map((t: any) => t.nodeId)).toEqual(['sk1']);
+  });
+
+  it('mode on + poolMode: system catalog does not advertise skills', async () => {
+    const sub = rtTool('sub1', '财务子代理', FlowNodeTypeEnum.subAgent);
+    await dispatchRunTools(
+      mainWithSkill({
+        runtimeNodes: [sub, sk],
+        runtimeEdges: [toolEdge('node1', 'sub1'), toolEdge('node1', 'sk1')],
+        params: {
+          model: 'm',
+          systemPrompt: '主提示词',
+          userChatInput: 'q',
+          history: 6,
+          toolPoolMode: true
+        }
+      }) as any
+    );
+    expect(systemContent(captured[0])).not.toContain('池技能');
+    expect(captured[0].skillNodes.map((t: any) => t.nodeId)).toEqual(['sk1']);
+  });
+
+  it('mode off: v1 per-skill tools', async () => {
+    await dispatchRunTools(
+      mainWithSkill({
+        params: {
+          model: 'm',
+          systemPrompt: '主提示词',
+          userChatInput: 'q',
+          history: 6,
+          useReadSkill: false
+        }
+      }) as any
+    );
+    expect(captured[0].toolNodes.map((t: any) => t.nodeId)).toEqual(['sk1']);
+    expect(captured[0].skillNodes).toEqual([]);
+  });
+
+  it('subAgent whitelist inherits pool skills into its read_skill catalog', async () => {
+    const sub = rtTool('sub1', '财务子代理', FlowNodeTypeEnum.subAgent);
+    await dispatchRunTools(
+      baseProps({
+        node: { ...sub, isEntry: true },
+        runtimeNodes: [sub],
+        runtimeEdges: [],
+        parentToolNodes: [sk],
+        params: {
+          model: 'm',
+          systemPrompt: '',
+          userChatInput: '任务',
+          history: 0,
+          toolWhitelist: ['池技能']
+        }
+      }) as any
+    );
+    expect(captured[0].skillNodes.map((t: any) => t.nodeId)).toEqual(['sk1']);
+    expect(captured[0].toolNodes).toEqual([]);
   });
 });

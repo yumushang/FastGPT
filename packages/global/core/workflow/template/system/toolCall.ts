@@ -129,6 +129,14 @@ export const ToolCallNode: FlowNodeTemplateType = {
       value: true
     },
     {
+      key: NodeInputKeyEnum.useReadSkill,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:use_read_skill'),
+      description: i18nT('app:use_read_skill_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
       ...Input_Template_System_Prompt,
       label: i18nT('common:core.ai.Prompt'),
       description: systemPromptTip,

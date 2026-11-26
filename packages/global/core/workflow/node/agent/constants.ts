@@ -9,6 +9,7 @@ import type { I18nStringType } from '../../../../common/i18n/type';
 import { setPlanToolName, updatePlanToolName } from '../../../ai/agent/constants';
 import { skillToolsMap } from './skillTools';
 import { confirmToolsMap } from './confirmTools';
+import { readSkillToolsMap } from './readSkillTools';
 
 export enum SubAppIds {
   plan = 'plan_agent',
@@ -18,7 +19,8 @@ export enum SubAppIds {
   datasetSearch = 'dataset_search',
   sandboxTool = 'sandbox_shell',
   sandboxGetFileUrl = 'sandbox_get_file_url',
-  confirm = 'user_confirm'
+  confirm = 'user_confirm',
+  readSkill = 'read_skill'
 }
 
 export const systemSubInfo: Record<
@@ -100,5 +102,6 @@ export const systemSubInfo: Record<
     toolDescription: 'Maintain an existing active plan.'
   },
   ...skillToolsMap,
-  ...confirmToolsMap
+  ...confirmToolsMap,
+  ...readSkillToolsMap
 };

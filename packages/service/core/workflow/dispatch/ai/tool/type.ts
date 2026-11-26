@@ -32,6 +32,7 @@ export type DispatchToolModuleProps = ModuleDispatchProps<{
   [NodeInputKeyEnum.inheritCallerModel]?: boolean;
   [NodeInputKeyEnum.directOutput]?: boolean;
   [NodeInputKeyEnum.useUserConfirm]?: boolean;
+  [NodeInputKeyEnum.useReadSkill]?: boolean;
 }> & {
   messages: ChatCompletionMessageParam[];
   toolNodes: ToolNodeItemType[];
@@ -40,6 +41,8 @@ export type DispatchToolModuleProps = ModuleDispatchProps<{
   activePlan?: AgentPlanType;
   // 传递给子代理的工具池（poolMode 下为全池，≠ LLM 可见子集）
   childToolPool?: ToolNodeItemType[];
+  // 目录读取模式下经 read_skill 深读的技能节点（不进 LLM 零参工具列表）
+  skillNodes?: ToolNodeItemType[];
 };
 
 export type ToolNodeItemType = {

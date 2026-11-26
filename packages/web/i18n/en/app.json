@@ -492,6 +492,8 @@
   "visible_to_main_desc": "In tool pool mode, when enabled this tool stays in the main node model's tool list and can be called directly (combine with the direct-output hook for finished products); when disabled it only appears in the pool catalog and is used via sub-agent whitelists.",
   "use_user_confirm": "User confirmation",
   "use_user_confirm_desc": "When enabled, the AI can proactively ask the user for decisions/confirmations (flat radio/checkbox/free-text, multiple questions at once) and continue after the user answers.",
+  "use_read_skill": "Skill catalog reading",
+  "use_read_skill_desc": "When enabled, connected skills are listed in the built-in read_skill tool catalog instead of being exposed as individual tools; the AI reads a single skill body on demand. Disable to fall back to one tool per skill.",
   "confirm_custom_placeholder": "Or type a custom answer (Enter to add for multiple choice)",
   "use_agent_sandbox": "Computer",
   "use_computer_desc": "After being turned on, AI will get a virtual machine environment where it can execute commands, operate files, and run code. \nEach session shares a virtual machine environment.",

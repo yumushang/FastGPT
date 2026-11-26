@@ -182,6 +182,7 @@ export enum NodeInputKeyEnum {
   directOutput = 'directOutput',
   visibleToMain = 'visibleToMain',
   useUserConfirm = 'useUserConfirm',
+  useReadSkill = 'useReadSkill',
 
   // dataset
   datasetSelectList = 'datasets',

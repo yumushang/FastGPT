@@ -84,6 +84,37 @@ export const getConfirmToolWorkflowResponse = ({
   };
 };
 
+export const getReadSkillToolWorkflowResponse = ({
+  name,
+  toolId,
+  input,
+  response
+}: {
+  name: string;
+  toolId: string;
+  input: Record<string, any>;
+  response: string;
+}): ChildResponseItemType => {
+  return {
+    flowResponses: [
+      {
+        moduleName: name,
+        moduleType: FlowNodeTypeEnum.skill,
+        moduleLogo: 'core/skill/default',
+        toolId,
+        toolInput: input,
+        toolRes: response,
+        totalPoints: 0,
+        id: getNanoid(),
+        nodeId: getNanoid(),
+        runningTime: 0
+      }
+    ],
+    flowUsages: [],
+    runTimes: 0
+  };
+};
+
 export const getPlanToolWorkflowResponse = ({
   callId,
   operation,

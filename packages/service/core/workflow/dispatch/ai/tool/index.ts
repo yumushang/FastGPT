@@ -72,7 +72,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       toolPoolMode,
       toolWhitelist,
       inheritCallerModel,
-      useUserConfirm
+      useUserConfirm,
+      useReadSkill
     }
   } = props;
 
@@ -163,9 +164,18 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
     } else {
       fullToolNodes = getEdgeToolNodes();
     }
+    // 目录读取模式：技能节点剔出 LLM 工具列表与系统目录，改经 read_skill 深读
+    const skillNodes =
+      useReadSkill !== false
+        ? fullToolNodes.filter((t) => t.flowNodeType === FlowNodeTypeEnum.skill)
+        : [];
+    const skillIds = new Set(skillNodes.map((t) => t.nodeId));
+    const dispatchable = skillIds.size
+      ? fullToolNodes.filter((t) => !skillIds.has(t.nodeId))
+      : fullToolNodes;
     const { llmToolNodes, catalog } = isSubAgent
-      ? { llmToolNodes: fullToolNodes, catalog: '' }
-      : splitPoolForLLM(fullToolNodes, !!toolPoolMode);
+      ? { llmToolNodes: dispatchable, catalog: '' }
+      : splitPoolForLLM(dispatchable, !!toolPoolMode);
 
     // Check interactive entry
     props.node.isEntry = false;
@@ -270,6 +280,7 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
         runtimeEdges,
         toolNodes: llmToolNodes,
         childToolPool: fullToolNodes,
+        skillNodes,
         toolModel,
         messages: adaptMessages,
         activePlan: useAgentPlan ? readToolCallActivePlan({ histories }) : undefined,

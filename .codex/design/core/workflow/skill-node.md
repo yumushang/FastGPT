@@ -83,3 +83,22 @@ nodeResponse.textOutput = 正文（调试面板）
   - {{变量}} 替换：声明变量后正文内 {{username}} → 实际值 ✓
   - 全程无沙箱事件/容器 ✓
   - 注：编辑器常驻预览面板不注入 nodes（既有行为），需点顶部「运行」打开调试弹窗；API 直调时 nodes.inputs 需补 label、chatConfig.variables 需合并 userGuide 变量声明
+## v2：read_skill 目录+深读（2026-11-26，模拟虚拟机沙箱逻辑）
+
+v1 逐技能零参工具导致工具列表膨胀。v2 定稿（用户）：**不注入系统提示词**；目录置于内置工具
+`read_skill` 自身 metadata（description 目录行「name: intro」+ `skill` 参数 enum）；入参
+`skill`（枚举，required）+ `focus`（可选，字面追加「【调用方关注】」段）；目录来源=边连接技能节点；
+技能节点不再逐个暴露为工具；开关 `useReadSkill` 默认开、可回退 v1。
+
+- 新文件 `packages/global/core/workflow/node/agent/readSkillTools.ts`（**skillTools.ts 已被沙箱占用**）：
+  READ_SKILL_NAME/ReadSkillToolSchema/readSkillToolsMap/buildReadSkillTool。
+- 分流 `dispatch/ai/tool/index.ts`：skillNodes=fullToolNodes.filter(skill)（模式开）；dispatchable 排除
+  skill 后再 splitPoolForLLM（**skill 不进 toolPoolMode 系统目录**）；childToolPool 仍含 skill（子代理
+  白名单可继承，子层同分流得自己的 read_skill）；runToolCall 传 skillNodes。
+- 拦截 `toolCall.ts` handleToolResponse：parseJsonArgs+safeParse → nodeId 精确→name 首匹配（重名逃生门）→
+  replaceEditorVariable(raw, runtimeNodesMap, variableState) → dispatchSkill 复用 → focus 字面追加 →
+  getReadSkillToolWorkflowResponse 卡片；不 stop/不 interactive/不 runWorkflow。
+- 空正文技能仍由 getToolConfigStatus 滤出 → 不进目录；新模式下 skill 的 visibleToMain 失效（仅 v1 生效）。
+- 验证：readSkill.toolCall.test.ts 6 例 + subAgent.dispatch 目录模式 4 例（既有夹具补 useReadSkill:false）；
+  局部 90/90；E2E 9/9（enum 目录/无系统注入/focus/回退 v1/嵌套继承）。
+- TODO：[ ] 提交并打 tag（顺延 fix26，待用户指示）

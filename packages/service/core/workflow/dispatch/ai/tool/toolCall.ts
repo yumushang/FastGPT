@@ -3,8 +3,14 @@ import type {
   ChatCompletionTool,
   CompletionFinishReason
 } from '@fastgpt/global/core/ai/llm/type';
-import { SseResponseEventEnum } from '@fastgpt/global/core/workflow/runtime/constants';
-import { textAdaptGptResponse } from '@fastgpt/global/core/workflow/runtime/utils';
+import {
+  SseResponseEventEnum,
+  DispatchNodeResponseKeyEnum
+} from '@fastgpt/global/core/workflow/runtime/constants';
+import {
+  textAdaptGptResponse,
+  replaceEditorVariable
+} from '@fastgpt/global/core/workflow/runtime/utils';
 import { runWorkflow } from '../../index';
 import type { ChildResponseItemType, DispatchToolModuleProps, ToolNodeItemType } from './type';
 import {
@@ -20,7 +26,8 @@ import { ChatRoleEnum } from '@fastgpt/global/core/chat/constants';
 import {
   toolValueTypeList,
   valueTypeJsonSchemaMap,
-  WorkflowIOValueTypeEnum
+  WorkflowIOValueTypeEnum,
+  NodeInputKeyEnum
 } from '@fastgpt/global/core/workflow/constants';
 import { FlowNodeInputTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
 import type { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
@@ -30,6 +37,12 @@ import {
   ConfirmToolSchema,
   normalizeConfirm
 } from '@fastgpt/global/core/workflow/node/agent/confirmTools';
+import {
+  READ_SKILL_NAME,
+  ReadSkillToolSchema,
+  buildReadSkillTool
+} from '@fastgpt/global/core/workflow/node/agent/readSkillTools';
+import { dispatchSkill } from '../../tools/skill';
 import { runAgentCall } from '../../../../ai/llm/agentCall';
 import type { ToolCallChildrenInteractive } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import type { JsonSchemaPropertiesItemType } from '@fastgpt/global/core/app/jsonschema';
@@ -43,7 +56,8 @@ import {
 import {
   getSandboxToolWorkflowResponse,
   getPlanToolWorkflowResponse,
-  getConfirmToolWorkflowResponse
+  getConfirmToolWorkflowResponse,
+  getReadSkillToolWorkflowResponse
 } from './constants';
 import { callSandboxTool } from '../../../../ai/sandbox/toolCall';
 import { systemSubInfo } from '@fastgpt/global/core/workflow/node/agent/constants';
@@ -80,6 +94,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     toolModel,
     childrenInteractiveParams,
     childToolPool,
+    skillNodes,
 
     ...workflowProps
   } = props;
@@ -175,6 +190,10 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
   // 注入内置人工确认工具（默认开，存量节点无该 key 时视为开）
   if (useUserConfirm !== false) {
     tools.push(CONFIRM_TOOL);
+  }
+  // 注入技能目录读取工具（目录在工具 metadata 内，不注入系统提示词）
+  if (skillNodes?.length) {
+    tools.push(buildReadSkillTool(skillNodes));
   }
   const planValueId = getNanoid();
   let activePlan = props.activePlan;
@@ -364,6 +383,52 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           });
 
           return { response, flowResponse };
+        }
+        // 拦截内置技能目录读取工具：按名取正文，纯读不跑画布
+        if (call.function?.name === READ_SKILL_NAME && skillNodes?.length) {
+          const catalog = skillNodes.map((s) => s.name).join('、');
+          const parsed = ReadSkillToolSchema.safeParse(
+            parseJsonArgs(call.function.arguments) ?? {}
+          );
+          if (!parsed.success) {
+            return {
+              response: `read_skill 参数无效：需提供 skill。可用技能：${catalog}`
+            };
+          }
+          const { skill, focus } = parsed.data;
+          const matched =
+            skillNodes.find((s) => s.nodeId === skill) ??
+            skillNodes.find((s) => s.name.trim() === skill.trim());
+          if (!matched) {
+            return { response: `未找到技能「${skill}」。可用技能：${catalog}` };
+          }
+          const rtNode = runtimeNodes.find((n) => n.nodeId === matched.nodeId);
+          const raw =
+            rtNode?.inputs.find((i) => i.key === NodeInputKeyEnum.textareaInput)?.value ?? '';
+          const text = replaceEditorVariable({
+            text: raw,
+            nodesMap: workflowProps.runtimeNodesMap ?? {},
+            variables: workflowProps.variableState.toRuntimeRecord()
+          });
+          const result = dispatchSkill({
+            node: rtNode ?? matched,
+            variableState: workflowProps.variableState,
+            params: { [NodeInputKeyEnum.textareaInput]: text }
+          });
+          let response = String(result[DispatchNodeResponseKeyEnum.toolResponses] ?? '');
+          if (focus?.trim()) {
+            response += `\n\n【调用方关注】\n${focus.trim()}`;
+          }
+          return {
+            response,
+            usages: [],
+            flowResponse: getReadSkillToolWorkflowResponse({
+              name: matched.name,
+              toolId: READ_SKILL_NAME,
+              input: { skill, focus },
+              response
+            })
+          };
         }
         // 拦截内置人工确认工具：合成 userInput 交互挂起循环
         if (call.function?.name === CONFIRM_TOOL_NAME) {

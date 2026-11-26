@@ -62,6 +62,14 @@ export const SubAgentNode: FlowNodeTemplateType = {
       value: true
     },
     {
+      key: NodeInputKeyEnum.useReadSkill,
+      renderTypeList: [FlowNodeInputTypeEnum.switch],
+      label: i18nT('app:use_read_skill'),
+      description: i18nT('app:use_read_skill_desc'),
+      valueType: WorkflowIOValueTypeEnum.boolean,
+      value: true
+    },
+    {
       key: NodeInputKeyEnum.aiChatTemperature,
       renderTypeList: [FlowNodeInputTypeEnum.hidden],
       label: '',
