@@ -291,6 +291,19 @@ describe('dispatchRunTools subAgent branch', () => {
     expect(props.workflowStreamResponse).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'fastAnswer' })
     );
+    const fastCalls = props.workflowStreamResponse.mock.calls.filter(
+      ([e]: any) => e.event === 'fastAnswer'
+    );
+    expect(fastCalls).toHaveLength(1);
+  });
+
+  it('no terminalResponse: no fastAnswer push', async () => {
+    const props = subProps();
+    await dispatchRunTools(props as any);
+    const fastCalls = props.workflowStreamResponse.mock.calls.filter(
+      ([e]: any) => e.event === 'fastAnswer'
+    );
+    expect(fastCalls).toHaveLength(0);
   });
 });
 

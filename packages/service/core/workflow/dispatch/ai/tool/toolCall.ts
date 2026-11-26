@@ -438,8 +438,14 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           initToolNodes(runtimeNodes, [toolNode.nodeId], startParams);
           initToolCallEdges(runtimeEdges, [toolNode.nodeId]);
 
+          // 直出命中：子运行静默，避免子流式与父级 terminalResponse 补推重复输出
+          const directOutput = readDirectOutput(
+            runtimeNodes.find((n) => n.nodeId === toolNode.nodeId),
+            startParams
+          );
           const toolRunResponse = await runWorkflow({
             ...workflowProps,
+            ...(directOutput ? { stream: false, workflowStreamResponse: undefined } : {}),
             runtimeNodes,
             parentToolNodes: childToolPool ?? toolNodes,
             parentToolModel: toolModel.model,
@@ -450,11 +456,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           const stringToolResponse = formatToolResponse(toolRunResponse.toolResponses);
 
           // 直接输出钩子：调用时读取覆写后的参数，成品答复终止循环并原样提升
-          const isTerminal =
-            readDirectOutput(
-              runtimeNodes.find((n) => n.nodeId === toolNode.nodeId),
-              startParams
-            ) && !toolRunResponse.workflowInteractiveResponse;
+          const isTerminal = directOutput && !toolRunResponse.workflowInteractiveResponse;
 
           return {
             response: stringToolResponse,
@@ -567,8 +569,16 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       initToolNodes(runtimeNodes, childrenResponse.entryNodeIds, startParams);
       initToolCallEdges(runtimeEdges, childrenResponse.entryNodeIds);
 
+      // 直出命中：resume 子运行同样静默，保证唯一输出
+      const directOutput = childrenResponse.entryNodeIds.some((id: string) =>
+        readDirectOutput(
+          runtimeNodes.find((n) => n.nodeId === id),
+          startParams
+        )
+      );
       const toolRunResponse = await runWorkflow({
         ...workflowProps,
+        ...(directOutput ? { stream: false, workflowStreamResponse: undefined } : {}),
         lastInteractive: childrenResponse,
         runtimeNodes,
         runtimeEdges,
@@ -606,13 +616,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         reserveId: false
       });
 
-      const isTerminal =
-        childrenResponse.entryNodeIds.some((id: string) =>
-          readDirectOutput(
-            runtimeNodes.find((n) => n.nodeId === id),
-            startParams
-          )
-        ) && !toolRunResponse.workflowInteractiveResponse;
+      const isTerminal = directOutput && !toolRunResponse.workflowInteractiveResponse;
 
       return {
         response: stringToolResponse,
