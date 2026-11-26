@@ -40,3 +40,15 @@
 - 类型门禁：projects/app `npx tsc --noEmit`。
 - 全量：`npx turbo run test --filter=@fastgpt/app --filter=@fastgpt/global --filter=@fastgpt/service`（根 pnpm test 因裁剪 admin 包损坏）。
 - E2E（可选）：mock OpenAI 网关 SSE 复现分片 name（无单 chunk 全名），修复前静默结束、修复后工具执行；矛盾态网关 → 可见报错；未匹配名网关 → 回喂自纠。
+
+## DSML 文本泄漏兼容（2026-11-26 追加）
+
+现象：第三方中转网关未配 tool parser，DeepSeek flash 把工具调用以 DSML 文本漏进 content（截图方言：单全角竖线 + calls 包络 + arguments/name 包装参数），FastGPT 当普通回答展示、不执行工具。与上文结构化分片丢失同大类、不同机制。
+
+实现：`packages/service/core/ai/llm/dsmlCall.ts` — parseDSMLToolCalls（方言矩阵：单/双竖线、全/半角、calls/function_calls/tool_calls/toolcalls 包络、孤儿 invoke、零参自闭合、直连 JSON body、截断半截标记；{name,arguments} 包装按工具 schema 解包）+ createDSMLStreamGuard（text/envelope/invoke 三态暂扣、完整块即时回收、newline 归一化）。request.ts toolChoice 分支挂载：流式守卫 push/flush、独立 dsmlToolCalls 数组、流末全文重解析指纹去重合并（mergeToolCalls，防双份并兜底守卫漏块）；非流式无条件剥离+拷贝合并（不改写 message.tool_calls 原数组）；(dsmlRecovered||added) 控制 stop→tool_calls 升级，纯结构化轮保持 stop。
+
+审查缺陷与修复：D1 混轮 push/index 共用数组覆盖→数组分离；D2 守卫漏块流末只剥文本丢调用→重解析去重合并；D4 非流式 push 副作用→拷贝合并；D3 自闭合/直连 JSON 方言→SELF_CLOSED 正则先跑+buildToolCall 直连分支+守卫自闭合头即时回收；D5 包络前后 newline 全文/守卫不对称→正则补 \n?；D24 非流式孤儿标记残留→无条件剥离。
+
+影响面：改动限 toolChoice 分支；非 DSML 流量零差异（无标记恒等早退、空合并、正则需标记前缀）；残留风险为跨源指纹去重对同名同参双发误并/键序不一致漏配（不劣于现状，记录备查）。
+
+验证：dsmlCall 31 例 + request 45 例 + 邻接回归共 140 绿；tsc --noEmit 通过；全量 turbo 仅存量基线失败（clearDirFiles/team error）。待生产用原中转渠道复测截图场景。

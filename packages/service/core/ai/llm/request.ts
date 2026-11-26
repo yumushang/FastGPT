@@ -21,6 +21,7 @@ import { getAIApi } from '../config';
 import type { OpenaiAccountType } from '@fastgpt/global/support/user/team/type';
 import { customNanoid, getNanoid } from '@fastgpt/global/common/string/tools';
 import { parsePromptToolCall, promptToolCallMessageRewrite } from './promptCall';
+import { createDSMLStreamGuard, mergeToolCalls, parseDSMLToolCalls } from './dsmlCall';
 import { getLLMModel } from '../model';
 import { ChatCompletionRequestMessageRoleEnum } from '@fastgpt/global/core/ai/constants';
 import { countGptMessagesTokens } from '../../../common/string/tiktoken/index';
@@ -446,6 +447,17 @@ export const createStreamResponse = async ({
       };
       const accumulators = new Map<number, ToolCallAccumulator>();
       const toolCalls: ChatCompletionMessageToolCall[] = [];
+      const dsmlToolCalls: ChatCompletionMessageToolCall[] = [];
+      let dsmlRecovered = 0;
+      const dsmlGuard = createDSMLStreamGuard({
+        tools,
+        onText: (text) => onStreaming?.({ text }),
+        onToolCall: (call) => {
+          dsmlRecovered++;
+          dsmlToolCalls.push(call);
+          onToolCall?.({ call });
+        }
+      });
       const isWhitelisted = (name: string) => tools.some((item) => item.function.name === name);
       const commitToolCall = (index: number, acc: ToolCallAccumulator) => {
         const call: ChatCompletionMessageToolCall = {
@@ -503,7 +515,7 @@ export const createStreamResponse = async ({
             onReasoning?.({ text: reasoningContent });
           }
           if (responseContent) {
-            onStreaming?.({ text: responseContent });
+            dsmlGuard.push(responseContent);
           }
 
           const responseChoice = part.choices?.[0];
@@ -544,15 +556,26 @@ export const createStreamResponse = async ({
         commitToolCall(index, acc);
       }
 
+      dsmlGuard.flush();
       const { reasoningContent, content, finish_reason, usage, error } = getResponseData();
+      // content 是上游全量累积：重解析兜底守卫漏放的块，指纹去重防与守卫/结构化结果双份
+      const reparsed = parseDSMLToolCalls(content, tools);
+      const { merged: finalToolCalls, added } = mergeToolCalls(
+        [...toolCalls.filter((call) => !!call), ...dsmlToolCalls],
+        reparsed.toolCalls
+      );
+      added.forEach((call) => onToolCall?.({ call }));
 
       return {
         error,
-        answerText: content,
+        answerText: reparsed.answer,
         reasoningText: reasoningContent,
-        finish_reason,
+        finish_reason:
+          (dsmlRecovered || added.length) && finish_reason === 'stop'
+            ? 'tool_calls'
+            : finish_reason,
         usage,
-        toolCalls: toolCalls.filter((call) => !!call)
+        toolCalls: finalToolCalls
       };
     } else {
       let startResponseWrite = false;
@@ -709,6 +732,7 @@ export const createCompleteResponse = async ({
   let formatContent = removeDatasetCiteText(content, retainDatasetCite);
 
   // Tool parse
+  let dsmlRecovered = 0;
   const { toolCalls } = (() => {
     if (tools?.length) {
       if (toolCallMode === 'toolChoice') {
@@ -727,7 +751,10 @@ export const createCompleteResponse = async ({
                 }
               ]
             : [];
-        return { toolCalls };
+        const dsml = parseDSMLToolCalls(formatContent, tools);
+        dsmlRecovered = dsml.toolCalls.length;
+        formatContent = dsml.answer;
+        return { toolCalls: mergeToolCalls(toolCalls, dsml.toolCalls).merged };
       }
 
       // Prompt call
@@ -762,7 +789,7 @@ export const createCompleteResponse = async ({
     reasoningText: formatReasonContent,
     answerText: formatContent,
     toolCalls,
-    finish_reason,
+    finish_reason: dsmlRecovered && finish_reason === 'stop' ? 'tool_calls' : finish_reason,
     usage
   };
 };

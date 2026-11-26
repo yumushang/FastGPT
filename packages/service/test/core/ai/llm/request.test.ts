@@ -1887,3 +1887,416 @@ describe('createStreamResponse tool call compatibility', () => {
     expect(result.toolCalls![0].function.arguments).toBe('{"location":"Beijing"}');
   });
 });
+
+describe('DSML leak recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetLLMModel.mockReturnValue(createMockModelData());
+  });
+
+  const tools = [
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_weather',
+        description: 'Get weather',
+        parameters: { type: 'object', properties: { location: { type: 'string' } } }
+      }
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_time',
+        description: 'Get time',
+        parameters: { type: 'object', properties: { timezone: { type: 'string' } } }
+      }
+    }
+  ];
+  const dsmlCallFor = (name: string, paramName: string, value: string) =>
+    [
+      '<｜DSML｜function_calls>',
+      '<｜DSML｜invoke name="' + name + '">',
+      '<｜DSML｜parameter name="' + paramName + '" string="true">' + value + '</｜DSML｜parameter>',
+      '</｜DSML｜invoke>',
+      '</｜DSML｜function_calls>'
+    ].join('\n');
+  const dsmlLeak = [
+    '<｜DSML｜function_calls>',
+    '<｜DSML｜invoke name="get_weather">',
+    '<｜DSML｜parameter name="location" string="true">杭州</｜DSML｜parameter>',
+    '</｜DSML｜invoke>',
+    '</｜DSML｜function_calls>'
+  ].join('\n');
+
+  const stubContentStream = (opts?: { hideFromGuard?: (content: string) => boolean }) => {
+    let contentBuffer = '';
+    mockParseLLMStreamResponse.mockReturnValue({
+      parsePart: ({ part }: any) => {
+        const content = part.choices?.[0]?.delta?.content || '';
+        contentBuffer += content;
+        const responseContent = opts?.hideFromGuard?.(content) ? '' : content;
+        return { reasoningContent: '', content, responseContent, finishReason: null };
+      },
+      getResponseData: () => ({
+        error: undefined,
+        reasoningContent: '',
+        content: contentBuffer,
+        finish_reason: 'stop' as const,
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      }),
+      updateFinishReason: vi.fn(),
+      updateError: vi.fn()
+    });
+  };
+
+  it('should recover leaked DSML as tool call in stream response', async () => {
+    stubContentStream();
+    const chunks = [
+      { choices: [{ delta: { content: dsmlLeak.slice(0, 40) }, finish_reason: null }] },
+      { choices: [{ delta: { content: dsmlLeak.slice(40) }, finish_reason: 'stop' }] }
+    ];
+
+    let streamedText = '';
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      onStreaming: ({ text }) => {
+        streamedText += text;
+      }
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(JSON.parse(result.toolCalls![0].function.arguments)).toEqual({ location: '杭州' });
+    expect(result.answerText).toBe('');
+    expect(result.finish_reason).toBe('tool_calls');
+    expect(streamedText).toBe('');
+  });
+
+  it('should keep prose and suppress markup in stream response', async () => {
+    stubContentStream();
+    const chunks = [
+      { choices: [{ delta: { content: '我先查询。' }, finish_reason: null }] },
+      { choices: [{ delta: { content: dsmlLeak }, finish_reason: null }] },
+      { choices: [{ delta: { content: '查询完成。' }, finish_reason: 'stop' }] }
+    ];
+
+    let streamedText = '';
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      onStreaming: ({ text }) => {
+        streamedText += text;
+      }
+    });
+
+    expect(streamedText).toBe('我先查询。查询完成。');
+    expect(result.answerText).toBe('我先查询。查询完成。');
+    expect(result.toolCalls).toHaveLength(1);
+  });
+
+  it('should recover leaked DSML in non-stream response', async () => {
+    const result = await createCompleteResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: false },
+      response: {
+        choices: [
+          {
+            message: { role: 'assistant', content: dsmlLeak },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      } as any
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.name).toBe('get_weather');
+    expect(result.answerText).toBe('');
+    expect(result.finish_reason).toBe('tool_calls');
+  });
+
+  it('should not alter normal stream text without DSML', async () => {
+    stubContentStream();
+    const chunks = [
+      { choices: [{ delta: { content: 'Hello' }, finish_reason: null }] },
+      { choices: [{ delta: { content: ' World' }, finish_reason: 'stop' }] }
+    ];
+
+    let streamedText = '';
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      onStreaming: ({ text }) => {
+        streamedText += text;
+      }
+    });
+
+    expect(streamedText).toBe('Hello World');
+    expect(result.answerText).toBe('Hello World');
+    expect(result.toolCalls).toEqual([]);
+    expect(result.finish_reason).toBe('stop');
+  });
+
+  it('should keep stop finish_reason for structured tool calls in stream', async () => {
+    stubContentStream();
+    const chunks = [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  function: { name: 'get_weather', arguments: '{"location":"北京"}' }
+                }
+              ]
+            },
+            finish_reason: 'stop'
+          }
+        ]
+      }
+    ];
+
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks)
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.finish_reason).toBe('stop');
+  });
+
+  it('should keep stop finish_reason for structured tool calls in non-stream', async () => {
+    const result = await createCompleteResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: false },
+      response: {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'get_weather', arguments: '{"location":"北京"}' }
+                }
+              ]
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      } as any
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.finish_reason).toBe('stop');
+  });
+
+  it('should keep both calls when DSML precedes structured tool_calls', async () => {
+    stubContentStream();
+    const chunks = [
+      {
+        choices: [
+          { delta: { content: dsmlCallFor('get_time', 'timezone', 'UTC') }, finish_reason: null }
+        ]
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  function: { name: 'get_weather', arguments: '{"location":"北京"}' }
+                }
+              ]
+            },
+            finish_reason: 'stop'
+          }
+        ]
+      }
+    ];
+
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks)
+    });
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls!.every((c) => !!c)).toBe(true);
+    expect(result.toolCalls!.map((c) => c.function.name).sort()).toEqual([
+      'get_time',
+      'get_weather'
+    ]);
+    expect(result.finish_reason).toBe('tool_calls');
+  });
+
+  it('should keep both calls when structured tool_calls precede DSML', async () => {
+    stubContentStream();
+    const chunks = [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  function: { name: 'get_weather', arguments: '{"location":"北京"}' }
+                }
+              ]
+            },
+            finish_reason: null
+          }
+        ]
+      },
+      {
+        choices: [
+          { delta: { content: dsmlCallFor('get_time', 'timezone', 'UTC') }, finish_reason: 'stop' }
+        ]
+      }
+    ];
+
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks)
+    });
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls!.map((c) => c.function.name).sort()).toEqual([
+      'get_time',
+      'get_weather'
+    ]);
+  });
+
+  it('should recover via end reparse when guard misses the block', async () => {
+    stubContentStream({ hideFromGuard: (c) => c.includes('<｜DSML｜') });
+    const chunks = [
+      { choices: [{ delta: { content: '我先查询。' }, finish_reason: null }] },
+      { choices: [{ delta: { content: dsmlLeak }, finish_reason: null }] },
+      { choices: [{ delta: { content: '查询完成。' }, finish_reason: 'stop' }] }
+    ];
+
+    let streamedText = '';
+    const events: any[] = [];
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      onStreaming: ({ text }) => {
+        streamedText += text;
+      },
+      onToolCall: ({ call }) => events.push(call)
+    });
+
+    expect(streamedText).toBe('我先查询。查询完成。');
+    expect(result.answerText).toBe('我先查询。查询完成。');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.finish_reason).toBe('tool_calls');
+    expect(events).toHaveLength(1);
+  });
+
+  it('should merge non-stream mixed calls without mutating message.tool_calls', async () => {
+    const response = {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: dsmlCallFor('get_time', 'timezone', 'UTC'),
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{"location":"北京"}' }
+              }
+            ]
+          },
+          finish_reason: 'stop'
+        }
+      ],
+      usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+    };
+    const result = await createCompleteResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: false },
+      response: response as any
+    });
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(response.choices[0].message.tool_calls).toHaveLength(1);
+    expect(result.finish_reason).toBe('tool_calls');
+  });
+
+  it('should dedupe non-stream double-sent identical call keeping structured id', async () => {
+    const result = await createCompleteResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: false },
+      response: {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: dsmlLeak,
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'get_weather', arguments: '{"location":"杭州"}' }
+                }
+              ]
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+      } as any
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].id).toBe('call_1');
+  });
+
+  it('should recover self-closed invoke in stream', async () => {
+    stubContentStream();
+    const block = [
+      '<｜DSML｜calls>',
+      '<｜DSML｜invoke name="get_weather"/>',
+      '</｜DSML｜calls>'
+    ].join('\n');
+    const chunks = [
+      { choices: [{ delta: { content: block.slice(0, 20) }, finish_reason: null }] },
+      { choices: [{ delta: { content: block.slice(20) }, finish_reason: 'stop' }] }
+    ];
+
+    let streamedText = '';
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks),
+      onStreaming: ({ text }) => {
+        streamedText += text;
+      }
+    });
+
+    expect(streamedText).toBe('');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls![0].function.arguments).toBe('{}');
+  });
+
+  it('should recover direct JSON body invoke in stream', async () => {
+    stubContentStream();
+    const block = '<｜DSML｜invoke name="get_weather">{"location":"杭州"}</｜DSML｜invoke>';
+    const chunks = [
+      { choices: [{ delta: { content: block.slice(0, 25) }, finish_reason: null }] },
+      { choices: [{ delta: { content: block.slice(25) }, finish_reason: 'stop' }] }
+    ];
+
+    const result = await createStreamResponse({
+      body: { model: 'gpt-4', messages: [], tools, stream: true },
+      response: createMockStreamResponse(chunks)
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(JSON.parse(result.toolCalls![0].function.arguments)).toEqual({ location: '杭州' });
+  });
+});
