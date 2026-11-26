@@ -101,4 +101,5 @@ v1 逐技能零参工具导致工具列表膨胀。v2 定稿（用户）：**不
 - 空正文技能仍由 getToolConfigStatus 滤出 → 不进目录；新模式下 skill 的 visibleToMain 失效（仅 v1 生效）。
 - 验证：readSkill.toolCall.test.ts 6 例 + subAgent.dispatch 目录模式 4 例（既有夹具补 useReadSkill:false）；
   局部 90/90；E2E 9/9（enum 目录/无系统注入/focus/回退 v1/嵌套继承）。
-- TODO：[ ] 提交并打 tag（顺延 fix26，待用户指示）
+- 浏览器核对未执行：本会话 MCP 浏览器水合持续损坏（重启 dev 无效），按计划以 SSE/工具列表断言覆盖并如实记录。
+- [x] 提交并打 tag：3d2831298 / v4.14.31-ch-fix26 已 push origin
