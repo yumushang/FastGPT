@@ -96,6 +96,8 @@ export type ChatDispatchProps = {
   chatConfig: AppSchemaType['chatConfig'];
   lastInteractive?: WorkflowInteractiveResponseType; // last interactive response
   stream: boolean;
+  // 父子运行按引用共享：累计正文 SSE 推送次数，供直出补推去重
+  streamTracker?: { count: number };
   retainDatasetCite?: boolean;
   showSkillReferences?: boolean;
   maxRunTimes: number;

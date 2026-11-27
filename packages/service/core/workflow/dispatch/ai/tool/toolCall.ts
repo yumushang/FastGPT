@@ -85,6 +85,7 @@ type ResponseType = {
   finish_reason: CompletionFinishReason;
   toolWorkflowInteractiveResponse?: ToolCallChildrenInteractive;
   terminalResponse?: string;
+  terminalResponseStreamed?: boolean;
 };
 
 export const runToolCall = async (props: DispatchToolModuleProps): Promise<ResponseType> => {
@@ -231,7 +232,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     finish_reason,
     error,
     requestIds,
-    terminalResponse
+    terminalResponse,
+    terminalResponseStreamed
   } = await runAgentCall({
     maxRunAgentTimes: 50,
     body: {
@@ -273,6 +275,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           text
         })
       });
+      if (workflowStreamResponse && workflowProps.streamTracker)
+        workflowProps.streamTracker.count++;
     },
     onToolCall({ call }) {
       if (isPlanToolName(call.function.name)) {
@@ -331,7 +335,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         usages = [],
         interactive,
         stop,
-        terminalResponse
+        terminalResponse,
+        terminalResponseStreamed
       } = await (async () => {
         // 拦截 plan 控制工具调用
         if (isPlanToolName(call.function?.name)) {
@@ -503,19 +508,20 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
           initToolNodes(runtimeNodes, [toolNode.nodeId], startParams);
           initToolCallEdges(runtimeEdges, [toolNode.nodeId]);
 
-          // 直出命中：子运行静默，避免子流式与父级 terminalResponse 补推重复输出
+          // 直出命中判定在运行前；子运行保持流式，靠 streamTracker 增量去重父级补推
           const directOutput = readDirectOutput(
             runtimeNodes.find((n) => n.nodeId === toolNode.nodeId),
             startParams
           );
+          const streamCountBefore = workflowProps.streamTracker?.count ?? 0;
           const toolRunResponse = await runWorkflow({
             ...workflowProps,
-            ...(directOutput ? { stream: false, workflowStreamResponse: undefined } : {}),
             runtimeNodes,
             parentToolNodes: childToolPool ?? toolNodes,
             parentToolModel: toolModel.model,
             isToolCall: true
           });
+          const childStreamed = (workflowProps.streamTracker?.count ?? 0) > streamCountBefore;
 
           // Format tool response
           const stringToolResponse = formatToolResponse(toolRunResponse.toolResponses);
@@ -538,7 +544,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
             usages: toolRunResponse.flowUsages,
             interactive: toolRunResponse.workflowInteractiveResponse,
             stop: toolRunResponse.flowResponses?.some((item) => item.toolStop) || isTerminal,
-            terminalResponse: isTerminal ? stringToolResponse : undefined
+            terminalResponse: isTerminal ? stringToolResponse : undefined,
+            terminalResponseStreamed: isTerminal && childStreamed
           };
         }
       })();
@@ -572,7 +579,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         usages,
         interactive,
         stop,
-        terminalResponse
+        terminalResponse,
+        terminalResponseStreamed
       };
     },
     handleInteractiveTool: async ({ childrenResponse, toolParams }) => {
@@ -634,16 +642,16 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
       initToolNodes(runtimeNodes, childrenResponse.entryNodeIds, startParams);
       initToolCallEdges(runtimeEdges, childrenResponse.entryNodeIds);
 
-      // 直出命中：resume 子运行同样静默，保证唯一输出
+      // 直出命中：resume 子运行同样保持流式，靠 tracker 增量去重
       const directOutput = childrenResponse.entryNodeIds.some((id: string) =>
         readDirectOutput(
           runtimeNodes.find((n) => n.nodeId === id),
           startParams
         )
       );
+      const streamCountBefore = workflowProps.streamTracker?.count ?? 0;
       const toolRunResponse = await runWorkflow({
         ...workflowProps,
-        ...(directOutput ? { stream: false, workflowStreamResponse: undefined } : {}),
         lastInteractive: childrenResponse,
         runtimeNodes,
         runtimeEdges,
@@ -651,6 +659,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         parentToolModel: toolModel.model,
         isToolCall: true
       });
+      const childStreamed = (workflowProps.streamTracker?.count ?? 0) > streamCountBefore;
       // console.dir(runtimeEdges, { depth: null });
       const stringToolResponse = formatToolResponse(toolRunResponse.toolResponses);
 
@@ -689,7 +698,8 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
         usages: toolRunResponse.flowUsages,
         interactive: toolRunResponse.workflowInteractiveResponse,
         stop: toolRunResponse.flowResponses?.some((item) => item.toolStop) || isTerminal,
-        terminalResponse: isTerminal ? stringToolResponse : undefined
+        terminalResponse: isTerminal ? stringToolResponse : undefined,
+        terminalResponseStreamed: isTerminal && childStreamed
       };
     }
   });
@@ -718,6 +728,7 @@ export const runToolCall = async (props: DispatchToolModuleProps): Promise<Respo
     assistantResponses: finalAssistantResponses,
     finish_reason,
     toolWorkflowInteractiveResponse: interactiveResponse,
-    terminalResponse
+    terminalResponse,
+    terminalResponseStreamed
   };
 };

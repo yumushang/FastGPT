@@ -8,6 +8,7 @@ let agentResponseExtra: any = {};
 vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
   runWorkflow: vi.fn(async (props: any) => {
     workflowCaptured.push(props);
+    if (props.simulateStream && props.streamTracker) props.streamTracker.count++;
     return {
       toolResponses: '工具输出',
       assistantResponses: [],
@@ -199,7 +200,7 @@ describe('runToolCall interactive resume restores LLM params', () => {
   });
 });
 
-describe('directOutput silences child run (fastAnswer dedup)', () => {
+describe('directOutput keeps child streaming; tracker dedups parent push', () => {
   const resumeCall = (args: string) =>
     agentCaptured.handleInteractiveTool({
       childrenResponse: { entryNodeIds: ['tool1'], type: 'userSelect', params: {} },
@@ -217,65 +218,68 @@ describe('directOutput silences child run (fastAnswer dedup)', () => {
       }
     });
 
-  it('LLM arg true: child run silent, promotion unchanged', async () => {
+  it('LLM arg true: child stream passthrough, promotion unchanged', async () => {
     const props = buildProps(false, true);
     await runToolCall(props);
     const res = await callTool({ directOutput: true });
-    expect(workflowCaptured[0].stream).toBe(false);
-    expect(workflowCaptured[0].workflowStreamResponse).toBeUndefined();
+    expect(workflowCaptured[0].stream).toBe(true);
+    expect(workflowCaptured[0].workflowStreamResponse).toBe(props.workflowStreamResponse);
     expect(res.terminalResponse).toBe('工具输出');
+    expect(res.terminalResponseStreamed).toBeFalsy();
     expect(res.stop).toBe(true);
   });
 
-  it('node default true with omitted arg silences child', async () => {
-    const props = buildProps(true, true);
-    await runToolCall(props);
-    await callTool({});
-    expect(workflowCaptured[0].stream).toBe(false);
-    expect(workflowCaptured[0].workflowStreamResponse).toBeUndefined();
-  });
-
-  it('arg false overrides node true: passthrough unchanged', async () => {
-    const props = buildProps(true, true);
-    await runToolCall(props);
-    await callTool({ directOutput: false });
-    expect(workflowCaptured[0].stream).toBe(true);
-    expect(workflowCaptured[0].workflowStreamResponse).toBe(props.workflowStreamResponse);
-  });
-
-  it('non-direct path passthrough unchanged', async () => {
+  it('child streaming during run marks terminalResponseStreamed', async () => {
     const props = buildProps(false, true);
+    props.simulateStream = true;
+    props.streamTracker = { count: 0 };
+    await runToolCall(props);
+    const res = await callTool({ directOutput: true });
+    expect(res.terminalResponseStreamed).toBe(true);
+    expect(res.terminalResponse).toBe('工具输出');
+  });
+
+  it('node default true with omitted arg keeps passthrough', async () => {
+    const props = buildProps(true, true);
     await runToolCall(props);
     await callTool({});
     expect(workflowCaptured[0].stream).toBe(true);
     expect(workflowCaptured[0].workflowStreamResponse).toBe(props.workflowStreamResponse);
   });
 
-  it('suspend with directOutput: silent but interactive bubbles, no promotion', async () => {
+  it('arg false overrides node true: no terminal', async () => {
+    const props = buildProps(true, true);
+    await runToolCall(props);
+    const res = await callTool({ directOutput: false });
+    expect(res.terminalResponse).toBeUndefined();
+    expect(workflowCaptured[0].stream).toBe(true);
+  });
+
+  it('suspend with directOutput: interactive bubbles, no promotion', async () => {
     workflowResponse = { workflowInteractiveResponse: { type: 'userSelect', params: {} } };
     const props = buildProps(false, true);
     await runToolCall(props);
     const res = await callTool({ directOutput: true });
-    expect(workflowCaptured[0].stream).toBe(false);
     expect(res.interactive).toBeTruthy();
     expect(res.terminalResponse).toBeUndefined();
   });
 
-  it('resume with directOutput true silences child run', async () => {
+  it('resume with directOutput true keeps passthrough and promotion', async () => {
     const props = buildProps(false, true);
     await runToolCall(props);
     const res = await resumeCall('{"directOutput":true}');
-    expect(workflowCaptured[0].stream).toBe(false);
-    expect(workflowCaptured[0].workflowStreamResponse).toBeUndefined();
+    expect(workflowCaptured[0].stream).toBe(true);
+    expect(workflowCaptured[0].workflowStreamResponse).toBe(props.workflowStreamResponse);
     expect(workflowCaptured[0].lastInteractive).toBeTruthy();
     expect(res.terminalResponse).toBe('工具输出');
   });
 
-  it('resume without directOutput passthrough', async () => {
+  it('resume streaming marks terminalResponseStreamed', async () => {
     const props = buildProps(false, true);
+    props.simulateStream = true;
+    props.streamTracker = { count: 0 };
     await runToolCall(props);
-    await resumeCall('{}');
-    expect(workflowCaptured[0].stream).toBe(true);
-    expect(workflowCaptured[0].workflowStreamResponse).toBe(props.workflowStreamResponse);
+    const res = await resumeCall('{"directOutput":true}');
+    expect(res.terminalResponseStreamed).toBe(true);
   });
 });

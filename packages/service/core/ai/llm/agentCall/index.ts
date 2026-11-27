@@ -68,6 +68,7 @@ type RunAgentCallProps = {
     interactive?: WorkflowInteractiveResponseType;
     stop?: boolean;
     terminalResponse?: string;
+    terminalResponseStreamed?: boolean;
   }>;
   // 处理工具响应
   handleToolResponse: (e: {
@@ -80,6 +81,7 @@ type RunAgentCallProps = {
     interactive?: WorkflowInteractiveResponseType;
     stop?: boolean;
     terminalResponse?: string;
+    terminalResponseStreamed?: boolean;
   }>;
 } & ResponseEvents;
 
@@ -90,6 +92,7 @@ type RunAgentResponse = {
   assistantMessages: ChatCompletionMessageParam[]; // Step assistant response messages
   interactiveResponse?: ToolCallChildrenInteractive;
   terminalResponse?: string;
+  terminalResponseStreamed?: boolean;
 
   // Usage
   model: string;
@@ -174,6 +177,7 @@ export const runAgentCall = async ({
   let finish_reason: CompletionFinishReason | undefined;
   let requestError: any;
   let terminalResponse: string | undefined;
+  let terminalResponseStreamed = false;
   const childrenUsages: ChatNodeUsageType[] = [];
 
   // 处理 tool 里的交互
@@ -184,7 +188,8 @@ export const runAgentCall = async ({
       usages,
       interactive,
       stop,
-      terminalResponse: resumeTerminalResponse
+      terminalResponse: resumeTerminalResponse,
+      terminalResponseStreamed: resumeTerminalStreamed
     } = await handleInteractiveTool(childrenInteractiveParams);
 
     // 将 requestMessages 复原成上一轮中断时的内容，并附上 tool response
@@ -231,6 +236,7 @@ export const runAgentCall = async ({
         assistantMessages,
         interactiveResponse,
         terminalResponse: resumeTerminalResponse,
+        terminalResponseStreamed: resumeTerminalStreamed,
         finish_reason: 'stop'
       };
     }
@@ -371,13 +377,15 @@ export const runAgentCall = async ({
         usages: toolUsages,
         interactive,
         stop,
-        terminalResponse: toolTerminalResponse
+        terminalResponse: toolTerminalResponse,
+        terminalResponseStreamed: toolTerminalStreamed
       } = await handleToolResponse({
         call: tool,
         messages: cloneRequestMessages
       });
       if (toolTerminalResponse !== undefined) {
         terminalResponse = toolTerminalResponse;
+        terminalResponseStreamed = !!toolTerminalStreamed;
       }
       childrenUsages.push(...toolUsages);
       usagePush(toolUsages);
@@ -457,6 +465,7 @@ export const runAgentCall = async ({
     assistantMessages,
     interactiveResponse,
     terminalResponse,
+    terminalResponseStreamed,
     finish_reason
   };
 };

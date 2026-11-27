@@ -28,6 +28,7 @@ export const dispatchAnswer = (props: Record<string, any>): AnswerResponse => {
       text: responseText
     })
   });
+  if (workflowStreamResponse && props.streamTracker) props.streamTracker.count++;
 
   return {
     data: {

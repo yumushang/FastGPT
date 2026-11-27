@@ -315,7 +315,8 @@ export async function dispatchWorkFlow({
     variableState,
     workflowDispatchDeep: 0,
     usageId: newUsageId,
-    concatUsage
+    concatUsage,
+    streamTracker: data.streamTracker ?? { count: 0 }
   };
   // Init some props
   const runWorkflowFn = () =>

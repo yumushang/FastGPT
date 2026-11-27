@@ -39,3 +39,14 @@ toolCall 挂子应用/插件工具且直出命中时，对话气泡全文输出�
 - [x] 修复两处 + 单测 + 全量门禁 + E2E 8/8
 - [x] 设计文档归档
 - [x] 提交：1a3937f9c 已 push origin/ch-v4.14.31；tag v4.14.31-ch-fix25 指向 1a3937f9c 已 push（fix24 被并行任务占用）
+## 修订（2026-11-26 晚）：恢复子流式，tracker 增量去重
+
+fix24 的"子运行静默"在生产暴露体验问题：直出子应用执行期间零流式反馈（长报告只剩转圈）。
+修订为**保留子流式**：父子运行按引用共享 `streamTracker:{count}`（ChatDispatchProps，runWorkflow
+初始化、spread 透传）；正文 SSE 推送点计数（tools/answer.ts fastAnswer、toolCall onStreaming answer、
+dispatchRunTools 直出补推）；canvas/resume 分支运行前后取增量 `childStreamed`，返回
+`terminalResponseStreamed`（经 handleToolResponse wrapper、runToolCall、agentCall 冒泡）；
+index.ts 补推条件改为 `terminalResponse && !terminalResponseStreamed`。
+嵌套天然成立：孙级流式计入共享 tracker，子层 delta>0 → 子层补推跳过与否由其父层 delta 决定，逐层唯一。
+pluginOutput 不推 SSE（父补推为唯一输出，不计数）；runApp 自动换行不计数（避免误判）。
+验证：单测 177/177（fix24 静默断言改为流式透传+tracker 标记）；E2E 3/3（子流式 fastAnswer 携带正文且全文仅一份、嵌套孙级流式仅一份）。

@@ -266,7 +266,8 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
       finish_reason,
       error,
       requestIds,
-      terminalResponse
+      terminalResponse,
+      terminalResponseStreamed
     } = await (async () => {
       const adaptMessages = chats2GPTMessages({
         messages,
@@ -310,13 +311,15 @@ export const dispatchRunTools = async (props: DispatchToolModuleProps): Promise<
         .filter((item) => item.text?.content)
         .map((item) => item.text?.content || '')
         .join('');
-    if (terminalResponse) {
+    // 子运行已流式输出过该文本时跳过补推，避免重复；未流式（静默/非流式类型）才补推
+    if (terminalResponse && !terminalResponseStreamed) {
       props.workflowStreamResponse?.({
         event: SseResponseEventEnum.fastAnswer,
         data: textAdaptGptResponse({
           text: terminalResponse
         })
       });
+      if (props.workflowStreamResponse && props.streamTracker) props.streamTracker.count++;
     }
 
     if (error) {

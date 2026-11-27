@@ -328,6 +328,17 @@ describe('dispatchRunTools subAgent branch', () => {
     );
     expect(fastCalls).toHaveLength(0);
   });
+
+  it('terminalResponse already streamed by child: no duplicate fastAnswer', async () => {
+    scripted = { terminalResponse: '成品原文', terminalResponseStreamed: true };
+    const props = subProps();
+    const res: any = await dispatchRunTools(props as any);
+    expect(res.data.answerText).toBe('成品原文');
+    const fastCalls = props.workflowStreamResponse.mock.calls.filter(
+      ([e]: any) => e.event === 'fastAnswer'
+    );
+    expect(fastCalls).toHaveLength(0);
+  });
 });
 
 describe('dispatchRunTools poolMode (main node)', () => {
